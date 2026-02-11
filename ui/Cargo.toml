@@ -1,0 +1,25 @@
+[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "ui"
+
+[dependencies]
+iced = { version = "0.14.0", features = [
+  "linux-theme-detection",
+  "tokio",
+  "wayland",
+  "advanced",
+  "svg",
+] }
+futures = { workspace = true }
+updater_core = { path = "../core" }  
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+log = { workspace = true }
+env_logger = { workspace = true }
+rfd = "0.17.2"
+mimalloc = { workspace = true }

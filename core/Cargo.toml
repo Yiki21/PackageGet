@@ -1,0 +1,22 @@
+[package]
+name = "updater_core"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+
+[lib]
+name = "updater_core"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = "0.1.89"
+chrono = "0.4"
+directories-next = "2"
+env_logger = { workspace = true }
+regex = { version = "1.12.2" }
+reqwest = { version = "0.13", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["full"] }
