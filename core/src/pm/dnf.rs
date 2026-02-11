@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use log::debug;
+use std::collections::HashSet;
 use tokio::process::Command;
 
 use crate::{
@@ -12,63 +14,43 @@ pub struct DnfManager;
 #[async_trait]
 impl PackageManager for DnfManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
+        debug!("Starting dnf list_updates");
         let path = config
             .get_package_path(crate::PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
         let output = Command::new(&path)
-            .arg("upgrade")
-            .arg("--assumeno")
-            .arg("--refresh")
-            .arg("--setopt=best=True")
-            .arg("--setopt=clean_requirements_on_remove=True")
+            .arg("check-upgrade")
             .output()
             .await?;
 
-        if !output.status.success() {
-            return Err(CoreError::UnknownError(
-                "dnf upgrade --assumeno failed".into(),
-            ));
-        }
-
         let stdout = String::from_utf8(output.stdout)?;
+        debug!("dnf check-upgrade exited: {}", output.status);
+        debug!("dnf output size: {} bytes", stdout.len());
+
         let mut updates: Vec<PackageUpdate> = Vec::new();
+        let mut seen_packages: HashSet<String> = HashSet::new();
 
         /*
-         * dnf upgrade --assumeno --refresh
-         * ...
-         * Upgrading:
-         *  bash.x86_64  5.2.26-1.fc43  updates  1.6 M
-         * ...
+         * dnf check-upgrade output format:
+         * package-name.arch  version  repository
+         * cosmic-app-library.x86_64  1.0.6^git20260209.a9da1de-1.fc43  copr:...
          */
-        let mut in_upgrading = false;
         for line in stdout.lines() {
             let line = line.trim();
 
-            if line.is_empty() {
-                if in_upgrading {
-                    in_upgrading = false;
-                }
-                continue;
-            }
-
-            if line.starts_with("Upgrading:") {
-                in_upgrading = true;
-                continue;
-            }
-
-            if line.starts_with("Transaction Summary") {
-                in_upgrading = false;
-                continue;
-            }
-
-            if !in_upgrading {
+            // Skip empty lines and header lines
+            if line.is_empty() 
+                || line.starts_with("Updating and loading repositories:")
+                || line.starts_with("Repositories loaded.")
+            {
                 continue;
             }
 
             let parts: Vec<&str> = line.split_whitespace().collect();
-
-            if parts.len() < 3 {
+            
+            // Expected format: name.arch version repository
+            if parts.len() < 2 {
                 continue;
             }
 
@@ -77,9 +59,24 @@ impl PackageManager for DnfManager {
                 .map(|(n, _)| n)
                 .unwrap_or(parts[0]);
 
-            let new_version = parts[2];
+            // Skip if we've already processed this package (handle duplicates)
+            if seen_packages.contains(name) {
+                debug!("Skipping duplicate package: {}", name);
+                continue;
+            }
+            seen_packages.insert(name.to_string());
 
-            let current_version = Self::get_current_version(config, name).await?;
+            let new_version = parts[1];
+
+            // Get current version, but don't fail entire function if one package fails
+            let current_version = Self::get_current_version(config, name)
+                .await
+                .unwrap_or_else(|e| {
+                    debug!("Failed to get current version for {}: {}", name, e);
+                    "unknown".to_string()
+                });
+
+            debug!("Found update: {}: {} -> {}", name, current_version, new_version);
 
             updates.push(PackageUpdate {
                 name: name.to_owned(),
@@ -88,6 +85,7 @@ impl PackageManager for DnfManager {
             });
         }
 
+        debug!("Total updates found: {}", updates.len());
         Ok(updates)
     }
 
@@ -205,6 +203,8 @@ impl PackageManager for DnfManager {
 
         let stdout = String::from_utf8(output.stdout)?;
         let mut packages = Vec::new();
+
+        debug!("dnf search output size: {} bytes", stdout.len());
 
         // dnf search 输出格式：
         // package-name.arch : Summary

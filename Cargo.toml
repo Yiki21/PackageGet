@@ -18,7 +18,7 @@ log = "0.4.29"
 env_logger = "0.11.8"
 mimalloc = { version = "0.1.48"}
 
-# Enable a small amount of optimization in the dev profile.
+
 [profile.dev]
 opt-level = 0
 incremental = true
@@ -27,6 +27,11 @@ debug = true
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.dev.package."updater_core"]
+opt-level = 1
+incremental = true
+debug = true
 
 [profile.release]
 opt-level = 3

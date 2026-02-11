@@ -24,25 +24,13 @@ pub enum ActiveContentPage {
     Settings,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Content {
     pub actinve_content: ActiveContentPage,
     pub settings: Settings,
     pub installed: Installed,
     pub updates: Updates,
     pub finding: Finding,
-}
-
-impl Default for Content {
-    fn default() -> Self {
-        Self {
-            actinve_content: ActiveContentPage::default(),
-            settings: Settings::default(),
-            installed: Installed::default(),
-            updates: Updates::default(),
-            finding: Finding::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

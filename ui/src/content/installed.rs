@@ -32,6 +32,7 @@ pub enum Message {
     SearchQueryChanged(String),
     SortOptionChanged(SortOption),
     TogglePackageSelection(String, bool),
+    ToggleSelectAll(bool),
     RemoveSelectedPackages,
     RemovePackagesResult(Result<(), String>),
 }
@@ -147,6 +148,22 @@ impl Installed {
                     info.selected_packages.insert(package_name);
                 } else {
                     info.selected_packages.remove(&package_name);
+                }
+                Action::None
+            }
+            Message::ToggleSelectAll(select_all) => {
+                if select_all {
+                    // Select all visible packages from selected managers
+                    for pm_type in &info.selected_managers {
+                        if let Some((_, packages)) = info.installed_packages.get(pm_type) {
+                            for pkg in packages {
+                                info.selected_packages.insert(pkg.name.clone());
+                            }
+                        }
+                    }
+                } else {
+                    // Deselect all
+                    info.selected_packages.clear();
                 }
                 Action::None
             }
@@ -600,10 +617,20 @@ impl Installed {
     }
 
     fn batch_actions_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
-        use iced::widget::{button, row, text};
+        use iced::widget::{button, checkbox, row, text};
 
         let selected_count = info.selected_packages.len();
         let is_enabled = selected_count > 0 && !info.is_removing;
+
+        // Count total visible packages from selected managers
+        let total_visible: usize = info
+            .selected_managers
+            .iter()
+            .filter_map(|pm_type| info.installed_packages.get(pm_type))
+            .map(|(_, packages)| packages.len())
+            .sum();
+
+        let all_selected = total_visible > 0 && selected_count == total_visible;
 
         let button_text = if info.is_removing {
             "Removing...".to_string()
@@ -612,6 +639,14 @@ impl Installed {
         } else {
             "Remove Selected".to_string()
         };
+
+        let select_all_checkbox = checkbox(all_selected)
+            .label("Select All")
+            .on_toggle(Message::ToggleSelectAll)
+            .size(18)
+            .spacing(8)
+            .text_size(14)
+            .style(SharedUi::checkbox_style(false));
 
         let remove_button = button(text(button_text).size(14).color(if is_enabled {
             iced::Color::WHITE
@@ -667,7 +702,7 @@ impl Installed {
             remove_button
         };
 
-        row![remove_button]
+        row![select_all_checkbox, remove_button]
             .spacing(12)
             .align_y(iced::Alignment::Center)
             .into()
@@ -705,7 +740,7 @@ impl Installed {
                     if selected_packages.contains(&pkg.name) {
                         packages_by_manager
                             .entry(*pm_type)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(pkg.name.clone());
                     }
                 }

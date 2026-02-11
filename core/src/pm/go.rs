@@ -155,7 +155,7 @@ impl PackageManager for GoManager {
 
         for name in package_names {
             // Extract binary name from module path if needed
-            let binary_name = name.split('/').last().unwrap_or(name);
+            let binary_name = name.split('/').next_back().unwrap_or(name);
             let binary_path = format!("{}/{}", gobin, binary_name);
 
             if let Err(e) = tokio::fs::remove_file(&binary_path).await {

@@ -557,7 +557,7 @@ impl Finding {
                 if selected_packages.contains(&pkg.name) {
                     packages_by_manager
                         .entry(*pm_type)
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(pkg.name.clone());
                 }
             }

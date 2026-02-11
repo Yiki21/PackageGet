@@ -19,6 +19,7 @@ pub enum Message {
     SearchQueryChanged(String),
     SortOptionChanged(SortOption),
     TogglePackageSelection(String, bool),
+    ToggleSelectAll(bool),
     UpdateSelectedPackages,
     UpdatePackagesResult(Result<(), String>),
     RefreshInfo,
@@ -45,6 +46,7 @@ impl From<Message> for content::Message {
 pub enum Action {
     None,
     Run(iced::Task<Message>),
+    #[allow(dead_code)]
     ClearCacheAndReload,
 }
 
@@ -135,6 +137,22 @@ impl Updates {
                 }
                 Action::None
             }
+            Message::ToggleSelectAll(select_all) => {
+                if select_all {
+                    // Select all visible packages from selected managers
+                    for pm_type in &info.selected_managers {
+                        if let Some((_, packages)) = info.updates_by_manager.get(pm_type) {
+                            for pkg in packages {
+                                info.selected_packages.insert(pkg.name.clone());
+                            }
+                        }
+                    }
+                } else {
+                    // Deselect all
+                    info.selected_packages.clear();
+                }
+                Action::None
+            }
             Message::UpdateSelectedPackages => {
                 if info.selected_packages.is_empty() {
                     return Action::None;
@@ -157,10 +175,26 @@ impl Updates {
                 }
             }
             Message::RefreshInfo => {
-                for pm_type in info.updates_by_manager.keys() {
+                let pm_types: Vec<PackageManagerType> = info.updates_by_manager.keys().copied().collect();
+                
+                if pm_types.is_empty() {
+                    return Action::None;
+                }
+                
+                // Set loading state for all package managers
+                for pm_type in &pm_types {
                     info.loading_updates.insert(*pm_type);
                 }
-                Action::ClearCacheAndReload
+                
+                // Create loading tasks for all package managers
+                let tasks: Vec<Task<Message>> = pm_types
+                    .into_iter()
+                    .map(|pm_type| {
+                        Self::create_load_task(&updater_core::Config::default(), pm_type)
+                    })
+                    .collect();
+                
+                Action::Run(Task::batch(tasks))
             }
         }
     }
@@ -265,6 +299,7 @@ impl Updates {
                     .label(pm_type.name())
                     .spacing(10)
                     .text_size(15)
+
                     .style(move |_theme, _status| {
                         use iced::widget::checkbox::Style;
                         Style {
@@ -564,10 +599,20 @@ impl Updates {
     }
 
     fn batch_actions_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
-        use iced::widget::{button, row, text};
+        use iced::widget::{button, checkbox, row, text};
 
         let selected_count = info.selected_packages.len();
         let is_enabled = selected_count > 0 && !info.is_updating;
+
+        // Count total visible packages from selected managers
+        let total_visible: usize = info
+            .selected_managers
+            .iter()
+            .filter_map(|pm_type| info.updates_by_manager.get(pm_type))
+            .map(|(_, packages)| packages.len())
+            .sum();
+
+        let all_selected = total_visible > 0 && selected_count == total_visible;
 
         let button_text = if info.is_updating {
             "Updating...".to_string()
@@ -576,6 +621,14 @@ impl Updates {
         } else {
             "Update Selected".to_string()
         };
+
+        let select_all_checkbox = checkbox(all_selected)
+            .label("Select All")
+            .on_toggle(Message::ToggleSelectAll)
+            .size(18)
+            .spacing(8)
+            .text_size(14)
+            .style(SharedUi::checkbox_style(false));
 
         let update_button = button(text(button_text).size(14).color(if is_enabled {
             iced::Color::WHITE
@@ -631,27 +684,32 @@ impl Updates {
             update_button
         };
 
-        row![update_button]
+        row![select_all_checkbox, update_button]
             .spacing(12)
             .align_y(iced::Alignment::Center)
             .into()
+    }
+
+    fn create_load_task(
+        pm_config: &updater_core::Config,
+        pm_type: PackageManagerType,
+    ) -> Task<Message> {
+        let pm_config = pm_config.clone();
+
+        Task::future(async move {
+            pm_type
+                .list_updates(&pm_config)
+                .await
+                .map_err(|e| format!("Failed to load updates for {}: {}", pm_type.name(), e))
+        })
+        .then(move |result| Task::done(Message::LoadUpdatesResult(pm_type, result)))
     }
 
     fn load_updates_action(
         pm_config: &updater_core::Config,
         pm_type: PackageManagerType,
     ) -> Action {
-        let pm_config = pm_config.clone();
-
-        let task = Task::future(async move {
-            pm_type
-                .list_updates(&pm_config)
-                .await
-                .map_err(|e| format!("Failed to load updates for {}: {}", pm_type.name(), e))
-        })
-        .then(move |result| Task::done(Message::LoadUpdatesResult(pm_type, result)));
-
-        Action::Run(task)
+        Action::Run(Self::create_load_task(pm_config, pm_type))
     }
 
     fn update_packages_action(pm_config: &updater_core::Config, info: &UpdatesInfo) -> Action {
@@ -667,7 +725,7 @@ impl Updates {
                     if selected_packages.contains(&pkg.name) {
                         packages_by_manager
                             .entry(*pm_type)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(pkg.name.clone());
                     }
                 }
