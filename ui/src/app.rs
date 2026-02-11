@@ -107,25 +107,8 @@ impl App {
             Message::SideBar(sidebar_msg) => match self.sidebar.update(sidebar_msg) {
                 sidebar::Action::ChangeContent(content) => {
                     self.content.actinve_content = content;
-                    if content == content::ActiveContentPage::Installed
-                        && !self.insatlled_info.has_loading_count
-                    {
-                        self.insatlled_info.is_loading_count = true;
-                        Task::future(Self::init_installed_counts(self.pm_config.clone())).then(
-                            |installed_counts| {
-                                Task::done(Message::InitInstalledCounts(installed_counts))
-                            },
-                        )
-                    } else if content == content::ActiveContentPage::Updates
-                        && !self.updates_info.has_loading_count
-                    {
-                        self.updates_info.is_loading_count = true;
-                        Task::future(Self::init_updates_counts(self.pm_config.clone())).then(
-                            |update_counts| Task::done(Message::InitUpdatesCounts(update_counts)),
-                        )
-                    } else {
-                        Task::none()
-                    }
+                    // Data is now pre-loaded on startup, no need to check
+                    Task::none()
                 }
                 sidebar::Action::Run(task) => task.map(Message::SideBar),
                 sidebar::Action::None => Task::none(),
@@ -174,6 +157,26 @@ impl App {
                 match result {
                     Ok(config) => {
                         self.pm_config = config;
+                        
+                        // Start loading installed and updates info immediately
+                        self.insatlled_info.is_loading_count = true;
+                        self.updates_info.is_loading_count = true;
+                        
+                        let installed_task = Task::future(Self::init_installed_counts(
+                            self.pm_config.clone(),
+                        ))
+                        .then(|installed_counts| {
+                            Task::done(Message::InitInstalledCounts(installed_counts))
+                        });
+                        
+                        let updates_task = Task::future(Self::init_updates_counts(
+                            self.pm_config.clone(),
+                        ))
+                        .then(|update_counts| {
+                            Task::done(Message::InitUpdatesCounts(update_counts))
+                        });
+                        
+                        return Task::batch(vec![installed_task, updates_task]);
                     }
                     Err(e) => {
                         log::error!("Failed to load config: {}", e);

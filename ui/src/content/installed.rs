@@ -130,10 +130,26 @@ impl Installed {
                 Action::None
             }
             Message::RefreshInfo => {
-                for pm_type in info.installed_packages.keys() {
+                let pm_types: Vec<PackageManagerType> = info.installed_packages.keys().copied().collect();
+                
+                if pm_types.is_empty() {
+                    return Action::None;
+                }
+                
+                // Set loading state for all package managers
+                for pm_type in &pm_types {
                     info.loading_installed.insert(*pm_type);
                 }
-                Action::ClearCacheAndReload
+                
+                // Create loading tasks for all package managers
+                let tasks: Vec<Task<Message>> = pm_types
+                    .into_iter()
+                    .map(|pm_type| {
+                        Self::create_load_task(&updater_core::Config::default(), pm_type)
+                    })
+                    .collect();
+                
+                Action::Run(Task::batch(tasks))
             }
             Message::SearchQueryChanged(query) => {
                 self.search_query = query;
@@ -708,13 +724,13 @@ impl Installed {
             .into()
     }
 
-    fn load_installed_packages_action(
+    fn create_load_task(
         pm_config: &updater_core::Config,
         pm_type: PackageManagerType,
-    ) -> Action {
+    ) -> Task<Message> {
         let pm_config = pm_config.clone();
 
-        let task = Task::future(async move {
+        Task::future(async move {
             pm_type.list_installed(&pm_config).await.map_err(|e| {
                 format!(
                     "Failed to load installed packages for {}: {}",
@@ -723,8 +739,14 @@ impl Installed {
                 )
             })
         })
-        .then(move |result| Task::done(Message::LoadInstalledResult(pm_type, result)));
-        Action::Run(task)
+        .then(move |result| Task::done(Message::LoadInstalledResult(pm_type, result)))
+    }
+
+    fn load_installed_packages_action(
+        pm_config: &updater_core::Config,
+        pm_type: PackageManagerType,
+    ) -> Action {
+        Action::Run(Self::create_load_task(pm_config, pm_type))
     }
 
     fn remove_packages_action(pm_config: &updater_core::Config, info: &InstalledInfo) -> Action {
