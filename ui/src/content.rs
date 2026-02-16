@@ -92,7 +92,6 @@ impl Content {
                     match action {
                         updates::Action::Run(task) => Action::Run(task.map(Message::Updates)),
                         updates::Action::None => Action::None,
-                        updates::Action::ClearCacheAndReload => Action::ClearCacheAndReload,
                     }
                 } else {
                     Action::None

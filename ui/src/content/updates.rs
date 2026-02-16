@@ -46,7 +46,6 @@ impl From<Message> for content::Message {
 pub enum Action {
     None,
     Run(iced::Task<Message>),
-    ClearCacheAndReload,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -165,7 +164,27 @@ impl Updates {
                     Ok(_) => {
                         info.selected_packages.clear();
                         // Reload updates after successful update
-                        Action::ClearCacheAndReload
+                        // Trigger refresh to reload all package manager data
+                        let pm_types: Vec<PackageManagerType> = info.selected_managers.iter().copied().collect();
+                        
+                        if pm_types.is_empty() {
+                            return Action::None;
+                        }
+                        
+                        // Set loading state for selected package managers
+                        for pm_type in &pm_types {
+                            info.loading_updates.insert(*pm_type);
+                        }
+                        
+                        // Create loading tasks for selected package managers
+                        let tasks: Vec<Task<Message>> = pm_types
+                            .into_iter()
+                            .map(|pm_type| {
+                                Self::create_load_task(&updater_core::Config::default(), pm_type)
+                            })
+                            .collect();
+                        
+                        Action::Run(Task::batch(tasks))
                     }
                     Err(e) => {
                         eprintln!("Failed to update packages: {}", e);
