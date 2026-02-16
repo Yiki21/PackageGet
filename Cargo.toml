@@ -17,21 +17,33 @@ anyhow = { version = "1.0.100" }
 log = "0.4.29"
 env_logger = "0.11.8"
 mimalloc = { version = "0.1.48"}
+notify-rust = "4"
 
 
 [profile.dev]
-opt-level = 0
-incremental = true
-debug = true
-
-# Enable a large amount of optimization in the dev profile for dependencies.
-[profile.dev.package."*"]
-opt-level = 3
-
-[profile.dev.package."updater_core"]
 opt-level = 1
 incremental = true
 debug = true
+split-debuginfo = "unpacked"
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+incremental = false
+
+[profile.dev.package]
+updater_core = { opt-level = 1, incremental = true }
+iced = { opt-level = 3}
+iced_core = { opt-level = 3 }
+iced_widget = { opt-level = 3 }
+iced_winit = { opt-level = 3 }
+winit = { opt-level = 3 }
+tokio = { opt-level = 3 }
+serde = { opt-level = 3 }
+env_logger = { opt-level = 3 }
+log = { opt-level = 3 }
+mimalloc = { opt-level = 3 }
+futures = { opt-level = 3 }
+
 
 [profile.release]
 opt-level = 3
@@ -48,4 +60,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
-

@@ -48,8 +48,8 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortOption {
-    #[default]
     Name,
+    #[default]
     Relevance,
 }
 
@@ -149,6 +149,18 @@ impl Finding {
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
+                        // Re-execute search to update package status
+                        if !self.last_search_query.is_empty() {
+                            // Mark all selected managers as searching
+                            for pm_type in info.selected_managers.iter() {
+                                info.searching_managers.insert(*pm_type);
+                            }
+                            return Self::execute_search_action(
+                                &updater_core::Config::default(),
+                                &info.selected_managers,
+                                &self.last_search_query,
+                            );
+                        }
                         Action::None
                     }
                     Err(e) => {
@@ -399,46 +411,103 @@ impl Finding {
         package: &'a PackageInfo,
         info: &'a FindingInfo,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{checkbox, column, row, text};
+        use iced::widget::{checkbox, column, container, row, text};
 
         let package_name = package.name.clone();
         let is_selected = info.selected_packages.contains(&package.name);
+        let is_not_installed = package.version.trim() == "Not Installed";
 
-        let main_row = row![
-            checkbox(is_selected)
-                .on_toggle({
+        let mut name_with_desc =
+            column![text(&package.name).size(15).color(app::colors::ON_SURFACE),]
+                .spacing(4)
+                .width(iced::Length::Fill);
+
+        if let Some(description) = &package.description {
+            name_with_desc = name_with_desc.push(
+                text(description)
+                    .size(13)
+                    .color(app::colors::ON_SURFACE_MUTED),
+            );
+        };
+
+        let enable_install = !info.is_installing && is_not_installed;
+
+        let checkbox = checkbox(is_selected)
+            .on_toggle_maybe(if enable_install {
+                Some({
                     let package_name = package_name.clone();
                     move |selected| Message::TogglePackageSelection(package_name.clone(), selected)
                 })
-                .size(18)
-                .spacing(8)
-                .style(SharedUi::checkbox_style(false)),
-            column![
-                text(&package.name).size(15).color(app::colors::ON_SURFACE),
-                if let Some(description) = &package.description {
-                    text(description)
-                        .size(13)
-                        .color(app::colors::ON_SURFACE_MUTED)
-                } else {
-                    text("")
-                }
-            ]
-            .spacing(4)
-            .width(iced::Length::Fill),
-            {
-                let version = package.version.trim();
-                if !version.is_empty() && version != "unknown" {
-                    text(version).size(14).color(app::colors::ON_SURFACE_MUTED)
-                } else {
-                    text("")
-                }
-            },
-        ]
-        .spacing(16)
-        .align_y(iced::Alignment::Center)
-        .padding([8, 0]);
+            } else {
+                None
+            })
+            .size(18)
+            .spacing(8)
+            .style(SharedUi::checkbox_style(false));
 
-        main_row.into()
+        let version_text = package.version.trim();
+
+        let main_row = if is_not_installed {
+            // Show "Not Installed" badge with distinct styling
+            row![
+                checkbox,
+                name_with_desc,
+                container(
+                    text("Not Installed")
+                        .size(12)
+                        .color(iced::Color::from_rgb8(180, 180, 180))
+                )
+                .padding([4, 8])
+                .style(|_theme: &iced::Theme| {
+                    use iced::widget::container::Style;
+                    Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb8(50, 50, 50))),
+                        border: Border {
+                            color: iced::Color::from_rgb8(80, 80, 80),
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        text_color: None,
+                        shadow: Default::default(),
+                        snap: Default::default(),
+                    }
+                })
+            ]
+        } else if !version_text.is_empty() && version_text != "unknown" {
+            // Show installed version with green badge
+            row![
+                checkbox,
+                name_with_desc,
+                container(
+                    text(version_text)
+                        .size(12)
+                        .color(iced::Color::from_rgb8(200, 255, 200))
+                )
+                .padding([4, 8])
+                .style(|_theme: &iced::Theme| {
+                    use iced::widget::container::Style;
+                    Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb8(30, 70, 30))),
+                        border: Border {
+                            color: iced::Color::from_rgb8(50, 120, 50),
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        text_color: None,
+                        shadow: Default::default(),
+                        snap: Default::default(),
+                    }
+                })
+            ]
+        } else {
+            row![checkbox, name_with_desc, text("")]
+        };
+
+        main_row
+            .spacing(16)
+            .align_y(iced::Alignment::Center)
+            .padding([8, 0])
+            .into()
     }
 
     fn batch_actions_view<'a>(&self, info: &'a FindingInfo) -> iced::Element<'a, Message> {

@@ -230,14 +230,9 @@ impl PackageManager for HomebrewManager {
 
             let name = line.to_string();
 
-            // 尝试获取版本信息（对于未安装的包会失败）
-            let version = Self::get_current_version(config, &name)
-                .await
-                .unwrap_or_else(|_| "not installed".to_string());
-
             packages.push(PackageInfo {
                 name,
-                version,
+                version: "Not Installed".to_string(),
                 source: PackageManagerType::Homebrew,
                 description: None,
                 size: None,

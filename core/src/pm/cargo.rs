@@ -135,16 +135,29 @@ impl PackageManager for CargoManager {
             encoded_name
         );
 
-        let resp = reqwest::get(&url).await?;
+        log::debug!("Cargo search: querying URL: {}", url);
+
+        // crates.io API 要求提供 User-Agent 头
+        let client = reqwest::Client::builder()
+            .user_agent("updater/0.1.0 (https://github.com/yourusername/updater)")
+            .build()?;
+        
+        let resp = client.get(&url).send().await?;
+
+        log::debug!("Cargo search: got response status: {}", resp.status());
 
         if !resp.status().is_success() {
+            log::warn!("Cargo search: HTTP request failed with status {}", resp.status());
             return Ok(Vec::new());
         }
 
         let search_result: serde_json::Value = resp.json().await?;
         let mut packages = Vec::new();
 
+        log::debug!("Cargo search: parsing JSON response");
+
         if let Some(crates) = search_result["crates"].as_array() {
+            log::debug!("Cargo search: found {} crates in response", crates.len());
             for crate_info in crates {
                 if let (Some(name), Some(version)) = (
                     crate_info["name"].as_str(),
@@ -167,8 +180,11 @@ impl PackageManager for CargoManager {
                     });
                 }
             }
+        } else {
+            log::warn!("Cargo search: 'crates' field not found in JSON response");
         }
 
+        log::debug!("Cargo search: returning {} packages", packages.len());
         Ok(packages)
     }
 
@@ -438,5 +454,126 @@ ripgrep v14.1.0:
         assert_eq!(crates.len(), 2, "只应该解析非本地路径的包");
         assert_eq!(crates[0].name, "cargo-watch");
         assert_eq!(crates[1].name, "ripgrep");
+    }
+
+    #[tokio::test]
+    async fn test_search_package_yazi() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let config = crate::Config::default();
+        match CargoManager::search_package(&config, "yazi").await {
+            Ok(packages) => {
+                println!("Found {} packages for 'yazi':", packages.len());
+                assert!(!packages.is_empty(), "Should find at least one package");
+                for (i, pkg) in packages.iter().take(5).enumerate() {
+                    println!("  {}: {} - {}", i+1, pkg.name, pkg.version);
+                    if let Some(ref desc) = pkg.description {
+                        println!("     {}", desc);
+                    }
+                }
+                // 应该找到 yazi 包
+                let has_yazi = packages.iter().any(|p| p.name == "yazi");
+                if has_yazi {
+                    println!("✓ Found 'yazi' package");
+                }
+            }
+            Err(e) => {
+                panic!("Search failed: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_package_eza() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let config = crate::Config::default();
+        match CargoManager::search_package(&config, "eza").await {
+            Ok(packages) => {
+                println!("Found {} packages for 'eza':", packages.len());
+                assert!(!packages.is_empty(), "Should find at least one package");
+                for (i, pkg) in packages.iter().take(5).enumerate() {
+                    println!("  {}: {} - {}", i+1, pkg.name, pkg.version);
+                    if let Some(ref desc) = pkg.description {
+                        println!("     {}", desc);
+                    }
+                }
+                // 应该找到 eza 包（精确匹配）
+                let eza_pkg = packages.iter().find(|p| p.name == "eza");
+                assert!(eza_pkg.is_some(), "Should find exact match for 'eza'");
+                if let Some(pkg) = eza_pkg {
+                    println!("✓ Found 'eza' package version {}", pkg.version);
+                    assert!(!pkg.version.is_empty(), "Version should not be empty");
+                }
+            }
+            Err(e) => {
+                panic!("Search failed: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_package_returns_version() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let config = crate::Config::default();
+        match CargoManager::search_package(&config, "serde").await {
+            Ok(packages) => {
+                println!("Found {} packages for 'serde':", packages.len());
+                assert!(!packages.is_empty(), "Should find serde packages");
+                
+                // 检查第一个结果
+                let first = &packages[0];
+                println!("First result: {} - {}", first.name, first.version);
+                
+                // 版本号不应该是 "Not Installed"
+                assert_ne!(first.version, "Not Installed", 
+                    "Cargo search should return actual version, not 'Not Installed'");
+                assert!(!first.version.is_empty(), "Version should not be empty");
+                assert_ne!(first.version, "unknown", "Version should not be unknown");
+                
+                println!("✓ Search returns actual versions for Cargo packages");
+            }
+            Err(e) => {
+                panic!("Search failed: {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_query() {
+        let config = crate::Config::default();
+        // 空查询应该返回一些结果（crates.io 会返回流行的包）
+        match CargoManager::search_package(&config, "").await {
+            Ok(packages) => {
+                println!("Empty query returned {} packages", packages.len());
+                // crates.io API 对空查询会返回结果
+                // 不强制要求有结果，但如果有结果应该是有效的
+                for pkg in packages.iter().take(3) {
+                    println!("  {} - {}", pkg.name, pkg.version);
+                }
+            }
+            Err(e) => {
+                println!("Empty query failed (this may be expected): {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_nonexistent_package() {
+        let config = crate::Config::default();
+        // 搜索一个不存在的包名
+        match CargoManager::search_package(&config, "this-package-definitely-does-not-exist-12345").await {
+            Ok(packages) => {
+                println!("Search for nonexistent package returned {} results", packages.len());
+                // 应该返回空列表或者没有精确匹配
+                if !packages.is_empty() {
+                    println!("Got some fuzzy matches:");
+                    for pkg in packages.iter().take(3) {
+                        println!("  {} - {}", pkg.name, pkg.version);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Search failed: {}", e);
+            }
+        }
     }
 }

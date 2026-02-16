@@ -207,36 +207,30 @@ impl PackageManager for DnfManager {
         debug!("dnf search output size: {} bytes", stdout.len());
 
         // dnf search 输出格式：
-        // package-name.arch : Summary
+        // Matched fields: name, summary
+        // package-name.arch<TAB>Summary description
         for line in stdout.lines() {
             let line = line.trim();
-            if line.is_empty() || !line.contains(':') {
+            
+            // 跳过头部行和空行
+            if line.is_empty() || line.starts_with("Matched fields:") {
                 continue;
             }
 
-            if let Some((name_part, _summary)) = line.split_once(':') {
+            // DNF 使用 tab 分隔包名和描述
+            if let Some((name_part, _summary)) = line.split_once('\t') {
                 let name_part = name_part.trim();
-                if name_part.contains(' ') || name_part.starts_with('=') {
-                    continue;
-                }
-
+                
+                // 移除架构后缀 (如 .x86_64, .noarch)
                 let name = name_part
                     .rsplit_once('.')
                     .map(|(n, _)| n)
                     .unwrap_or(name_part)
                     .to_string();
 
-                // 尝试获取版本信息
-                let mut version = Self::get_current_version(config, &name)
-                    .await
-                    .unwrap_or_default();
-                if version == "unknown" {
-                    version.clear();
-                }
-
                 packages.push(PackageInfo {
                     name,
-                    version,
+                    version: "Not Installed".to_string(),
                     source: PackageManagerType::Dnf,
                     description: None,
                     size: None,

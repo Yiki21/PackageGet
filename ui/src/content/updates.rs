@@ -46,7 +46,6 @@ impl From<Message> for content::Message {
 pub enum Action {
     None,
     Run(iced::Task<Message>),
-    #[allow(dead_code)]
     ClearCacheAndReload,
 }
 
@@ -166,7 +165,7 @@ impl Updates {
                     Ok(_) => {
                         info.selected_packages.clear();
                         // Reload updates after successful update
-                        Action::Run(Task::none())
+                        Action::ClearCacheAndReload
                     }
                     Err(e) => {
                         eprintln!("Failed to update packages: {}", e);

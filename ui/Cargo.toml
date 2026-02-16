@@ -16,10 +16,11 @@ iced = { version = "0.14.0", features = [
   "svg",
 ] }
 futures = { workspace = true }
-updater_core = { path = "../core" }  
+updater_core = { path = "../core" }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
 log = { workspace = true }
 env_logger = { workspace = true }
 rfd = "0.17.2"
 mimalloc = { workspace = true }
+# notify-rust = { workspace = true }
