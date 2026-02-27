@@ -6,6 +6,7 @@ mod app;
 mod content;
 mod icon;
 mod sidebar;
+mod status_panel;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
