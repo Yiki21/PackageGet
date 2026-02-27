@@ -14,12 +14,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use futures::channel::mpsc;
 use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
-    content::shared::{PackageSelectionKey, SharedUi},
+    content::shared::{PackageSelectionKey, PackageTaskProgress, SharedUi},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -37,7 +38,15 @@ pub enum Message {
     TogglePackageSelection(PackageManagerType, String, bool),
     ToggleSelectAll(bool),
     RemoveSelectedPackages,
+    RemoveProgress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        current_package: String,
+        package_progress: f32,
+    },
     RemovePackagesResult(Result<(), String>),
+    RemoveTaskFinished,
 }
 
 /// Information about installed packages passed from app state
@@ -51,6 +60,20 @@ pub struct InstalledInfo {
     pub sort_by: SortOption,
     pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_removing: bool,
+    pub remove_progress: Option<(usize, usize, PackageManagerType, String)>,
+    pub remove_items: Vec<PackageTaskProgress>,
+}
+
+#[derive(Debug, Clone)]
+enum RemoveTaskEvent {
+    Progress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        current_package: String,
+        package_progress: f32,
+    },
+    Done(Result<(), String>),
 }
 
 impl From<Message> for content::Message {
@@ -199,10 +222,41 @@ impl Installed {
                     return Action::None;
                 }
                 info.is_removing = true;
+                info.remove_items = SharedUi::build_task_progress(&info.selected_packages);
+                let initial_manager = info
+                    .selected_packages
+                    .iter()
+                    .next()
+                    .map(|(pm_type, _)| *pm_type)
+                    .unwrap_or(PackageManagerType::Dnf);
+                info.remove_progress = Some((
+                    0,
+                    info.selected_packages.len(),
+                    initial_manager,
+                    String::new(),
+                ));
                 Self::remove_packages_action(pm_config, info)
+            }
+            Message::RemoveProgress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            } => {
+                SharedUi::update_task_progress(
+                    &mut info.remove_items,
+                    manager,
+                    &current_package,
+                    package_progress,
+                );
+                info.remove_progress = Some((completed, total, manager, current_package));
+                Action::None
             }
             Message::RemovePackagesResult(result) => {
                 info.is_removing = false;
+                info.remove_progress = None;
+                info.remove_items.clear();
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
@@ -215,6 +269,7 @@ impl Installed {
                     }
                 }
             }
+            Message::RemoveTaskFinished => Action::None,
         }
     }
 
@@ -508,7 +563,21 @@ impl Installed {
         let all_selected = total_visible > 0 && selected_count == total_visible;
 
         let button_text = if info.is_removing {
-            "Removing...".to_string()
+            if let Some((completed, total, manager, package)) = &info.remove_progress {
+                if package.is_empty() {
+                    format!("Removing {}/{}...", completed, total)
+                } else {
+                    format!(
+                        "Removing {}/{}: {} ({})",
+                        completed,
+                        total,
+                        package,
+                        manager.name()
+                    )
+                }
+            } else {
+                "Removing...".to_string()
+            }
         } else if selected_count > 0 {
             format!("Remove {} package(s)", selected_count)
         } else {
@@ -628,20 +697,76 @@ impl Installed {
             }
         }
 
-        let task = Task::future(async move {
-            for (pm_type, package_names) in packages_by_manager {
-                if let Err(e) = pm_type.uninstall_packages(&pm_config, &package_names).await {
-                    return Err(format!(
-                        "Failed to remove packages from {}: {}",
-                        pm_type.name(),
-                        e
-                    ));
-                }
-            }
-            Ok(())
-        })
-        .then(|result| Task::done(Message::RemovePackagesResult(result)));
+        let total_packages: usize = packages_by_manager.values().map(Vec::len).sum();
 
-        Action::Run(task)
+        if total_packages == 0 {
+            return Action::Run(Task::done(Message::RemovePackagesResult(Ok(()))));
+        }
+
+        let mut manager_groups: Vec<(PackageManagerType, Vec<String>)> =
+            packages_by_manager.into_iter().collect();
+        manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
+        for (_, package_names) in manager_groups.iter_mut() {
+            package_names.sort();
+        }
+
+        let (sender, receiver) = mpsc::unbounded::<RemoveTaskEvent>();
+        let remove_sender = sender.clone();
+
+        let remove_task =
+            Task::future(async move {
+                let mut global_offset = 0usize;
+
+                for (pm_type, package_names) in manager_groups {
+                    let offset = global_offset;
+                    let progress_sender = remove_sender.clone();
+
+                    let result = pm_type
+                        .uninstall_packages_with_progress(&pm_config, &package_names, |progress| {
+                            let _ = progress_sender.unbounded_send(RemoveTaskEvent::Progress {
+                                completed: offset + progress.completed,
+                                total: total_packages,
+                                manager: progress.manager,
+                                current_package: progress.current_package,
+                                package_progress: progress.package_progress,
+                            });
+                        })
+                        .await;
+
+                    match result {
+                        Ok(()) => {
+                            global_offset += package_names.len();
+                        }
+                        Err(e) => {
+                            let _ = remove_sender.unbounded_send(RemoveTaskEvent::Done(Err(
+                                format!("Failed to remove packages from {}: {}", pm_type.name(), e),
+                            )));
+                            return;
+                        }
+                    }
+                }
+
+                let _ = remove_sender.unbounded_send(RemoveTaskEvent::Done(Ok(())));
+            })
+            .map(|_| Message::RemoveTaskFinished);
+
+        let progress_task = Task::run(receiver, |event| match event {
+            RemoveTaskEvent::Progress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            } => Message::RemoveProgress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            },
+            RemoveTaskEvent::Done(result) => Message::RemovePackagesResult(result),
+        });
+
+        Action::Run(Task::batch(vec![remove_task, progress_task]))
     }
 }

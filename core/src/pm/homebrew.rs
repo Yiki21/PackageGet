@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::{Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate};
+use crate::{
+    Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
+    pm::progress::run_command_with_progress,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct HomebrewManager;
@@ -229,10 +232,13 @@ impl PackageManager for HomebrewManager {
             }
 
             let name = line.to_string();
+            let version = Self::get_current_version(config, &name)
+                .await
+                .unwrap_or_else(|_| "Not Installed".to_string());
 
             packages.push(PackageInfo {
                 name,
-                version: "Not Installed".to_string(),
+                version,
                 source: PackageManagerType::Homebrew,
                 description: None,
                 size: None,
@@ -249,72 +255,24 @@ impl PackageManager for HomebrewManager {
         config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
-
         for name in package_names {
-            let output = tokio::process::Command::new(&path)
-                .arg("uninstall")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "brew uninstall failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::uninstall_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
-
         for name in package_names {
-            let output = tokio::process::Command::new(&path)
-                .arg("upgrade")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "brew upgrade failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::update_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
-
         for name in package_names {
-            let output = tokio::process::Command::new(&path)
-                .arg("install")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "brew install failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::install_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
@@ -322,6 +280,48 @@ impl PackageManager for HomebrewManager {
 }
 
 impl HomebrewManager {
+    pub async fn uninstall_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Homebrew)
+            .unwrap_or_else(|| "brew".to_owned());
+
+        let args = vec!["uninstall".to_string(), package_name.to_owned()];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn update_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Homebrew)
+            .unwrap_or_else(|| "brew".to_owned());
+
+        let args = vec!["upgrade".to_string(), package_name.to_owned()];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn install_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Homebrew)
+            .unwrap_or_else(|| "brew".to_owned());
+
+        let args = vec!["install".to_string(), package_name.to_owned()];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
     fn parse_name_and_version(s: &str) -> Option<(&str, &str)> {
         let open_paren = s.rfind('(')?;
         let close_paren = s.rfind(')')?;

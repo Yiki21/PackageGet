@@ -35,6 +35,15 @@ pub struct PackageInfo {
     pub homepage: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InstallProgress {
+    pub manager: PackageManagerType,
+    pub current_package: String,
+    pub completed: usize,
+    pub total: usize,
+    pub package_progress: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum PackageManagerType {
     Dnf,
@@ -188,6 +197,72 @@ impl PackageManagerType {
         }
     }
 
+    pub async fn uninstall_packages_with_progress(
+        &self,
+        config: &Config,
+        package_names: &[String],
+        mut on_progress: impl FnMut(InstallProgress),
+    ) -> CoreResult<()> {
+        let total = package_names.len();
+
+        for (index, package_name) in package_names.iter().enumerate() {
+            let package_name = package_name.clone();
+            let mut report = |package_progress: f32| {
+                let package_progress = package_progress.clamp(0.0, 1.0);
+                let completed = if package_progress >= 1.0 {
+                    index + 1
+                } else {
+                    index
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: package_name.clone(),
+                    completed,
+                    total,
+                    package_progress,
+                });
+            };
+
+            match self {
+                Self::Dnf => {
+                    DnfManager::uninstall_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Flatpak => {
+                    FlatpakManager::uninstall_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Homebrew => {
+                    HomebrewManager::uninstall_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Cargo => {
+                    CargoManager::uninstall_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Go => {
+                    GoManager::uninstall_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn update_packages(
         &self,
         config: &Config,
@@ -200,6 +275,78 @@ impl PackageManagerType {
             Self::Cargo => CargoManager.update_packages(config, package_names).await,
             Self::Go => GoManager.update_packages(config, package_names).await,
         }
+    }
+
+    pub async fn update_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
+        match self {
+            Self::Dnf => DnfManager.update_package(config, package_name).await,
+            Self::Flatpak => FlatpakManager.update_package(config, package_name).await,
+            Self::Homebrew => HomebrewManager.update_package(config, package_name).await,
+            Self::Cargo => CargoManager.update_package(config, package_name).await,
+            Self::Go => GoManager.update_package(config, package_name).await,
+        }
+    }
+
+    pub async fn update_packages_with_progress(
+        &self,
+        config: &Config,
+        package_names: &[String],
+        mut on_progress: impl FnMut(InstallProgress),
+    ) -> CoreResult<()> {
+        let total = package_names.len();
+
+        for (index, package_name) in package_names.iter().enumerate() {
+            let package_name = package_name.clone();
+            let mut report = |package_progress: f32| {
+                let package_progress = package_progress.clamp(0.0, 1.0);
+                let completed = if package_progress >= 1.0 {
+                    index + 1
+                } else {
+                    index
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: package_name.clone(),
+                    completed,
+                    total,
+                    package_progress,
+                });
+            };
+
+            match self {
+                Self::Dnf => {
+                    DnfManager::update_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Flatpak => {
+                    FlatpakManager::update_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Homebrew => {
+                    HomebrewManager::update_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Cargo => {
+                    CargoManager::update_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Go => {
+                    GoManager::update_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn install_packages(
@@ -218,6 +365,78 @@ impl PackageManagerType {
             Self::Cargo => CargoManager.install_packages(config, package_names).await,
             Self::Go => GoManager.install_packages(config, package_names).await,
         }
+    }
+
+    pub async fn install_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
+        match self {
+            Self::Dnf => DnfManager.install_package(config, package_name).await,
+            Self::Flatpak => FlatpakManager.install_package(config, package_name).await,
+            Self::Homebrew => HomebrewManager.install_package(config, package_name).await,
+            Self::Cargo => CargoManager.install_package(config, package_name).await,
+            Self::Go => GoManager.install_package(config, package_name).await,
+        }
+    }
+
+    pub async fn install_packages_with_progress(
+        &self,
+        config: &Config,
+        package_names: &[String],
+        mut on_progress: impl FnMut(InstallProgress),
+    ) -> CoreResult<()> {
+        let total = package_names.len();
+
+        for (index, package_name) in package_names.iter().enumerate() {
+            let package_name = package_name.clone();
+            let mut report = |package_progress: f32| {
+                let package_progress = package_progress.clamp(0.0, 1.0);
+                let completed = if package_progress >= 1.0 {
+                    index + 1
+                } else {
+                    index
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: package_name.clone(),
+                    completed,
+                    total,
+                    package_progress,
+                });
+            };
+
+            match self {
+                Self::Dnf => {
+                    DnfManager::install_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Flatpak => {
+                    FlatpakManager::install_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Homebrew => {
+                    HomebrewManager::install_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                Self::Cargo => {
+                    CargoManager::install_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Go => {
+                    GoManager::install_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -244,9 +463,8 @@ pub trait PackageManager: Send + Sync {
     }
 
     async fn uninstall_package(&self, _config: &Config, _package_name: &str) -> CoreResult<()> {
-        Err(CoreError::UnknownError(
-            "uninstall_package not implemented".into(),
-        ))
+        self.uninstall_packages(_config, &[_package_name.to_owned()])
+            .await
     }
 
     async fn uninstall_packages(
@@ -265,6 +483,11 @@ pub trait PackageManager: Send + Sync {
         ))
     }
 
+    async fn update_package(&self, _config: &Config, _package_name: &str) -> CoreResult<()> {
+        self.update_packages(_config, &[_package_name.to_owned()])
+            .await
+    }
+
     async fn install_packages(
         &self,
         _config: &Config,
@@ -273,5 +496,10 @@ pub trait PackageManager: Send + Sync {
         Err(CoreError::UnknownError(
             "install_packages not implemented".into(),
         ))
+    }
+
+    async fn install_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
+        self.install_packages(config, &[package_name.to_owned()])
+            .await
     }
 }

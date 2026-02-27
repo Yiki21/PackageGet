@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use crate::{Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate};
+use crate::{
+    Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
+    pm::progress::run_command_with_progress,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FlatpakManager;
@@ -246,13 +249,9 @@ impl PackageManager for FlatpakManager {
                     .map(|s| s.to_string());
 
                 if let Some(app_id) = app_id {
-                    let mut version = parts
-                        .get(parts.len().saturating_sub(2))
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    if version == "unknown" {
-                        version.clear();
-                    }
+                    let version = Self::get_current_version(config, &app_id)
+                        .await
+                        .unwrap_or_else(|_| "Not Installed".to_string());
 
                     packages.push(PackageInfo {
                         name: app_id,
@@ -275,85 +274,81 @@ impl PackageManager for FlatpakManager {
         config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
-
-        let mut args = vec!["uninstall".to_string(), "-y".to_string()];
-        for name in package_names {
-            args.push(name.clone());
+        for package_name in package_names {
+            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
         }
-
-        let output = tokio::process::Command::new(&path)
-            .args(&args)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(crate::error::CoreError::UnknownError(format!(
-                "flatpak uninstall failed: {}",
-                stderr
-            )));
-        }
-
         Ok(())
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
-
-        let mut args = vec!["update", "-y"];
-        for name in package_names {
-            args.push(name);
+        for package_name in package_names {
+            Self::update_package_with_progress(config, package_name, |_| {}).await?;
         }
-
-        let output = tokio::process::Command::new(&path)
-            .args(&args)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(crate::error::CoreError::UnknownError(format!(
-                "flatpak update failed: {}",
-                stderr
-            )));
-        }
-
         Ok(())
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
-
-        let mut args = vec!["install", "-y"];
-        for name in package_names {
-            args.push(name);
+        for package_name in package_names {
+            Self::install_package_with_progress(config, package_name, |_| {}).await?;
         }
-
-        let output = tokio::process::Command::new(&path)
-            .args(&args)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(crate::error::CoreError::UnknownError(format!(
-                "flatpak install failed: {}",
-                stderr
-            )));
-        }
-
         Ok(())
     }
 }
 
 impl FlatpakManager {
+    pub async fn uninstall_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Flatpak)
+            .unwrap_or_else(|| "flatpak".to_owned());
+
+        let args = vec![
+            "uninstall".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn update_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Flatpak)
+            .unwrap_or_else(|| "flatpak".to_owned());
+
+        let args = vec![
+            "update".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn install_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Flatpak)
+            .unwrap_or_else(|| "flatpak".to_owned());
+
+        let args = vec![
+            "install".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
     /// Parse Flatpak size string (e.g., "123.4 MB" or "1.2 GB")
     fn parse_flatpak_size(size_str: &str) -> Option<u64> {
         let parts: Vec<&str> = size_str.split_whitespace().collect();

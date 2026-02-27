@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use regex::Regex;
 use tokio::{fs, process::Command};
 
-use crate::{Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate};
+use crate::{
+    Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
+    pm::progress::run_command_with_progress,
+};
 
 #[derive(Debug, Clone)]
 pub struct GoManager;
@@ -122,11 +125,9 @@ impl PackageManager for GoManager {
             }
 
             let module_name = parts[0].to_string();
-            let version = parts
-                .last()
-                .filter(|v| v.starts_with('v'))
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            let version = Self::get_current_version(config, &module_name)
+                .await
+                .unwrap_or_else(|_| "Not Installed".to_string());
 
             packages.push(PackageInfo {
                 name: module_name,
@@ -144,88 +145,27 @@ impl PackageManager for GoManager {
 
     async fn uninstall_packages(
         &self,
-        _config: &Config,
+        config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        // Go doesn't have a built-in uninstall command for packages
-        // We need to manually remove the binaries from GOBIN or GOPATH/bin
-        let gobin = std::env::var("GOBIN")
-            .or_else(|_| std::env::var("GOPATH").map(|p| format!("{}/bin", p)))
-            .unwrap_or_else(|_| format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()));
-
         for name in package_names {
-            // Extract binary name from module path if needed
-            let binary_name = name.split('/').next_back().unwrap_or(name);
-            let binary_path = format!("{}/{}", gobin, binary_name);
-
-            if let Err(e) = tokio::fs::remove_file(&binary_path).await {
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "Failed to remove Go binary {}: {}",
-                    binary_name, e
-                )));
-            }
+            Self::uninstall_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Go)
-            .unwrap_or_else(|| "go".to_owned());
-
         for name in package_names {
-            // Use go install with @latest to update
-            let install_path = if name.contains('@') {
-                name.to_string()
-            } else {
-                format!("{}@latest", name)
-            };
-
-            let output = Command::new(&path)
-                .arg("install")
-                .arg(&install_path)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "go install failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::update_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Go)
-            .unwrap_or_else(|| "go".to_owned());
-
         for name in package_names {
-            // Use go install with @latest or specified version
-            let install_path = if name.contains('@') {
-                name.to_string()
-            } else {
-                format!("{}@latest", name)
-            };
-
-            let output = Command::new(&path)
-                .arg("install")
-                .arg(&install_path)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "go install failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::install_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
@@ -233,6 +173,70 @@ impl PackageManager for GoManager {
 }
 
 impl GoManager {
+    pub async fn uninstall_package_with_progress(
+        _config: &Config,
+        package_name: &str,
+        mut on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        // Go uninstall is file removal only, no native streamed percentage.
+        on_progress(0.0);
+
+        let gobin = std::env::var("GOBIN")
+            .or_else(|_| std::env::var("GOPATH").map(|p| format!("{}/bin", p)))
+            .unwrap_or_else(|_| format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()));
+
+        let binary_name = package_name.split('/').next_back().unwrap_or(package_name);
+        let binary_path = format!("{}/{}", gobin, binary_name);
+
+        if let Err(e) = tokio::fs::remove_file(&binary_path).await {
+            return Err(crate::error::CoreError::UnknownError(format!(
+                "Failed to remove Go binary {}: {}",
+                binary_name, e
+            )));
+        }
+
+        on_progress(1.0);
+        Ok(())
+    }
+
+    pub async fn update_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Go)
+            .unwrap_or_else(|| "go".to_owned());
+
+        let install_path = if package_name.contains('@') {
+            package_name.to_string()
+        } else {
+            format!("{}@latest", package_name)
+        };
+
+        let args = vec!["install".to_string(), install_path];
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn install_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Go)
+            .unwrap_or_else(|| "go".to_owned());
+
+        let install_path = if package_name.contains('@') {
+            package_name.to_string()
+        } else {
+            format!("{}@latest", package_name)
+        };
+
+        let args = vec!["install".to_string(), install_path];
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
     /// Get latest version using go list
     async fn get_latest_version(package_name: &str) -> CoreResult<String> {
         let output = Command::new("go")

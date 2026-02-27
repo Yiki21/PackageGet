@@ -2,12 +2,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use futures::channel::mpsc;
 use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
-    content::shared::{PackageSelectionKey, SharedUi},
+    content::shared::{PackageSelectionKey, PackageTaskProgress, SharedUi},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -25,7 +26,15 @@ pub enum Message {
     SortOptionChanged(SortOption),
     TogglePackageSelection(PackageManagerType, String, bool),
     InstallSelectedPackages,
+    InstallProgress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        current_package: String,
+        package_progress: f32,
+    },
     InstallPackagesResult(Result<(), String>),
+    InstallTaskFinished,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +45,20 @@ pub struct FindingInfo {
     pub sort_by: SortOption,
     pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_installing: bool,
+    pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
+    pub install_items: Vec<PackageTaskProgress>,
+}
+
+#[derive(Debug, Clone)]
+enum InstallTaskEvent {
+    Progress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        current_package: String,
+        package_progress: f32,
+    },
+    Done(Result<(), String>),
 }
 
 impl From<Message> for content::Message {
@@ -145,10 +168,41 @@ impl Finding {
                     return Action::None;
                 }
                 info.is_installing = true;
+                info.install_items = SharedUi::build_task_progress(&info.selected_packages);
+                let initial_manager = info
+                    .selected_packages
+                    .iter()
+                    .next()
+                    .map(|(pm_type, _)| *pm_type)
+                    .unwrap_or(PackageManagerType::Dnf);
+                info.install_progress = Some((
+                    0,
+                    info.selected_packages.len(),
+                    initial_manager,
+                    String::new(),
+                ));
                 Self::install_packages_action(pm_config, info)
+            }
+            Message::InstallProgress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            } => {
+                SharedUi::update_task_progress(
+                    &mut info.install_items,
+                    manager,
+                    &current_package,
+                    package_progress,
+                );
+                info.install_progress = Some((completed, total, manager, current_package));
+                Action::None
             }
             Message::InstallPackagesResult(result) => {
                 info.is_installing = false;
+                info.install_progress = None;
+                info.install_items.clear();
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
@@ -172,6 +226,7 @@ impl Finding {
                     }
                 }
             }
+            Message::InstallTaskFinished => Action::None,
         }
     }
 
@@ -457,17 +512,15 @@ impl Finding {
                 container(
                     text("Not Installed")
                         .size(12)
-                        .color(iced::Color::from_rgb8(180, 180, 180))
+                        .color(app::colors::ON_SURFACE_MUTED)
                 )
                 .padding([4, 8])
                 .style(|_theme: &iced::Theme| {
                     use iced::widget::container::Style;
                     Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb8(
-                            50, 50, 50,
-                        ))),
+                        background: Some(iced::Background::Color(app::colors::SURFACE_MUTED)),
                         border: Border {
-                            color: iced::Color::from_rgb8(80, 80, 80),
+                            color: app::colors::DIVIDER,
                             width: 1.0,
                             radius: 4.0.into(),
                         },
@@ -478,24 +531,22 @@ impl Finding {
                 })
             ]
         } else if !version_text.is_empty() && version_text != "unknown" {
-            // Show installed version with green badge
+            // Search result version (not necessarily installed version)
             row![
                 checkbox,
                 name_with_desc,
                 container(
                     text(version_text)
                         .size(12)
-                        .color(iced::Color::from_rgb8(200, 255, 200))
+                        .color(app::colors::ON_SURFACE_MUTED)
                 )
                 .padding([4, 8])
                 .style(|_theme: &iced::Theme| {
                     use iced::widget::container::Style;
                     Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb8(
-                            30, 70, 30,
-                        ))),
+                        background: Some(iced::Background::Color(app::colors::SURFACE_MUTED)),
                         border: Border {
-                            color: iced::Color::from_rgb8(50, 120, 50),
+                            color: app::colors::DIVIDER,
                             width: 1.0,
                             radius: 4.0.into(),
                         },
@@ -523,7 +574,21 @@ impl Finding {
         let is_enabled = selected_count > 0 && !info.is_installing;
 
         let button_text = if info.is_installing {
-            "Installing...".to_string()
+            if let Some((completed, total, manager, package)) = &info.install_progress {
+                if package.is_empty() {
+                    format!("Installing {}/{}...", completed, total)
+                } else {
+                    format!(
+                        "Installing {}/{}: {} ({})",
+                        completed,
+                        total,
+                        package,
+                        manager.name()
+                    )
+                }
+            } else {
+                "Installing...".to_string()
+            }
         } else if selected_count > 0 {
             format!("Install {} package(s)", selected_count)
         } else {
@@ -638,20 +703,75 @@ impl Finding {
             }
         }
 
-        let task = Task::future(async move {
-            for (pm_type, package_names) in packages_by_manager {
-                if let Err(e) = pm_type.install_packages(&pm_config, &package_names).await {
-                    return Err(format!(
-                        "Failed to install packages from {}: {}",
-                        pm_type.name(),
-                        e
-                    ));
+        let total_packages: usize = packages_by_manager.values().map(Vec::len).sum();
+
+        if total_packages == 0 {
+            return Action::Run(Task::done(Message::InstallPackagesResult(Ok(()))));
+        }
+
+        let mut manager_groups: Vec<(PackageManagerType, Vec<String>)> =
+            packages_by_manager.into_iter().collect();
+        manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
+        for (_, package_names) in manager_groups.iter_mut() {
+            package_names.sort();
+        }
+
+        let (sender, receiver) = mpsc::unbounded::<InstallTaskEvent>();
+
+        let install_sender = sender.clone();
+        let install_task = Task::future(async move {
+            let mut global_offset = 0usize;
+
+            for (pm_type, package_names) in manager_groups {
+                let offset = global_offset;
+                let progress_sender = install_sender.clone();
+
+                let result = pm_type
+                    .install_packages_with_progress(&pm_config, &package_names, |progress| {
+                        let _ = progress_sender.unbounded_send(InstallTaskEvent::Progress {
+                            completed: offset + progress.completed,
+                            total: total_packages,
+                            manager: progress.manager,
+                            current_package: progress.current_package,
+                            package_progress: progress.package_progress,
+                        });
+                    })
+                    .await;
+
+                match result {
+                    Ok(()) => {
+                        global_offset += package_names.len();
+                    }
+                    Err(e) => {
+                        let _ = install_sender.unbounded_send(InstallTaskEvent::Done(Err(
+                            format!("Failed to install packages from {}: {}", pm_type.name(), e),
+                        )));
+                        return;
+                    }
                 }
             }
-            Ok(())
-        })
-        .then(|result| Task::done(Message::InstallPackagesResult(result)));
 
-        Action::Run(task)
+            let _ = install_sender.unbounded_send(InstallTaskEvent::Done(Ok(())));
+        })
+        .map(|_| Message::InstallTaskFinished);
+
+        let progress_task = Task::run(receiver, |event| match event {
+            InstallTaskEvent::Progress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            } => Message::InstallProgress {
+                completed,
+                total,
+                manager,
+                current_package,
+                package_progress,
+            },
+            InstallTaskEvent::Done(result) => Message::InstallPackagesResult(result),
+        });
+
+        Action::Run(Task::batch(vec![install_task, progress_task]))
     }
 }

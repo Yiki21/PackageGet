@@ -13,6 +13,7 @@ use crate::{
 // pub use installed::SortOption;
 pub use finding::FindingInfo;
 pub use installed::InstalledInfo;
+pub use shared::PackageTaskState;
 pub use updates::UpdatesInfo;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

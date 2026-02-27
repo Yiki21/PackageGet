@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use regex::Regex;
 use tokio::process::Command;
 
-use crate::{Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate};
+use crate::{
+    Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
+    pm::progress::run_command_with_progress,
+};
 
 #[derive(Debug, Clone)]
 pub struct CargoManager;
@@ -127,7 +132,7 @@ impl PackageManager for CargoManager {
         Ok(packages)
     }
 
-    async fn search_package(_config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
+    async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
         // 使用 crates.io API 搜索
         let encoded_name = package_name.replace(' ', "%20");
         let url = format!(
@@ -156,16 +161,14 @@ impl PackageManager for CargoManager {
 
         let search_result: serde_json::Value = resp.json().await?;
         let mut packages = Vec::new();
+        let installed_versions = Self::get_installed_versions(config).await;
 
         log::debug!("Cargo search: parsing JSON response");
 
         if let Some(crates) = search_result["crates"].as_array() {
             log::debug!("Cargo search: found {} crates in response", crates.len());
             for crate_info in crates {
-                if let (Some(name), Some(version)) = (
-                    crate_info["name"].as_str(),
-                    crate_info["max_version"].as_str(),
-                ) {
+                if let Some(name) = crate_info["name"].as_str() {
                     let description = crate_info["description"].as_str().map(|s| s.to_string());
                     let homepage = crate_info["homepage"]
                         .as_str()
@@ -174,7 +177,10 @@ impl PackageManager for CargoManager {
 
                     packages.push(PackageInfo {
                         name: name.to_string(),
-                        version: version.to_string(),
+                        version: installed_versions
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| "Not Installed".to_string()),
                         source: PackageManagerType::Cargo,
                         description,
                         size: None,
@@ -196,74 +202,24 @@ impl PackageManager for CargoManager {
         config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
-
         for name in package_names {
-            let output = Command::new(&path)
-                .arg("uninstall")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "cargo uninstall failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::uninstall_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
-
         for name in package_names {
-            // Cargo doesn't have a direct update command, so we use install --force
-            let output = Command::new(&path)
-                .arg("install")
-                .arg("--force")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "cargo install --force failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::update_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
-
         for name in package_names {
-            let output = Command::new(&path)
-                .arg("install")
-                .arg(name)
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(crate::error::CoreError::UnknownError(format!(
-                    "cargo install failed for {}: {}",
-                    name, stderr
-                )));
-            }
+            Self::install_package_with_progress(config, name, |_| {}).await?;
         }
 
         Ok(())
@@ -271,6 +227,82 @@ impl PackageManager for CargoManager {
 }
 
 impl CargoManager {
+    async fn get_installed_versions(config: &Config) -> HashMap<String, String> {
+        let path = config
+            .get_package_path(PackageManagerType::Cargo)
+            .unwrap_or_else(|| "cargo".to_owned());
+
+        let output = match Command::new(&path)
+            .arg("install")
+            .arg("--list")
+            .output()
+            .await
+        {
+            Ok(output) => output,
+            Err(_) => return HashMap::new(),
+        };
+
+        if !output.status.success() {
+            return HashMap::new();
+        }
+
+        let stdout = match String::from_utf8(output.stdout) {
+            Ok(stdout) => stdout,
+            Err(_) => return HashMap::new(),
+        };
+
+        Self::parse_cargo_install_list(&stdout)
+            .into_iter()
+            .map(|crate_info| (crate_info.name, crate_info.version))
+            .collect()
+    }
+
+    pub async fn uninstall_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Cargo)
+            .unwrap_or_else(|| "cargo".to_owned());
+
+        let args = vec!["uninstall".to_string(), package_name.to_owned()];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn update_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Cargo)
+            .unwrap_or_else(|| "cargo".to_owned());
+
+        let args = vec![
+            "install".to_string(),
+            "--force".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
+    pub async fn install_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Cargo)
+            .unwrap_or_else(|| "cargo".to_owned());
+
+        let args = vec!["install".to_string(), package_name.to_owned()];
+
+        run_command_with_progress(&path, &args, on_progress).await
+    }
+
     /// get crate info from crates.io API
     async fn get_crate_info(crate_name: &str) -> CoreResult<(Option<String>, Option<String>)> {
         let client = reqwest::Client::builder()
@@ -532,7 +564,7 @@ ripgrep v14.1.0:
     }
 
     #[tokio::test]
-    async fn test_search_package_returns_version() {
+    async fn test_search_package_returns_install_state() {
         let _ = env_logger::builder().is_test(true).try_init();
         let config = crate::Config::default();
         match CargoManager::search_package(&config, "serde").await {
@@ -544,15 +576,10 @@ ripgrep v14.1.0:
                 let first = &packages[0];
                 println!("First result: {} - {}", first.name, first.version);
 
-                // 版本号不应该是 "Not Installed"
-                assert_ne!(
-                    first.version, "Not Installed",
-                    "Cargo search should return actual version, not 'Not Installed'"
-                );
                 assert!(!first.version.is_empty(), "Version should not be empty");
                 assert_ne!(first.version, "unknown", "Version should not be unknown");
 
-                println!("✓ Search returns actual versions for Cargo packages");
+                println!("✓ Search returns install state for Cargo packages");
             }
             Err(e) => {
                 panic!("Search failed: {}", e);

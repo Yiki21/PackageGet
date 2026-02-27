@@ -5,7 +5,7 @@ use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError,
+    error::CoreError, pm::progress::run_command_with_progress,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -203,6 +203,7 @@ impl PackageManager for DnfManager {
 
         let stdout = String::from_utf8(output.stdout)?;
         let mut packages = Vec::new();
+        let mut seen_packages = HashSet::new();
 
         debug!("dnf search output size: {} bytes", stdout.len());
 
@@ -228,9 +229,17 @@ impl PackageManager for DnfManager {
                     .unwrap_or(name_part)
                     .to_string();
 
+                if !seen_packages.insert(name.clone()) {
+                    continue;
+                }
+
+                let version = Self::get_current_version(config, &name)
+                    .await
+                    .unwrap_or_else(|_| "Not Installed".to_string());
+
                 packages.push(PackageInfo {
                     name,
-                    version: "Not Installed".to_string(),
+                    version,
                     source: PackageManagerType::Dnf,
                     description: None,
                     size: None,
@@ -240,6 +249,8 @@ impl PackageManager for DnfManager {
             }
         }
 
+        packages.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(packages)
     }
 
@@ -248,72 +259,86 @@ impl PackageManager for DnfManager {
         config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
-
-        let mut args = vec![path.clone(), "remove".to_string(), "-y".to_string()];
-        for name in package_names {
-            args.push(name.clone());
-        }
-
-        let output = Command::new("pkexec").args(&args).output().await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::UnknownError(format!(
-                "pkexec dnf remove failed: {}",
-                stderr
-            )));
+        for package_name in package_names {
+            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
-
-        let mut args = vec![path.clone(), "upgrade".to_string(), "-y".to_string()];
-        for name in package_names {
-            args.push(name.clone());
-        }
-
-        let output = Command::new("pkexec").args(&args).output().await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::UnknownError(format!(
-                "pkexec dnf upgrade failed: {}",
-                stderr
-            )));
+        for package_name in package_names {
+            Self::update_package_with_progress(config, package_name, |_| {}).await?;
         }
 
         Ok(())
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
+        for package_name in package_names {
+            Self::install_package_with_progress(config, package_name, |_| {}).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DnfManager {
+    pub async fn uninstall_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let mut args = vec![path.clone(), "install".to_string(), "-y".to_string()];
-        for name in package_names {
-            args.push(name.clone());
-        }
+        let args = vec![
+            path,
+            "remove".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
 
-        let output = Command::new("pkexec").args(&args).output().await?;
+        run_command_with_progress("pkexec", &args, on_progress).await
+    }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::UnknownError(format!(
-                "pkexec dnf install failed: {}",
-                stderr
-            )));
-        }
+    pub async fn update_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Dnf)
+            .unwrap_or_else(|| "dnf".to_owned());
 
-        Ok(())
+        let args = vec![
+            path,
+            "upgrade".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress("pkexec", &args, on_progress).await
+    }
+
+    pub async fn install_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(f32),
+    ) -> CoreResult<()> {
+        let path = config
+            .get_package_path(PackageManagerType::Dnf)
+            .unwrap_or_else(|| "dnf".to_owned());
+
+        let args = vec![
+            path,
+            "install".to_string(),
+            "-y".to_string(),
+            package_name.to_owned(),
+        ];
+
+        run_command_with_progress("pkexec", &args, on_progress).await
     }
 }
 
