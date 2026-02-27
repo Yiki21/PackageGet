@@ -68,7 +68,7 @@ pub struct App {
     pub content: Content,
 
     pub pm_config: updater_core::Config,
-    pub insatlled_info: InstalledInfo,
+    pub installed_info: InstalledInfo,
     pub updates_info: UpdatesInfo,
     pub finding_info: FindingInfo,
 }
@@ -79,7 +79,7 @@ impl App {
             sidebar: SideBar::default(),
             content: Content::default(),
             pm_config: updater_core::Config::default(),
-            insatlled_info: InstalledInfo::default(),
+            installed_info: InstalledInfo::default(),
             updates_info: UpdatesInfo::default(),
             finding_info: FindingInfo::default(),
         };
@@ -106,7 +106,7 @@ impl App {
         match message {
             Message::SideBar(sidebar_msg) => match self.sidebar.update(sidebar_msg) {
                 sidebar::Action::ChangeContent(content) => {
-                    self.content.actinve_content = content;
+                    self.content.active_content = content;
                     // Data is now pre-loaded on startup, no need to check
                     Task::none()
                 }
@@ -117,7 +117,7 @@ impl App {
                 let action = self.content.update(
                     content_msg,
                     &mut self.pm_config,
-                    &mut self.insatlled_info,
+                    &mut self.installed_info,
                     &mut self.updates_info,
                     &mut self.finding_info,
                 );
@@ -126,29 +126,12 @@ impl App {
                         return task.map(Message::Content);
                     }
                     content::Action::None => {}
-                    content::Action::ClearCacheAndReload => {
-                        // Clear the cache and reload based on active page
-                        match self.content.actinve_content {
-                            content::ActiveContentPage::Installed => {
-                                self.insatlled_info.is_loading_count = true;
-                                return Task::future(Self::init_installed_counts(
-                                    self.pm_config.clone(),
-                                ))
-                                .then(|installed_counts| {
-                                    Task::done(Message::InitInstalledCounts(installed_counts))
-                                });
-                            }
-                            content::ActiveContentPage::Updates => {
-                                self.updates_info.is_loading_count = true;
-                                return Task::future(Self::init_updates_counts(
-                                    self.pm_config.clone(),
-                                ))
-                                .then(|update_counts| {
-                                    Task::done(Message::InitUpdatesCounts(update_counts))
-                                });
-                            }
-                            _ => {}
-                        }
+                    content::Action::ReloadInstalledData => {
+                        self.installed_info.is_loading_count = true;
+                        return Task::future(Self::init_installed_counts(self.pm_config.clone()))
+                            .then(|installed_counts| {
+                                Task::done(Message::InitInstalledCounts(installed_counts))
+                            });
                     }
                 }
                 Task::none()
@@ -157,25 +140,25 @@ impl App {
                 match result {
                     Ok(config) => {
                         self.pm_config = config;
-                        
+
                         // Start loading installed and updates info immediately
-                        self.insatlled_info.is_loading_count = true;
+                        self.installed_info.is_loading_count = true;
                         self.updates_info.is_loading_count = true;
-                        
+
                         let installed_task = Task::future(Self::init_installed_counts(
                             self.pm_config.clone(),
                         ))
                         .then(|installed_counts| {
                             Task::done(Message::InitInstalledCounts(installed_counts))
                         });
-                        
+
                         let updates_task = Task::future(Self::init_updates_counts(
                             self.pm_config.clone(),
                         ))
                         .then(|update_counts| {
                             Task::done(Message::InitUpdatesCounts(update_counts))
                         });
-                        
+
                         return Task::batch(vec![installed_task, updates_task]);
                     }
                     Err(e) => {
@@ -185,9 +168,9 @@ impl App {
                 Task::none()
             }
             Message::InitInstalledCounts(counts) => {
-                self.insatlled_info.is_loading_count = false;
-                self.insatlled_info.has_loading_count = true;
-                self.insatlled_info.installed_packages = counts
+                self.installed_info.is_loading_count = false;
+                self.installed_info.has_loading_count = true;
+                self.installed_info.installed_packages = counts
                     .into_iter()
                     .map(|(pm_type, count)| (pm_type, (count, Vec::new())))
                     .collect();
@@ -238,7 +221,7 @@ impl App {
             self.content
                 .view(
                     &self.pm_config,
-                    &self.insatlled_info,
+                    &self.installed_info,
                     &self.updates_info,
                     &self.finding_info,
                 )

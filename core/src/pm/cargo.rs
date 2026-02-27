@@ -147,7 +147,10 @@ impl PackageManager for CargoManager {
         log::debug!("Cargo search: got response status: {}", resp.status());
 
         if !resp.status().is_success() {
-            log::warn!("Cargo search: HTTP request failed with status {}", resp.status());
+            log::warn!(
+                "Cargo search: HTTP request failed with status {}",
+                resp.status()
+            );
             return Ok(Vec::new());
         }
 
@@ -310,7 +313,10 @@ impl CargoManager {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read body".to_string());
             return Err(crate::error::CoreError::UnknownError(format!(
                 "Failed to fetch crate info for {} (status: {}): {}",
                 package_name, status, body
@@ -480,7 +486,7 @@ ripgrep v14.1.0:
                 println!("Found {} packages for 'yazi':", packages.len());
                 assert!(!packages.is_empty(), "Should find at least one package");
                 for (i, pkg) in packages.iter().take(5).enumerate() {
-                    println!("  {}: {} - {}", i+1, pkg.name, pkg.version);
+                    println!("  {}: {} - {}", i + 1, pkg.name, pkg.version);
                     if let Some(ref desc) = pkg.description {
                         println!("     {}", desc);
                     }
@@ -506,7 +512,7 @@ ripgrep v14.1.0:
                 println!("Found {} packages for 'eza':", packages.len());
                 assert!(!packages.is_empty(), "Should find at least one package");
                 for (i, pkg) in packages.iter().take(5).enumerate() {
-                    println!("  {}: {} - {}", i+1, pkg.name, pkg.version);
+                    println!("  {}: {} - {}", i + 1, pkg.name, pkg.version);
                     if let Some(ref desc) = pkg.description {
                         println!("     {}", desc);
                     }
@@ -539,8 +545,10 @@ ripgrep v14.1.0:
                 println!("First result: {} - {}", first.name, first.version);
 
                 // 版本号不应该是 "Not Installed"
-                assert_ne!(first.version, "Not Installed",
-                    "Cargo search should return actual version, not 'Not Installed'");
+                assert_ne!(
+                    first.version, "Not Installed",
+                    "Cargo search should return actual version, not 'Not Installed'"
+                );
                 assert!(!first.version.is_empty(), "Version should not be empty");
                 assert_ne!(first.version, "unknown", "Version should not be unknown");
 
@@ -575,9 +583,14 @@ ripgrep v14.1.0:
     async fn test_search_nonexistent_package() {
         let config = crate::Config::default();
         // 搜索一个不存在的包名
-        match CargoManager::search_package(&config, "this-package-definitely-does-not-exist-12345").await {
+        match CargoManager::search_package(&config, "this-package-definitely-does-not-exist-12345")
+            .await
+        {
             Ok(packages) => {
-                println!("Search for nonexistent package returned {} results", packages.len());
+                println!(
+                    "Search for nonexistent package returned {} results",
+                    packages.len()
+                );
                 // 应该返回空列表或者没有精确匹配
                 if !packages.is_empty() {
                     println!("Got some fuzzy matches:");
@@ -592,120 +605,120 @@ ripgrep v14.1.0:
         }
     }
 
-//     #[tokio::test]
-//     async fn test_detect_cargo_binstall_update() {
-//         // Test that we can detect when cargo-binstall has an update available
-//         // Simulating installed version 1.17.4 and checking if 1.17.5 is detected
-//         let input = r#"
-// cargo-binstall v1.17.4:
-//     cargo-binstall
-// "#;
+    //     #[tokio::test]
+    //     async fn test_detect_cargo_binstall_update() {
+    //         // Test that we can detect when cargo-binstall has an update available
+    //         // Simulating installed version 1.17.4 and checking if 1.17.5 is detected
+    //         let input = r#"
+    // cargo-binstall v1.17.4:
+    //     cargo-binstall
+    // "#;
 
-//         let crates = CargoManager::parse_cargo_install_list(input);
-//         assert_eq!(crates.len(), 1);
-//         assert_eq!(crates[0].name, "cargo-binstall");
-//         assert_eq!(crates[0].version, "1.17.4");
+    //         let crates = CargoManager::parse_cargo_install_list(input);
+    //         assert_eq!(crates.len(), 1);
+    //         assert_eq!(crates[0].name, "cargo-binstall");
+    //         assert_eq!(crates[0].version, "1.17.4");
 
-//         // Fetch the actual latest version from crates.io with detailed error info
-//         let client = reqwest::Client::builder()
-//             .user_agent("updater-cargo-manager/0.1.0")
-//             .build()
-//             .expect("Failed to build HTTP client");
-//         let resp = client.get("https://crates.io/api/v1/crates/cargo-binstall").send().await;
-//         match resp {
-//             Ok(response) => {
-//                 let status = response.status();
-//                 println!("HTTP Status: {}", status);
-//                 if !status.is_success() {
-//                     let body = response.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
-//                     println!("API returned non-success status: {}", status);
-//                     println!("Response body: {:?}", body);
-//                     panic!("API call failed with status: {}", status);
-//                 }
+    //         // Fetch the actual latest version from crates.io with detailed error info
+    //         let client = reqwest::Client::builder()
+    //             .user_agent("updater-cargo-manager/0.1.0")
+    //             .build()
+    //             .expect("Failed to build HTTP client");
+    //         let resp = client.get("https://crates.io/api/v1/crates/cargo-binstall").send().await;
+    //         match resp {
+    //             Ok(response) => {
+    //                 let status = response.status();
+    //                 println!("HTTP Status: {}", status);
+    //                 if !status.is_success() {
+    //                     let body = response.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
+    //                     println!("API returned non-success status: {}", status);
+    //                     println!("Response body: {:?}", body);
+    //                     panic!("API call failed with status: {}", status);
+    //                 }
 
-//                 let crate_info: serde_json::Value = response.json().await.expect("Failed to parse JSON");
-//                 if let Some(version) = crate_info["crate"]["max_version"].as_str() {
-//                     println!("cargo-binstall: installed=1.17.4, latest={}", version);
+    //                 let crate_info: serde_json::Value = response.json().await.expect("Failed to parse JSON");
+    //                 if let Some(version) = crate_info["crate"]["max_version"].as_str() {
+    //                     println!("cargo-binstall: installed=1.17.4, latest={}", version);
 
-//                     // Version comparison - the installed version should be different from latest
-//                     if version != "1.17.4" {
-//                         println!("✓ Update available: 1.17.4 -> {}", version);
-//                         assert_ne!(version, "1.17.4", "Latest version should be different from 1.17.4");
-//                     } else {
-//                         println!("⚠ No update detected - latest is still 1.17.4");
-//                     }
-//                 } else {
-//                     panic!("Version info not found in API response");
-//                 }
-//             }
-//             Err(e) => {
-//                 println!("Network error: {}", e);
-//                 panic!("Failed to fetch from crates.io: {}", e);
-//             }
-//         }
-//     }
+    //                     // Version comparison - the installed version should be different from latest
+    //                     if version != "1.17.4" {
+    //                         println!("✓ Update available: 1.17.4 -> {}", version);
+    //                         assert_ne!(version, "1.17.4", "Latest version should be different from 1.17.4");
+    //                     } else {
+    //                         println!("⚠ No update detected - latest is still 1.17.4");
+    //                     }
+    //                 } else {
+    //                     panic!("Version info not found in API response");
+    //                 }
+    //             }
+    //             Err(e) => {
+    //                 println!("Network error: {}", e);
+    //                 panic!("Failed to fetch from crates.io: {}", e);
+    //             }
+    //         }
+    //     }
 
-//     #[tokio::test]
-//     async fn test_list_updates_with_cargo_binstall() {
-//         // Test the full list_updates flow with cargo-binstall
-//         // This test will use actual crates.io API to verify update detection
-//         let input = r#"
-// cargo-binstall v1.17.4:
-//     cargo-binstall
-// bluetui v0.8.0:
-//     bluetui
-// "#;
+    //     #[tokio::test]
+    //     async fn test_list_updates_with_cargo_binstall() {
+    //         // Test the full list_updates flow with cargo-binstall
+    //         // This test will use actual crates.io API to verify update detection
+    //         let input = r#"
+    // cargo-binstall v1.17.4:
+    //     cargo-binstall
+    // bluetui v0.8.0:
+    //     bluetui
+    // "#;
 
-//         let crates = CargoManager::parse_cargo_install_list(input);
-//         assert_eq!(crates.len(), 2);
+    //         let crates = CargoManager::parse_cargo_install_list(input);
+    //         assert_eq!(crates.len(), 2);
 
-//         // Manually check each crate for updates like list_updates does
-//         let mut updates: Vec<PackageUpdate> = Vec::new();
-//         for inst in crates {
-//             match CargoManager::get_latest_version(&inst.name).await {
-//                 Ok(latest_version) => {
-//                     println!("Checking {}: installed={}, latest={}", inst.name, inst.version, latest_version);
-//                     if latest_version != inst.version {
-//                         println!("  ✓ Update detected: {} -> {}", inst.version, latest_version);
-//                         updates.push(PackageUpdate {
-//                             name: inst.name.clone(),
-//                             current_version: inst.version.clone(),
-//                             new_version: latest_version,
-//                         });
-//                     } else {
-//                         println!("  No update needed");
-//                     }
-//                 }
-//                 Err(e) => {
-//                     println!("  ✗ Failed to fetch version for {}: {}", inst.name, e);
-//                 }
-//             }
-//         }
+    //         // Manually check each crate for updates like list_updates does
+    //         let mut updates: Vec<PackageUpdate> = Vec::new();
+    //         for inst in crates {
+    //             match CargoManager::get_latest_version(&inst.name).await {
+    //                 Ok(latest_version) => {
+    //                     println!("Checking {}: installed={}, latest={}", inst.name, inst.version, latest_version);
+    //                     if latest_version != inst.version {
+    //                         println!("  ✓ Update detected: {} -> {}", inst.version, latest_version);
+    //                         updates.push(PackageUpdate {
+    //                             name: inst.name.clone(),
+    //                             current_version: inst.version.clone(),
+    //                             new_version: latest_version,
+    //                         });
+    //                     } else {
+    //                         println!("  No update needed");
+    //                     }
+    //                 }
+    //                 Err(e) => {
+    //                     println!("  ✗ Failed to fetch version for {}: {}", inst.name, e);
+    //                 }
+    //             }
+    //         }
 
-//         println!("\nTotal updates found: {}", updates.len());
-//         for update in &updates {
-//             println!("  {}: {} -> {}", update.name, update.current_version, update.new_version);
-//         }
+    //         println!("\nTotal updates found: {}", updates.len());
+    //         for update in &updates {
+    //             println!("  {}: {} -> {}", update.name, update.current_version, update.new_version);
+    //         }
 
-//         // We expect at least cargo-binstall to have an update (1.17.4 -> 1.17.5)
-//         // unless the test data becomes outdated
-//         if !updates.is_empty() {
-//             println!("✓ Update detection is working correctly");
-//         } else {
-//             println!("⚠ No updates detected - this might indicate an issue or outdated test data");
-//         }
-//     }
+    //         // We expect at least cargo-binstall to have an update (1.17.4 -> 1.17.5)
+    //         // unless the test data becomes outdated
+    //         if !updates.is_empty() {
+    //             println!("✓ Update detection is working correctly");
+    //         } else {
+    //             println!("⚠ No updates detected - this might indicate an issue or outdated test data");
+    //         }
+    //     }
 
-//     #[test]
-//     fn test_version_string_comparison() {
-//         // Test that string comparison works correctly for version detection
-//         let installed = "1.17.4";
-//         let latest = "1.17.5";
+    //     #[test]
+    //     fn test_version_string_comparison() {
+    //         // Test that string comparison works correctly for version detection
+    //         let installed = "1.17.4";
+    //         let latest = "1.17.5";
 
-//         assert_ne!(installed, latest, "String comparison should detect version difference");
+    //         assert_ne!(installed, latest, "String comparison should detect version difference");
 
-//         // Also test that same versions are detected as equal
-//         assert_eq!(installed, "1.17.4");
-//         assert_eq!(latest, "1.17.5");
-//     }
+    //         // Also test that same versions are detected as equal
+    //         assert_eq!(installed, "1.17.4");
+    //         assert_eq!(latest, "1.17.5");
+    //     }
 }

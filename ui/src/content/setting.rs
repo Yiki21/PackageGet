@@ -278,14 +278,23 @@ impl Settings {
                 if let Some(manager_type) = self.selecting_manager {
                     let path = file_handle.path().to_string_lossy().to_string();
 
-                    pm_config.app_managers.push(PackageManagerConfig {
-                        manager_type,
-                        custom_path: Some(path),
-                    });
+                    if let Some(existing) = pm_config
+                        .app_managers
+                        .iter_mut()
+                        .find(|manager| manager.manager_type == manager_type)
+                    {
+                        existing.custom_path = Some(path);
+                    } else {
+                        pm_config.app_managers.push(PackageManagerConfig {
+                            manager_type,
+                            custom_path: Some(path),
+                        });
+                    }
                 } else {
                     log::error!("No package manager type selected when handling SelectedPath");
                 }
 
+                self.selecting_manager = None;
                 Action::None
             }
             Message::CancelSelection => {

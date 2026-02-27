@@ -26,7 +26,7 @@ pub enum ActiveContentPage {
 
 #[derive(Debug, Clone, Default)]
 pub struct Content {
-    pub actinve_content: ActiveContentPage,
+    pub active_content: ActiveContentPage,
     pub settings: Settings,
     pub installed: Installed,
     pub updates: Updates,
@@ -44,7 +44,7 @@ pub enum Message {
 pub enum Action {
     None,
     Run(iced::Task<Message>),
-    ClearCacheAndReload,
+    ReloadInstalledData,
 }
 
 impl From<Message> for app::Message {
@@ -62,50 +62,42 @@ impl Content {
         updates_info: &mut UpdatesInfo,
         finding_info: &mut FindingInfo,
     ) -> Action {
+        let pm_config_ref: &updater_core::Config = pm_config;
+
         match message {
             Message::Settings(settings_msg) => {
-                if let ActiveContentPage::Settings = &self.actinve_content {
-                    let action = self.settings.update(settings_msg, pm_config);
-                    match action {
-                        setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
-                        setting::Action::None => Action::None,
-                    }
-                } else {
-                    Action::None
+                let action = self.settings.update(settings_msg, pm_config);
+                match action {
+                    setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
+                    setting::Action::None => Action::None,
                 }
             }
             Message::Installed(installed_msg) => {
-                if let ActiveContentPage::Installed = &self.actinve_content {
-                    let action = self.installed.update(installed_msg, installed_info);
-                    match action {
-                        installed::Action::Run(task) => Action::Run(task.map(Message::Installed)),
-                        installed::Action::None => Action::None,
-                        installed::Action::ClearCacheAndReload => Action::ClearCacheAndReload,
-                    }
-                } else {
-                    Action::None
+                let action = self
+                    .installed
+                    .update(installed_msg, pm_config_ref, installed_info);
+                match action {
+                    installed::Action::Run(task) => Action::Run(task.map(Message::Installed)),
+                    installed::Action::None => Action::None,
+                    installed::Action::ClearCacheAndReload => Action::ReloadInstalledData,
                 }
             }
             Message::Updates(updates_msg) => {
-                if let ActiveContentPage::Updates = &self.actinve_content {
-                    let action = self.updates.update(updates_msg, updates_info);
-                    match action {
-                        updates::Action::Run(task) => Action::Run(task.map(Message::Updates)),
-                        updates::Action::None => Action::None,
-                    }
-                } else {
-                    Action::None
+                let action = self
+                    .updates
+                    .update(updates_msg, pm_config_ref, updates_info);
+                match action {
+                    updates::Action::Run(task) => Action::Run(task.map(Message::Updates)),
+                    updates::Action::None => Action::None,
                 }
             }
             Message::Finding(finding_msg) => {
-                if let ActiveContentPage::Finding = &self.actinve_content {
-                    let action = self.finding.update(finding_msg, finding_info);
-                    match action {
-                        finding::Action::Run(task) => Action::Run(task.map(Message::Finding)),
-                        finding::Action::None => Action::None,
-                    }
-                } else {
-                    Action::None
+                let action = self
+                    .finding
+                    .update(finding_msg, pm_config_ref, finding_info);
+                match action {
+                    finding::Action::Run(task) => Action::Run(task.map(Message::Finding)),
+                    finding::Action::None => Action::None,
                 }
             }
         }
@@ -118,7 +110,7 @@ impl Content {
         updates_info: &'a UpdatesInfo,
         finding_info: &'a FindingInfo,
     ) -> iced::Element<'a, Message> {
-        match self.actinve_content {
+        match self.active_content {
             ActiveContentPage::Finding => self
                 .finding
                 .view(finding_info, pm_config)

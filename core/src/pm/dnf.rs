@@ -19,10 +19,7 @@ impl PackageManager for DnfManager {
             .get_package_path(crate::PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let output = Command::new(&path)
-            .arg("check-upgrade")
-            .output()
-            .await?;
+        let output = Command::new(&path).arg("check-upgrade").output().await?;
 
         let stdout = String::from_utf8(output.stdout)?;
         debug!("dnf check-upgrade exited: {}", output.status);
@@ -40,7 +37,7 @@ impl PackageManager for DnfManager {
             let line = line.trim();
 
             // Skip empty lines and header lines
-            if line.is_empty() 
+            if line.is_empty()
                 || line.starts_with("Updating and loading repositories:")
                 || line.starts_with("Repositories loaded.")
             {
@@ -48,7 +45,7 @@ impl PackageManager for DnfManager {
             }
 
             let parts: Vec<&str> = line.split_whitespace().collect();
-            
+
             // Expected format: name.arch version repository
             if parts.len() < 2 {
                 continue;
@@ -76,7 +73,10 @@ impl PackageManager for DnfManager {
                     "unknown".to_string()
                 });
 
-            debug!("Found update: {}: {} -> {}", name, current_version, new_version);
+            debug!(
+                "Found update: {}: {} -> {}",
+                name, current_version, new_version
+            );
 
             updates.push(PackageUpdate {
                 name: name.to_owned(),
@@ -211,7 +211,7 @@ impl PackageManager for DnfManager {
         // package-name.arch<TAB>Summary description
         for line in stdout.lines() {
             let line = line.trim();
-            
+
             // 跳过头部行和空行
             if line.is_empty() || line.starts_with("Matched fields:") {
                 continue;
@@ -220,7 +220,7 @@ impl PackageManager for DnfManager {
             // DNF 使用 tab 分隔包名和描述
             if let Some((name_part, _summary)) = line.split_once('\t') {
                 let name_part = name_part.trim();
-                
+
                 // 移除架构后缀 (如 .x86_64, .noarch)
                 let name = name_part
                     .rsplit_once('.')

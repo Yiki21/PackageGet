@@ -1,3 +1,6 @@
 /target
 
 rustc-ice
+
+.agents
+skills-lock.json

@@ -5,7 +5,10 @@ use std::collections::{HashMap, HashSet};
 use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
-use crate::{app, content, content::shared::SharedUi};
+use crate::{
+    app, content,
+    content::shared::{PackageSelectionKey, SharedUi},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Finding {
@@ -20,7 +23,7 @@ pub enum Message {
     ExecuteSearch,
     SearchResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
     SortOptionChanged(SortOption),
-    TogglePackageSelection(String, bool),
+    TogglePackageSelection(PackageManagerType, String, bool),
     InstallSelectedPackages,
     InstallPackagesResult(Result<(), String>),
 }
@@ -31,7 +34,7 @@ pub struct FindingInfo {
     pub selected_managers: HashSet<PackageManagerType>,
     pub searching_managers: HashSet<PackageManagerType>,
     pub sort_by: SortOption,
-    pub selected_packages: HashSet<String>,
+    pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_installing: bool,
 }
 
@@ -65,7 +68,12 @@ impl SortOption {
 }
 
 impl Finding {
-    pub fn update(&mut self, message: Message, info: &mut FindingInfo) -> Action {
+    pub fn update(
+        &mut self,
+        message: Message,
+        pm_config: &updater_core::Config,
+        info: &mut FindingInfo,
+    ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
                 if selected {
@@ -73,11 +81,9 @@ impl Finding {
                 } else {
                     info.selected_managers.remove(&pm_type);
                     info.searching_managers.remove(&pm_type);
-                    if let Some(packages) = info.search_results.remove(&pm_type) {
-                        for package in packages {
-                            info.selected_packages.remove(&package.name);
-                        }
-                    }
+                    info.selected_packages
+                        .retain(|(manager, _)| *manager != pm_type);
+                    info.search_results.remove(&pm_type);
                 }
                 Action::None
             }
@@ -107,11 +113,7 @@ impl Finding {
                     info.searching_managers.insert(*pm_type);
                 }
 
-                Self::execute_search_action(
-                    &updater_core::Config::default(),
-                    &info.selected_managers,
-                    query,
-                )
+                Self::execute_search_action(pm_config, &info.selected_managers, query)
             }
             Message::SearchResult(pm_type, result) => {
                 info.searching_managers.remove(&pm_type);
@@ -129,11 +131,12 @@ impl Finding {
                 info.sort_by = sort_option;
                 Action::None
             }
-            Message::TogglePackageSelection(package_name, selected) => {
+            Message::TogglePackageSelection(pm_type, package_name, selected) => {
+                let key = SharedUi::selection_key(pm_type, &package_name);
                 if selected {
-                    info.selected_packages.insert(package_name);
+                    info.selected_packages.insert(key);
                 } else {
-                    info.selected_packages.remove(&package_name);
+                    info.selected_packages.remove(&key);
                 }
                 Action::None
             }
@@ -142,7 +145,7 @@ impl Finding {
                     return Action::None;
                 }
                 info.is_installing = true;
-                Self::install_packages_action(&updater_core::Config::default(), info)
+                Self::install_packages_action(pm_config, info)
             }
             Message::InstallPackagesResult(result) => {
                 info.is_installing = false;
@@ -156,7 +159,7 @@ impl Finding {
                                 info.searching_managers.insert(*pm_type);
                             }
                             return Self::execute_search_action(
-                                &updater_core::Config::default(),
+                                pm_config,
                                 &info.selected_managers,
                                 &self.last_search_query,
                             );
@@ -164,7 +167,7 @@ impl Finding {
                         Action::None
                     }
                     Err(e) => {
-                        eprintln!("Failed to install packages: {}", e);
+                        log::error!("Failed to install packages: {}", e);
                         Action::None
                     }
                 }
@@ -228,13 +231,7 @@ impl Finding {
     ) -> iced::widget::Column<'a, Message> {
         use iced::widget::{column, text};
 
-        let mut all_managers = Vec::new();
-        if let Some(system_manager) = &pm_config.system_manager {
-            all_managers.push(system_manager.manager_type);
-        }
-        for app_manager in &pm_config.app_managers {
-            all_managers.push(app_manager.manager_type);
-        }
+        let all_managers = SharedUi::configured_managers(pm_config);
 
         if all_managers.is_empty() {
             return column![
@@ -377,7 +374,7 @@ impl Finding {
         let packages_list = column(
             sorted_packages
                 .into_iter()
-                .map(|pkg| self.package_item_view(pkg, info)),
+                .map(|pkg| self.package_item_view(pm_type, pkg, info)),
         )
         .spacing(8);
 
@@ -408,13 +405,16 @@ impl Finding {
 
     fn package_item_view<'a>(
         &self,
+        pm_type: PackageManagerType,
         package: &'a PackageInfo,
         info: &'a FindingInfo,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{checkbox, column, container, row, text};
 
         let package_name = package.name.clone();
-        let is_selected = info.selected_packages.contains(&package.name);
+        let is_selected = info
+            .selected_packages
+            .contains(&SharedUi::selection_key(pm_type, &package.name));
         let is_not_installed = package.version.trim() == "Not Installed";
 
         let mut name_with_desc =
@@ -436,7 +436,9 @@ impl Finding {
             .on_toggle_maybe(if enable_install {
                 Some({
                     let package_name = package_name.clone();
-                    move |selected| Message::TogglePackageSelection(package_name.clone(), selected)
+                    move |selected| {
+                        Message::TogglePackageSelection(pm_type, package_name.clone(), selected)
+                    }
                 })
             } else {
                 None
@@ -461,7 +463,9 @@ impl Finding {
                 .style(|_theme: &iced::Theme| {
                     use iced::widget::container::Style;
                     Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb8(50, 50, 50))),
+                        background: Some(iced::Background::Color(iced::Color::from_rgb8(
+                            50, 50, 50,
+                        ))),
                         border: Border {
                             color: iced::Color::from_rgb8(80, 80, 80),
                             width: 1.0,
@@ -487,7 +491,9 @@ impl Finding {
                 .style(|_theme: &iced::Theme| {
                     use iced::widget::container::Style;
                     Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb8(30, 70, 30))),
+                        background: Some(iced::Background::Color(iced::Color::from_rgb8(
+                            30, 70, 30,
+                        ))),
                         border: Border {
                             color: iced::Color::from_rgb8(50, 120, 50),
                             width: 1.0,
@@ -623,7 +629,7 @@ impl Finding {
 
         for (pm_type, packages) in info.search_results.iter() {
             for pkg in packages {
-                if selected_packages.contains(&pkg.name) {
+                if selected_packages.contains(&SharedUi::selection_key(*pm_type, &pkg.name)) {
                     packages_by_manager
                         .entry(*pm_type)
                         .or_default()

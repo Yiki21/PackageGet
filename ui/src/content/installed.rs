@@ -14,10 +14,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use iced::{Border, Task, widget::button};
+use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
-use crate::{app, content, content::shared::SharedUi};
+use crate::{
+    app, content,
+    content::shared::{PackageSelectionKey, SharedUi},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Installed {
@@ -31,7 +34,7 @@ pub enum Message {
     RefreshInfo,
     SearchQueryChanged(String),
     SortOptionChanged(SortOption),
-    TogglePackageSelection(String, bool),
+    TogglePackageSelection(PackageManagerType, String, bool),
     ToggleSelectAll(bool),
     RemoveSelectedPackages,
     RemovePackagesResult(Result<(), String>),
@@ -46,7 +49,7 @@ pub struct InstalledInfo {
     pub is_loading_count: bool,
     pub has_loading_count: bool,
     pub sort_by: SortOption,
-    pub selected_packages: HashSet<String>,
+    pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_removing: bool,
 }
 
@@ -95,24 +98,31 @@ impl SortOption {
 }
 
 impl Installed {
-    pub fn update(&mut self, message: Message, info: &mut InstalledInfo) -> Action {
+    pub fn update(
+        &mut self,
+        message: Message,
+        pm_config: &updater_core::Config,
+        info: &mut InstalledInfo,
+    ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
                 if selected {
                     info.selected_managers.insert(pm_type);
-                    if info.installed_packages[&pm_type].0
-                        == info.installed_packages[&pm_type].1.len()
-                    {
-                        Action::None
+                    if let Some((count, packages)) = info.installed_packages.get(&pm_type) {
+                        if *count == packages.len() {
+                            Action::None
+                        } else {
+                            info.loading_installed.insert(pm_type);
+                            Self::load_installed_packages_action(pm_config, pm_type)
+                        }
                     } else {
                         info.loading_installed.insert(pm_type);
-                        Self::load_installed_packages_action(
-                            &updater_core::Config::default(),
-                            pm_type,
-                        )
+                        Self::load_installed_packages_action(pm_config, pm_type)
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
+                    info.selected_packages
+                        .retain(|(manager, _)| *manager != pm_type);
                     Action::None
                 }
             }
@@ -130,25 +140,24 @@ impl Installed {
                 Action::None
             }
             Message::RefreshInfo => {
-                let pm_types: Vec<PackageManagerType> = info.installed_packages.keys().copied().collect();
-                
+                let pm_types: Vec<PackageManagerType> =
+                    info.installed_packages.keys().copied().collect();
+
                 if pm_types.is_empty() {
                     return Action::None;
                 }
-                
+
                 // Set loading state for all package managers
                 for pm_type in &pm_types {
                     info.loading_installed.insert(*pm_type);
                 }
-                
+
                 // Create loading tasks for all package managers
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|pm_type| {
-                        Self::create_load_task(&updater_core::Config::default(), pm_type)
-                    })
+                    .map(|pm_type| Self::create_load_task(pm_config, pm_type))
                     .collect();
-                
+
                 Action::Run(Task::batch(tasks))
             }
             Message::SearchQueryChanged(query) => {
@@ -159,11 +168,12 @@ impl Installed {
                 info.sort_by = sort_option;
                 Action::None
             }
-            Message::TogglePackageSelection(package_name, selected) => {
+            Message::TogglePackageSelection(pm_type, package_name, selected) => {
+                let key = SharedUi::selection_key(pm_type, &package_name);
                 if selected {
-                    info.selected_packages.insert(package_name);
+                    info.selected_packages.insert(key);
                 } else {
-                    info.selected_packages.remove(&package_name);
+                    info.selected_packages.remove(&key);
                 }
                 Action::None
             }
@@ -173,7 +183,8 @@ impl Installed {
                     for pm_type in &info.selected_managers {
                         if let Some((_, packages)) = info.installed_packages.get(pm_type) {
                             for pkg in packages {
-                                info.selected_packages.insert(pkg.name.clone());
+                                info.selected_packages
+                                    .insert(SharedUi::selection_key(*pm_type, &pkg.name));
                             }
                         }
                     }
@@ -188,7 +199,7 @@ impl Installed {
                     return Action::None;
                 }
                 info.is_removing = true;
-                Self::remove_packages_action(&updater_core::Config::default(), info)
+                Self::remove_packages_action(pm_config, info)
             }
             Message::RemovePackagesResult(result) => {
                 info.is_removing = false;
@@ -199,7 +210,7 @@ impl Installed {
                         Action::ClearCacheAndReload
                     }
                     Err(e) => {
-                        eprintln!("Failed to remove packages: {}", e);
+                        log::error!("Failed to remove packages: {}", e);
                         Action::None
                     }
                 }
@@ -219,7 +230,7 @@ impl Installed {
                 column![
                     self.manager_filter_view(info, pm_config),
                     self.sort_order_view(info),
-                    self.refresh_button_view()
+                    SharedUi::refresh_button(Message::RefreshInfo)
                 ]
                 .spacing(24)
             )
@@ -238,32 +249,6 @@ impl Installed {
         .into()
     }
 
-    // === Styling helpers ===
-
-    fn section_title(text: &'static str) -> iced::widget::Text<'static> {
-        SharedUi::section_title(text)
-    }
-
-    fn styled_container<'a>(
-        content: impl Into<iced::Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message> {
-        SharedUi::styled_container(content)
-    }
-
-    fn checkbox_style(
-        is_loading: bool,
-    ) -> impl Fn(&iced::Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style
-    {
-        SharedUi::checkbox_style(is_loading)
-    }
-
-    fn radio_style(
-        _theme: &iced::Theme,
-        status: iced::widget::radio::Status,
-    ) -> iced::widget::radio::Style {
-        SharedUi::radio_style(_theme, status)
-    }
-
     // === View components ===
 
     fn manager_filter_view<'a>(
@@ -271,129 +256,33 @@ impl Installed {
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{column, text};
-
         let filters_content = if info.is_loading_count || !info.has_loading_count {
-            self.loading_filter_view(info, pm_config)
+            SharedUi::loading_manager_filter_view(
+                pm_config,
+                if info.is_loading_count {
+                    "Loading package information..."
+                } else {
+                    "Waiting to load package information"
+                },
+            )
         } else if info.installed_packages.is_empty() {
-            self.empty_filter_view()
+            SharedUi::empty_filter_view("No installed packages found")
         } else {
-            self.active_filter_view(info)
+            let entries = info
+                .installed_packages
+                .iter()
+                .map(|(pm_type, (count, _))| (*pm_type, *count))
+                .collect();
+
+            SharedUi::active_manager_filter_view(
+                entries,
+                &info.selected_managers,
+                &info.loading_installed,
+                Message::SelectPackageManager,
+            )
         };
 
-        column![
-            Self::section_title("Filter Package Managers"),
-            Self::styled_container(filters_content)
-        ]
-        .spacing(12)
-        .into()
-    }
-
-    fn loading_filter_view<'a>(
-        &self,
-        info: &'a InstalledInfo,
-        pm_config: &updater_core::Config,
-    ) -> iced::widget::Column<'a, Message> {
-        use iced::widget::{column, text};
-
-        let loading_text = if info.is_loading_count {
-            "Loading package information..."
-        } else {
-            "Waiting to load package information"
-        };
-
-        let mut all_managers = Vec::new();
-        if let Some(system_manager) = &pm_config.system_manager {
-            all_managers.push(system_manager.manager_type);
-        }
-        for app_manager in &pm_config.app_managers {
-            all_managers.push(app_manager.manager_type);
-        }
-
-        if all_managers.is_empty() {
-            return column![
-                text("No package managers detected")
-                    .size(14)
-                    .color(app::colors::ON_SURFACE_MUTED)
-            ]
-            .spacing(8);
-        }
-
-        let mut col_items = vec![
-            text(loading_text)
-                .size(13)
-                .color(app::colors::ON_SURFACE_MUTED)
-                .into(),
-        ];
-
-        let checkboxes: Vec<iced::Element<'static, Message>> = all_managers
-            .iter()
-            .map(|pm_type| {
-                iced::widget::checkbox(false)
-                    .label(pm_type.name())
-                    .spacing(10)
-                    .text_size(15)
-                    .style(move |_theme, _status| {
-                        use iced::widget::checkbox::Style;
-                        Style {
-                            background: app::colors::SURFACE.into(),
-                            icon_color: app::colors::ON_SURFACE_MUTED,
-                            border: Border {
-                                color: app::colors::DIVIDER,
-                                width: 2.0,
-                                radius: 4.0.into(),
-                            },
-                            text_color: Some(app::colors::ON_SURFACE_MUTED),
-                        }
-                    })
-                    .into()
-            })
-            .collect();
-
-        col_items.extend(checkboxes);
-        column(col_items).spacing(8)
-    }
-
-    fn empty_filter_view(&self) -> iced::widget::Column<'static, Message> {
-        use iced::widget::{column, text};
-
-        column![
-            text("No installed packages found")
-                .size(14)
-                .color(app::colors::ON_SURFACE_MUTED)
-        ]
-        .spacing(8)
-    }
-
-    fn active_filter_view<'a>(&self, info: &'a InstalledInfo) -> iced::widget::Column<'a, Message> {
-        use iced::widget::column;
-
-        column(info.installed_packages.iter().map(|(pm_type, (count, _))| {
-            let pm_type = *pm_type;
-            let is_selected = info.selected_managers.contains(&pm_type);
-            let is_loading = info.loading_installed.contains(&pm_type);
-
-            let label = if is_loading {
-                format!("{} (Loading...)", pm_type.name())
-            } else {
-                format!("{} ({})", pm_type.name(), count)
-            };
-
-            let checkbox = iced::widget::checkbox(is_selected)
-                .label(label)
-                .spacing(10)
-                .text_size(15)
-                .style(Self::checkbox_style(is_loading));
-
-            if is_loading {
-                checkbox.into()
-            } else {
-                checkbox
-                    .on_toggle(move |selected| Message::SelectPackageManager(pm_type, selected))
-                    .into()
-            }
-        }))
-        .spacing(12)
+        SharedUi::filter_section("Filter Package Managers", filters_content)
     }
 
     fn sort_order_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
@@ -410,14 +299,14 @@ impl Installed {
             .size(15)
             .spacing(10)
             .text_size(15)
-            .style(Self::radio_style)
+            .style(SharedUi::radio_style)
             .into()
         }))
         .spacing(12);
 
         column![
-            Self::section_title("Sort By"),
-            Self::styled_container(sort_options)
+            SharedUi::section_title("Sort By"),
+            SharedUi::styled_container(sort_options)
         ]
         .spacing(12)
         .into()
@@ -432,41 +321,6 @@ impl Installed {
             &self.search_query,
             Message::SearchQueryChanged,
         )
-    }
-
-    fn refresh_button_view<'a>(&self) -> iced::Element<'a, Message> {
-        use iced::widget::{button, text};
-
-        button(text("Refresh").size(14).color(iced::Color::WHITE))
-            .padding([8, 16])
-            .style(|_theme, status| {
-                use iced::widget::button::Style;
-                let base_color = app::colors::SECONDARY;
-                match status {
-                    iced::widget::button::Status::Hovered => Style {
-                        background: Some(iced::Background::Color(app::colors::SECONDARY_HOVER)),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                    _ => Style {
-                        background: Some(iced::Background::Color(base_color)),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                }
-            })
-            .on_press(Message::RefreshInfo)
-            .into()
     }
 
     fn packages_list_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
@@ -553,11 +407,11 @@ impl Installed {
         let packages_list = column(
             filtered_packages
                 .into_iter()
-                .map(|pkg| self.package_item_view(pkg, info)),
+                .map(|pkg| self.package_item_view(pm_type, pkg, info)),
         )
         .spacing(8);
 
-        column![header, Self::styled_container(packages_list)]
+        column![header, SharedUi::styled_container(packages_list)]
             .spacing(12)
             .into()
     }
@@ -601,23 +455,28 @@ impl Installed {
 
     fn package_item_view<'a>(
         &self,
+        pm_type: PackageManagerType,
         package: &'a PackageInfo,
         info: &'a InstalledInfo,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{checkbox, row, text};
 
         let package_name = package.name.clone();
-        let is_selected = info.selected_packages.contains(&package.name);
+        let is_selected = info
+            .selected_packages
+            .contains(&SharedUi::selection_key(pm_type, &package.name));
 
         row![
             checkbox(is_selected)
                 .on_toggle({
                     let package_name = package_name.clone();
-                    move |selected| Message::TogglePackageSelection(package_name.clone(), selected)
+                    move |selected| {
+                        Message::TogglePackageSelection(pm_type, package_name.clone(), selected)
+                    }
                 })
                 .size(18)
                 .spacing(8)
-                .style(Self::checkbox_style(false)),
+                .style(SharedUi::checkbox_style(false)),
             text(&package.name)
                 .size(15)
                 .color(app::colors::ON_SURFACE)
@@ -759,7 +618,7 @@ impl Installed {
         for pm_type in info.selected_managers.iter() {
             if let Some((_, packages)) = info.installed_packages.get(pm_type) {
                 for pkg in packages {
-                    if selected_packages.contains(&pkg.name) {
+                    if selected_packages.contains(&SharedUi::selection_key(*pm_type, &pkg.name)) {
                         packages_by_manager
                             .entry(*pm_type)
                             .or_default()
