@@ -5,7 +5,8 @@ use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError, pm::progress::run_command_with_progress,
+    error::CoreError,
+    pm::progress::{CommandProgressEvent, run_command_with_progress},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -259,46 +260,62 @@ impl PackageManager for DnfManager {
         config: &Config,
         package_names: &[String],
     ) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
+        Self::uninstall_packages_with_progress(config, package_names, |_| {}).await
     }
 
     async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::update_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
+        Self::update_packages_with_progress(config, package_names, |_| {}).await
     }
 
     async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::install_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
+        Self::install_packages_with_progress(config, package_names, |_| {}).await
     }
 }
 
 impl DnfManager {
-    pub async fn uninstall_package_with_progress(
+    pub async fn uninstall_packages_with_progress(
         config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(f32),
+        package_names: &[String],
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
+        if package_names.is_empty() {
+            return Ok(());
+        }
+
         let path = config
             .get_package_path(PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let args = vec![
-            path,
-            "remove".to_string(),
-            "-y".to_string(),
-            package_name.to_owned(),
-        ];
+        let mut args = vec![path, "remove".to_string(), "-y".to_string()];
+        args.extend(package_names.iter().cloned());
+
+        run_command_with_progress("pkexec", &args, on_progress).await
+    }
+
+    pub async fn uninstall_package_with_progress(
+        config: &Config,
+        package_name: &str,
+        on_progress: impl FnMut(CommandProgressEvent),
+    ) -> CoreResult<()> {
+        Self::uninstall_packages_with_progress(config, &[package_name.to_owned()], on_progress)
+            .await
+    }
+
+    pub async fn update_packages_with_progress(
+        config: &Config,
+        package_names: &[String],
+        on_progress: impl FnMut(CommandProgressEvent),
+    ) -> CoreResult<()> {
+        if package_names.is_empty() {
+            return Ok(());
+        }
+
+        let path = config
+            .get_package_path(PackageManagerType::Dnf)
+            .unwrap_or_else(|| "dnf".to_owned());
+
+        let mut args = vec![path, "upgrade".to_string(), "-y".to_string()];
+        args.extend(package_names.iter().cloned());
 
         run_command_with_progress("pkexec", &args, on_progress).await
     }
@@ -306,18 +323,26 @@ impl DnfManager {
     pub async fn update_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
+        Self::update_packages_with_progress(config, &[package_name.to_owned()], on_progress).await
+    }
+
+    pub async fn install_packages_with_progress(
+        config: &Config,
+        package_names: &[String],
+        on_progress: impl FnMut(CommandProgressEvent),
+    ) -> CoreResult<()> {
+        if package_names.is_empty() {
+            return Ok(());
+        }
+
         let path = config
             .get_package_path(PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let args = vec![
-            path,
-            "upgrade".to_string(),
-            "-y".to_string(),
-            package_name.to_owned(),
-        ];
+        let mut args = vec![path, "install".to_string(), "-y".to_string()];
+        args.extend(package_names.iter().cloned());
 
         run_command_with_progress("pkexec", &args, on_progress).await
     }
@@ -325,20 +350,9 @@ impl DnfManager {
     pub async fn install_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
-
-        let args = vec![
-            path,
-            "install".to_string(),
-            "-y".to_string(),
-            package_name.to_owned(),
-        ];
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        Self::install_packages_with_progress(config, &[package_name.to_owned()], on_progress).await
     }
 }
 

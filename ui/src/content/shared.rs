@@ -8,86 +8,12 @@ use crate::app;
 
 pub type PackageSelectionKey = (PackageManagerType, String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PackageTaskState {
-    #[default]
-    Pending,
-    InProgress,
-    Done,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PackageTaskProgress {
-    pub manager: PackageManagerType,
-    pub package_name: String,
-    pub state: PackageTaskState,
-    pub progress: f32,
-}
-
 /// Shared UI helpers for Installed/Updates pages.
 pub struct SharedUi;
 
 impl SharedUi {
     pub fn selection_key(pm_type: PackageManagerType, package_name: &str) -> PackageSelectionKey {
         (pm_type, package_name.to_owned())
-    }
-
-    pub fn build_task_progress(
-        selected_packages: &HashSet<PackageSelectionKey>,
-    ) -> Vec<PackageTaskProgress> {
-        let mut items: Vec<PackageTaskProgress> = selected_packages
-            .iter()
-            .map(|(manager, package_name)| PackageTaskProgress {
-                manager: *manager,
-                package_name: package_name.clone(),
-                state: PackageTaskState::Pending,
-                progress: 0.0,
-            })
-            .collect();
-
-        items.sort_by(|a, b| {
-            a.manager
-                .name()
-                .cmp(b.manager.name())
-                .then(a.package_name.cmp(&b.package_name))
-        });
-
-        if let Some(first) = items.first_mut() {
-            first.state = PackageTaskState::InProgress;
-        }
-
-        items
-    }
-
-    pub fn update_task_progress(
-        items: &mut [PackageTaskProgress],
-        manager: PackageManagerType,
-        package_name: &str,
-        progress: f32,
-    ) {
-        let progress = progress.clamp(0.0, 1.0);
-        let mut completed_current = false;
-
-        for item in items.iter_mut() {
-            if item.manager == manager && item.package_name == package_name {
-                item.progress = progress;
-                if progress >= 1.0 {
-                    item.state = PackageTaskState::Done;
-                    completed_current = true;
-                } else {
-                    item.state = PackageTaskState::InProgress;
-                }
-            }
-        }
-
-        if completed_current
-            && let Some(next) = items
-                .iter_mut()
-                .find(|item| item.state == PackageTaskState::Pending)
-        {
-            next.state = PackageTaskState::InProgress;
-            next.progress = 0.0;
-        }
     }
 
     pub fn configured_managers(pm_config: &Config) -> Vec<PackageManagerType> {
@@ -368,13 +294,16 @@ impl SharedUi {
         .spacing(12)
     }
 
-    pub fn refresh_button<'a, Message>(message: Message) -> Element<'a, Message>
+    pub fn refresh_button_with_label<'a, Message>(
+        label: &'static str,
+        message: Message,
+    ) -> Element<'a, Message>
     where
         Message: 'a + Clone,
     {
         use iced::widget::button;
 
-        button(text("Refresh").size(14).color(iced::Color::WHITE))
+        button(text(label).size(14).color(iced::Color::WHITE))
             .padding([8, 16])
             .style(|_theme, status| {
                 use iced::widget::button::Style;
@@ -404,6 +333,13 @@ impl SharedUi {
             })
             .on_press(message)
             .into()
+    }
+
+    pub fn refresh_button<'a, Message>(message: Message) -> Element<'a, Message>
+    where
+        Message: 'a + Clone,
+    {
+        Self::refresh_button_with_label("Refresh", message)
     }
 
     pub fn search_input_view<'a, Message>(

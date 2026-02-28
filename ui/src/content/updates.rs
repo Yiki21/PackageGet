@@ -8,7 +8,7 @@ use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
     app, content,
-    content::shared::{PackageSelectionKey, PackageTaskProgress, SharedUi},
+    content::shared::{PackageSelectionKey, SharedUi},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -30,11 +30,12 @@ pub enum Message {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     UpdatePackagesResult(Result<(), String>),
     UpdateTaskFinished,
-    RefreshInfo,
+    RefreshSelected,
+    RefreshAll,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,11 +45,13 @@ pub struct UpdatesInfo {
     pub loading_updates: HashSet<PackageManagerType>,
     pub is_loading_count: bool,
     pub has_loading_count: bool,
+    pub init_progress: Option<(usize, usize)>,
+    pub init_logs: Vec<String>,
     pub sort_by: SortOption,
     pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_updating: bool,
     pub update_progress: Option<(usize, usize, PackageManagerType, String)>,
-    pub update_items: Vec<PackageTaskProgress>,
+    pub update_logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,7 +61,7 @@ enum UpdateTaskEvent {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     Done(Result<(), String>),
 }
@@ -191,7 +194,7 @@ impl Updates {
                     return Action::None;
                 }
                 info.is_updating = true;
-                info.update_items = SharedUi::build_task_progress(&info.selected_packages);
+                info.update_logs.clear();
                 let initial_manager = info
                     .selected_packages
                     .iter()
@@ -211,21 +214,24 @@ impl Updates {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => {
-                SharedUi::update_task_progress(
-                    &mut info.update_items,
-                    manager,
-                    &current_package,
-                    package_progress,
-                );
                 info.update_progress = Some((completed, total, manager, current_package));
+                if let Some(command_message) = command_message {
+                    push_command_log(
+                        &mut info.update_logs,
+                        manager,
+                        info.update_progress
+                            .as_ref()
+                            .map_or("", |(_, _, _, package)| package.as_str()),
+                        command_message,
+                    );
+                }
                 Action::None
             }
             Message::UpdatePackagesResult(result) => {
                 info.is_updating = false;
                 info.update_progress = None;
-                info.update_items.clear();
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
@@ -257,9 +263,9 @@ impl Updates {
                     }
                 }
             }
-            Message::RefreshInfo => {
+            Message::RefreshSelected => {
                 let pm_types: Vec<PackageManagerType> =
-                    info.updates_by_manager.keys().copied().collect();
+                    info.selected_managers.iter().copied().collect();
 
                 if pm_types.is_empty() {
                     return Action::None;
@@ -271,6 +277,24 @@ impl Updates {
                 }
 
                 // Create loading tasks for all package managers
+                let tasks: Vec<Task<Message>> = pm_types
+                    .into_iter()
+                    .map(|pm_type| Self::create_load_task(pm_config, pm_type))
+                    .collect();
+
+                Action::Run(Task::batch(tasks))
+            }
+            Message::RefreshAll => {
+                let pm_types = SharedUi::configured_managers(pm_config);
+
+                if pm_types.is_empty() {
+                    return Action::None;
+                }
+
+                for pm_type in &pm_types {
+                    info.loading_updates.insert(*pm_type);
+                }
+
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
                     .map(|pm_type| Self::create_load_task(pm_config, pm_type))
@@ -294,7 +318,7 @@ impl Updates {
                 column![
                     self.manager_filter_view(info, pm_config),
                     self.sort_order_view(info),
-                    SharedUi::refresh_button(Message::RefreshInfo)
+                    self.refresh_actions_view()
                 ]
                 .spacing(24)
             )
@@ -329,13 +353,25 @@ impl Updates {
                     "Waiting to load update information"
                 },
             )
-        } else if info.updates_by_manager.is_empty() {
-            SharedUi::empty_filter_view("No updates found")
         } else {
-            let entries = info
-                .updates_by_manager
+            let managers = SharedUi::configured_managers(pm_config);
+
+            if managers.is_empty() {
+                return SharedUi::filter_section(
+                    "Filter Package Managers",
+                    SharedUi::empty_filter_view("No package managers detected"),
+                );
+            }
+
+            let entries = managers
                 .iter()
-                .map(|(pm_type, (count, _))| (*pm_type, *count))
+                .map(|pm_type| {
+                    let count = info
+                        .updates_by_manager
+                        .get(pm_type)
+                        .map_or(0, |(count, _)| *count);
+                    (*pm_type, count)
+                })
                 .collect();
 
             SharedUi::active_manager_filter_view(
@@ -347,6 +383,17 @@ impl Updates {
         };
 
         SharedUi::filter_section("Filter Package Managers", filters_content)
+    }
+
+    fn refresh_actions_view<'a>(&self) -> iced::Element<'a, Message> {
+        use iced::widget::row;
+
+        row![
+            SharedUi::refresh_button_with_label("Refresh Selected", Message::RefreshSelected),
+            SharedUi::refresh_button_with_label("Refresh All", Message::RefreshAll),
+        ]
+        .spacing(8)
+        .into()
     }
 
     fn sort_order_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
@@ -396,15 +443,27 @@ impl Updates {
             });
         }
 
-        let filtered_managers: Vec<_> = info
-            .updates_by_manager
-            .iter()
-            .filter(|(pm_type, _)| info.selected_managers.contains(pm_type))
-            .collect();
-
-        if filtered_managers.is_empty() {
+        if info.selected_managers.is_empty() {
             return SharedUi::centered_message("Please select a package manager to view");
         }
+
+        if info
+            .selected_managers
+            .iter()
+            .any(|pm_type| info.loading_updates.contains(pm_type))
+        {
+            return SharedUi::centered_message("Loading selected package manager updates...");
+        }
+
+        let filtered_managers: Vec<_> = info
+            .selected_managers
+            .iter()
+            .filter_map(|pm_type| {
+                info.updates_by_manager
+                    .get(pm_type)
+                    .map(|entry| (*pm_type, entry))
+            })
+            .collect();
 
         let total_updates: usize = filtered_managers.iter().map(|(_, (count, _))| *count).sum();
 
@@ -428,7 +487,7 @@ impl Updates {
         let updates_sections: Vec<iced::Element<'_, Message>> = filtered_managers
             .into_iter()
             .map(|(pm_type, (count, packages))| {
-                self.package_manager_section(*pm_type, *count, packages, info)
+                self.package_manager_section(pm_type, *count, packages, info)
             })
             .collect();
 
@@ -733,7 +792,7 @@ impl Updates {
                                 total: total_packages,
                                 manager: progress.manager,
                                 current_package: progress.current_package,
-                                package_progress: progress.package_progress,
+                                command_message: progress.command_message,
                             });
                         })
                         .await;
@@ -761,17 +820,48 @@ impl Updates {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => Message::UpdateProgress {
                 completed,
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             },
             UpdateTaskEvent::Done(result) => Message::UpdatePackagesResult(result),
         });
 
         Action::Run(Task::batch(vec![update_task, progress_task]))
+    }
+}
+
+fn push_command_log(
+    logs: &mut Vec<String>,
+    manager: PackageManagerType,
+    package_name: &str,
+    command_message: String,
+) {
+    let command_message = command_message.trim();
+    if command_message.is_empty() {
+        return;
+    }
+
+    let package_name = if package_name.is_empty() {
+        "batch"
+    } else {
+        package_name
+    };
+
+    logs.push(format!(
+        "[Update][{}][{}] {}",
+        manager.name(),
+        package_name,
+        command_message
+    ));
+
+    const MAX_COMMAND_LOGS: usize = 120;
+    if logs.len() > MAX_COMMAND_LOGS {
+        let overflow = logs.len() - MAX_COMMAND_LOGS;
+        logs.drain(0..overflow);
     }
 }

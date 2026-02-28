@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::run_command_with_progress,
+    pm::progress::{CommandProgressEvent, run_command_with_progress},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -283,7 +283,7 @@ impl HomebrewManager {
     pub async fn uninstall_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Homebrew)
@@ -297,7 +297,7 @@ impl HomebrewManager {
     pub async fn update_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Homebrew)
@@ -311,7 +311,7 @@ impl HomebrewManager {
     pub async fn install_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Homebrew)

@@ -4,7 +4,7 @@ use tokio::{fs, process::Command};
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::run_command_with_progress,
+    pm::progress::{CommandProgressEvent, run_command_with_progress},
 };
 
 #[derive(Debug, Clone)]
@@ -176,10 +176,13 @@ impl GoManager {
     pub async fn uninstall_package_with_progress(
         _config: &Config,
         package_name: &str,
-        mut on_progress: impl FnMut(f32),
+        mut on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         // Go uninstall is file removal only, no native streamed percentage.
-        on_progress(0.0);
+        on_progress(CommandProgressEvent {
+            progress: 0.0,
+            command_message: Some(format!("Removing Go binary for {}", package_name)),
+        });
 
         let gobin = std::env::var("GOBIN")
             .or_else(|_| std::env::var("GOPATH").map(|p| format!("{}/bin", p)))
@@ -195,14 +198,17 @@ impl GoManager {
             )));
         }
 
-        on_progress(1.0);
+        on_progress(CommandProgressEvent {
+            progress: 1.0,
+            command_message: Some(format!("Removed {}", binary_name)),
+        });
         Ok(())
     }
 
     pub async fn update_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Go)
@@ -221,7 +227,7 @@ impl GoManager {
     pub async fn install_package_with_progress(
         config: &Config,
         package_name: &str,
-        on_progress: impl FnMut(f32),
+        on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = config
             .get_package_path(PackageManagerType::Go)

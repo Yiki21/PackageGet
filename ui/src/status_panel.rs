@@ -9,21 +9,19 @@ use iced::{Animation, Border, Length, Subscription, Task};
 
 use crate::{
     app::{self, colors},
-    content::{FindingInfo, InstalledInfo, PackageTaskState, UpdatesInfo},
+    content::{FindingInfo, InstalledInfo, UpdatesInfo},
 };
 
-/// Stateful bottom panel that presents overall and per-package progress.
+/// Stateful bottom panel that presents overall progress and command output.
 #[derive(Debug, Clone)]
 pub struct StatusPanel {
     progress_animation: Animation<f32>,
     progress_target: f32,
-    is_indeterminate_progress: bool,
-    animation_origin: Instant,
     last_frame: Instant,
     status_label: String,
-    progress: ProgressDisplay,
-    activity_phase: f32,
-    package_tasks: Vec<PackageTaskView>,
+    progress: f32,
+    command_logs: Vec<String>,
+    progress_counts: Option<(usize, usize)>,
 }
 
 /// Messages handled by the status panel.
@@ -48,21 +46,6 @@ impl From<Message> for app::Message {
     fn from(msg: Message) -> Self {
         app::Message::StatusPanel(msg)
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ProgressDisplay {
-    Determinate(f32),
-    Indeterminate,
-}
-
-#[derive(Debug, Clone)]
-struct PackageTaskView {
-    operation_label: &'static str,
-    manager_name: String,
-    package_name: String,
-    state: PackageTaskState,
-    progress: f32,
 }
 
 #[derive(Debug, Default)]
@@ -92,13 +75,11 @@ impl StatusPanel {
         Self {
             progress_animation: Animation::new(0.0).duration(Duration::from_millis(280)),
             progress_target: 0.0,
-            is_indeterminate_progress: false,
-            animation_origin: now,
             last_frame: now,
             status_label: "Idle".to_string(),
-            progress: ProgressDisplay::Determinate(1.0),
-            activity_phase: 0.0,
-            package_tasks: Vec::new(),
+            progress: 1.0,
+            command_logs: Vec::new(),
+            progress_counts: None,
         }
     }
 
@@ -110,7 +91,6 @@ impl StatusPanel {
         finding_info: &FindingInfo,
     ) -> Subscription<Message> {
         if has_active_work(installed_info, updates_info, finding_info)
-            || self.is_indeterminate_progress
             || self.progress_animation.is_animating(self.last_frame)
         {
             iced::window::frames().map(Message::Tick)
@@ -132,17 +112,13 @@ impl StatusPanel {
 
         self.last_frame = at;
         self.sync_progress_animation(at, installed_info, updates_info, finding_info);
-        self.progress = if self.is_indeterminate_progress {
-            ProgressDisplay::Indeterminate
-        } else {
-            ProgressDisplay::Determinate(self.current_progress_value())
-        };
-        self.activity_phase = self.moving_phase(Duration::from_millis(2200));
+        self.progress = self.current_progress_value();
 
         if should_refresh_snapshot {
             self.status_label = status_label(installed_info, updates_info, finding_info);
-            rebuild_package_tasks(
-                &mut self.package_tasks,
+            self.progress_counts = progress_counts(installed_info, updates_info, finding_info);
+            rebuild_command_logs(
+                &mut self.command_logs,
                 installed_info,
                 updates_info,
                 finding_info,
@@ -164,23 +140,10 @@ impl StatusPanel {
         updates_info: &UpdatesInfo,
         finding_info: &FindingInfo,
     ) {
-        match progress_mode(installed_info, updates_info, finding_info) {
-            ProgressDisplay::Determinate(target) => {
-                if self.is_indeterminate_progress {
-                    self.is_indeterminate_progress = false;
-                }
-
-                if (self.progress_target - target).abs() > 0.001 {
-                    self.progress_target = target;
-                    self.progress_animation.go_mut(target, at);
-                }
-            }
-            ProgressDisplay::Indeterminate => {
-                if !self.is_indeterminate_progress {
-                    self.is_indeterminate_progress = true;
-                    self.animation_origin = at;
-                }
-            }
+        let target = progress_value(installed_info, updates_info, finding_info);
+        if (self.progress_target - target).abs() > 0.001 {
+            self.progress_target = target;
+            self.progress_animation.go_mut(target, at);
         }
     }
 
@@ -188,16 +151,6 @@ impl StatusPanel {
         self.progress_animation
             .interpolate_with(|value| value, self.last_frame)
             .clamp(0.0, 1.0)
-    }
-
-    fn moving_phase(&self, cycle: Duration) -> f32 {
-        let cycle_ms = cycle.as_millis().max(1);
-        let elapsed_ms = self
-            .last_frame
-            .saturating_duration_since(self.animation_origin)
-            .as_millis();
-
-        (elapsed_ms % cycle_ms) as f32 / cycle_ms as f32
     }
 }
 
@@ -216,12 +169,26 @@ fn has_active_work(
         || installed_info.is_removing
 }
 
-fn progress_mode(
+fn collect_known_progress(
     installed_info: &InstalledInfo,
     updates_info: &UpdatesInfo,
     finding_info: &FindingInfo,
-) -> ProgressDisplay {
+) -> ProgressCounter {
     let mut known = ProgressCounter::default();
+
+    if installed_info.is_loading_count
+        && let Some((completed, total)) = installed_info.init_progress
+        && total > 0
+    {
+        known.add(total, completed);
+    }
+
+    if updates_info.is_loading_count
+        && let Some((completed, total)) = updates_info.init_progress
+        && total > 0
+    {
+        known.add(total, completed);
+    }
 
     if !finding_info.searching_managers.is_empty() {
         let total = finding_info.selected_managers.len();
@@ -262,81 +229,65 @@ fn progress_mode(
         known.add(*total, *completed);
     }
 
+    known
+}
+
+fn progress_value(
+    installed_info: &InstalledInfo,
+    updates_info: &UpdatesInfo,
+    finding_info: &FindingInfo,
+) -> f32 {
+    let known = collect_known_progress(installed_info, updates_info, finding_info);
+
     if known.total > 0 {
-        ProgressDisplay::Determinate((known.done as f32 / known.total as f32).clamp(0.0, 1.0))
+        (known.done as f32 / known.total as f32).clamp(0.0, 1.0)
     } else if has_active_work(installed_info, updates_info, finding_info) {
-        ProgressDisplay::Indeterminate
+        0.0
     } else {
-        ProgressDisplay::Determinate(1.0)
+        1.0
     }
 }
 
-fn rebuild_package_tasks(
-    out: &mut Vec<PackageTaskView>,
+fn progress_counts(
+    installed_info: &InstalledInfo,
+    updates_info: &UpdatesInfo,
+    finding_info: &FindingInfo,
+) -> Option<(usize, usize)> {
+    let known = collect_known_progress(installed_info, updates_info, finding_info);
+    if known.total > 0 {
+        Some((known.done.min(known.total), known.total))
+    } else {
+        None
+    }
+}
+
+fn rebuild_command_logs(
+    out: &mut Vec<String>,
     installed_info: &InstalledInfo,
     updates_info: &UpdatesInfo,
     finding_info: &FindingInfo,
 ) {
     out.clear();
-
-    let target_capacity = if finding_info.is_installing {
-        finding_info.install_items.len()
-    } else {
-        0
-    } + if updates_info.is_updating {
-        updates_info.update_items.len()
-    } else {
-        0
-    } + if installed_info.is_removing {
-        installed_info.remove_items.len()
-    } else {
-        0
-    };
-    out.reserve(target_capacity.saturating_sub(out.capacity()));
-
+    if installed_info.is_loading_count {
+        out.extend(installed_info.init_logs.iter().cloned());
+    }
+    if updates_info.is_loading_count {
+        out.extend(updates_info.init_logs.iter().cloned());
+    }
     if finding_info.is_installing {
-        out.extend(
-            finding_info
-                .install_items
-                .iter()
-                .map(|item| PackageTaskView {
-                    operation_label: "Install",
-                    manager_name: item.manager.name().to_string(),
-                    package_name: item.package_name.clone(),
-                    state: item.state,
-                    progress: item.progress,
-                }),
-        );
+        out.extend(finding_info.install_logs.iter().cloned());
     }
-
     if updates_info.is_updating {
-        out.extend(
-            updates_info
-                .update_items
-                .iter()
-                .map(|item| PackageTaskView {
-                    operation_label: "Update",
-                    manager_name: item.manager.name().to_string(),
-                    package_name: item.package_name.clone(),
-                    state: item.state,
-                    progress: item.progress,
-                }),
-        );
+        out.extend(updates_info.update_logs.iter().cloned());
+    }
+    if installed_info.is_removing {
+        out.extend(installed_info.remove_logs.iter().cloned());
     }
 
-    if installed_info.is_removing {
-        out.extend(
-            installed_info
-                .remove_items
-                .iter()
-                .map(|item| PackageTaskView {
-                    operation_label: "Remove",
-                    manager_name: item.manager.name().to_string(),
-                    package_name: item.package_name.clone(),
-                    state: item.state,
-                    progress: item.progress,
-                }),
-        );
+    const MAX_PANEL_LOGS: usize = 120;
+    if out.len() > MAX_PANEL_LOGS {
+        let overflow = out.len() - MAX_PANEL_LOGS;
+        out.drain(0..overflow);
     }
 }
 
@@ -416,19 +367,12 @@ fn operation_status_label(
 fn render<'a, Message: 'a + 'static>(panel: &'a StatusPanel) -> iced::Element<'a, Message> {
     use iced::widget::{column, container, row, scrollable, text};
 
-    let (progress_widget, status_right): (iced::Element<'a, Message>, String) = match panel.progress
-    {
-        ProgressDisplay::Determinate(value) => (
-            determinate_capsule_bar(value),
-            format!("{:.0}%", value * 100.0),
-        ),
-        ProgressDisplay::Indeterminate => (
-            indeterminate_activity_strip(panel.activity_phase),
-            "Working".to_string(),
-        ),
-    };
+    let progress_widget = determinate_capsule_bar(panel.progress);
 
-    let task_count = panel.package_tasks.len();
+    let mut status_right = format!("{:.0}%", panel.progress * 100.0);
+    if let Some((done, total)) = panel.progress_counts {
+        status_right = format!("{}/{}", done, total);
+    }
 
     let mut panel_content = column![
         row![
@@ -442,27 +386,33 @@ fn render<'a, Message: 'a + 'static>(panel: &'a StatusPanel) -> iced::Element<'a
     .spacing(10)
     .height(Length::Fill);
 
-    if task_count > 0 {
-        let rows: Vec<iced::Element<'a, Message>> = panel
-            .package_tasks
-            .iter()
-            .map(|task| package_task_row(task, panel.activity_phase))
-            .collect();
+    if !panel.command_logs.is_empty() {
+        let lines = panel.command_logs.iter().map(|line| {
+            text(line)
+                .size(12)
+                .color(colors::ON_SURFACE_ALT)
+                .width(Length::Fill)
+                .into()
+        });
 
-        let list = scrollable(column(rows).spacing(8))
+        let log_list = scrollable(column(lines).spacing(4))
             .height(Length::Fill)
             .width(Length::Fill);
 
         panel_content = panel_content
             .push(
-                text(format!("Package Progress ({})", task_count))
+                text("Command Output")
                     .size(12)
                     .color(colors::ON_SURFACE_MUTED),
             )
-            .push(list);
+            .push(log_list);
     }
 
-    let panel_height = if task_count == 0 { 86.0 } else { 280.0 };
+    let panel_height = if panel.command_logs.is_empty() {
+        86.0
+    } else {
+        250.0
+    };
 
     container(panel_content)
         .padding([10, 16])
@@ -474,137 +424,6 @@ fn render<'a, Message: 'a + 'static>(panel: &'a StatusPanel) -> iced::Element<'a
                 color: colors::DIVIDER,
                 width: 1.0,
                 radius: 8.0.into(),
-            },
-            text_color: None,
-            shadow: Default::default(),
-            snap: false,
-        })
-        .into()
-}
-
-fn package_task_row<Message: 'static>(
-    task: &PackageTaskView,
-    indeterminate_phase: f32,
-) -> iced::Element<'_, Message> {
-    use iced::widget::{column, container, row, text};
-
-    let (state_text, state_color) = match task.state {
-        PackageTaskState::Pending => ("Pending".to_string(), colors::ON_SURFACE_MUTED),
-        PackageTaskState::InProgress => {
-            if task.progress > 0.0 {
-                (
-                    format!("Running {:.0}%", (task.progress * 100.0).clamp(0.0, 100.0)),
-                    colors::SECONDARY,
-                )
-            } else {
-                ("Running".to_string(), colors::SECONDARY)
-            }
-        }
-        PackageTaskState::Done => ("Done".to_string(), colors::SUCCESS),
-    };
-
-    let progress_widget = match task.state {
-        PackageTaskState::Pending => determinate_capsule_bar(0.0),
-        PackageTaskState::InProgress => {
-            if task.progress > 0.0 {
-                determinate_capsule_bar(task.progress)
-            } else {
-                indeterminate_activity_strip(indeterminate_phase)
-            }
-        }
-        PackageTaskState::Done => determinate_capsule_bar(1.0),
-    };
-
-    container(
-        column![
-            row![
-                text(format!(
-                    "{} · {} ({})",
-                    task.operation_label, task.package_name, task.manager_name
-                ))
-                .size(13)
-                .color(colors::ON_SURFACE)
-                .width(Length::Fill),
-                text(state_text).size(12).color(state_color)
-            ]
-            .align_y(iced::Alignment::Center)
-            .spacing(10),
-            progress_widget
-        ]
-        .spacing(6),
-    )
-    .padding([8, 10])
-    .width(Length::Fill)
-    .style(|_theme: &iced::Theme| container::Style {
-        background: Some(colors::SURFACE.into()),
-        border: Border {
-            color: colors::DIVIDER_LIGHT,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        text_color: None,
-        shadow: Default::default(),
-        snap: false,
-    })
-    .into()
-}
-
-fn indeterminate_activity_strip<Message: 'static>(phase: f32) -> iced::Element<'static, Message> {
-    use iced::widget::{container, row};
-
-    let segment_count = 36usize;
-    let highlight_width = 10usize;
-    let head = ((phase.clamp(0.0, 1.0) * segment_count as f32).floor() as usize) % segment_count;
-
-    let strip = row((0..segment_count).map(|index| {
-        let distance = (index + segment_count - head) % segment_count;
-        let alpha = if distance < highlight_width {
-            let t = 1.0 - (distance as f32 / highlight_width as f32);
-            0.20 + (t * 0.80)
-        } else {
-            0.0
-        };
-
-        let color = if alpha > 0.0 {
-            iced::Color::from_rgba(
-                colors::SECONDARY_SOFT.r,
-                colors::SECONDARY_SOFT.g,
-                colors::SECONDARY_SOFT.b,
-                alpha,
-            )
-        } else {
-            colors::DIVIDER_LIGHT
-        };
-
-        container("")
-            .width(Length::FillPortion(1))
-            .height(Length::Fixed(8.0))
-            .style(move |_theme: &iced::Theme| container::Style {
-                background: Some(color.into()),
-                border: Border {
-                    color: iced::Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 999.0.into(),
-                },
-                text_color: None,
-                shadow: Default::default(),
-                snap: false,
-            })
-            .into()
-    }))
-    .spacing(2)
-    .width(Length::Fill)
-    .align_y(iced::Alignment::Center);
-
-    container(strip)
-        .padding([4, 6])
-        .width(Length::Fill)
-        .style(|_theme: &iced::Theme| container::Style {
-            background: Some(colors::SURFACE_HOVER.into()),
-            border: Border {
-                color: colors::DIVIDER_LIGHT,
-                width: 1.0,
-                radius: 999.0.into(),
             },
             text_color: None,
             shadow: Default::default(),

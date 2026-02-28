@@ -20,7 +20,7 @@ use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
-    content::shared::{PackageSelectionKey, PackageTaskProgress, SharedUi},
+    content::shared::{PackageSelectionKey, SharedUi},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -43,7 +43,7 @@ pub enum Message {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     RemovePackagesResult(Result<(), String>),
     RemoveTaskFinished,
@@ -57,11 +57,13 @@ pub struct InstalledInfo {
     pub loading_installed: HashSet<PackageManagerType>,
     pub is_loading_count: bool,
     pub has_loading_count: bool,
+    pub init_progress: Option<(usize, usize)>,
+    pub init_logs: Vec<String>,
     pub sort_by: SortOption,
     pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_removing: bool,
     pub remove_progress: Option<(usize, usize, PackageManagerType, String)>,
-    pub remove_items: Vec<PackageTaskProgress>,
+    pub remove_logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +73,7 @@ enum RemoveTaskEvent {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     Done(Result<(), String>),
 }
@@ -222,7 +224,7 @@ impl Installed {
                     return Action::None;
                 }
                 info.is_removing = true;
-                info.remove_items = SharedUi::build_task_progress(&info.selected_packages);
+                info.remove_logs.clear();
                 let initial_manager = info
                     .selected_packages
                     .iter()
@@ -242,21 +244,24 @@ impl Installed {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => {
-                SharedUi::update_task_progress(
-                    &mut info.remove_items,
-                    manager,
-                    &current_package,
-                    package_progress,
-                );
                 info.remove_progress = Some((completed, total, manager, current_package));
+                if let Some(command_message) = command_message {
+                    push_command_log(
+                        &mut info.remove_logs,
+                        manager,
+                        info.remove_progress
+                            .as_ref()
+                            .map_or("", |(_, _, _, package)| package.as_str()),
+                        command_message,
+                    );
+                }
                 Action::None
             }
             Message::RemovePackagesResult(result) => {
                 info.is_removing = false;
                 info.remove_progress = None;
-                info.remove_items.clear();
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
@@ -728,7 +733,7 @@ impl Installed {
                                 total: total_packages,
                                 manager: progress.manager,
                                 current_package: progress.current_package,
-                                package_progress: progress.package_progress,
+                                command_message: progress.command_message,
                             });
                         })
                         .await;
@@ -756,17 +761,48 @@ impl Installed {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => Message::RemoveProgress {
                 completed,
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             },
             RemoveTaskEvent::Done(result) => Message::RemovePackagesResult(result),
         });
 
         Action::Run(Task::batch(vec![remove_task, progress_task]))
+    }
+}
+
+fn push_command_log(
+    logs: &mut Vec<String>,
+    manager: PackageManagerType,
+    package_name: &str,
+    command_message: String,
+) {
+    let command_message = command_message.trim();
+    if command_message.is_empty() {
+        return;
+    }
+
+    let package_name = if package_name.is_empty() {
+        "batch"
+    } else {
+        package_name
+    };
+
+    logs.push(format!(
+        "[Remove][{}][{}] {}",
+        manager.name(),
+        package_name,
+        command_message
+    ));
+
+    const MAX_COMMAND_LOGS: usize = 120;
+    if logs.len() > MAX_COMMAND_LOGS {
+        let overflow = logs.len() - MAX_COMMAND_LOGS;
+        logs.drain(0..overflow);
     }
 }

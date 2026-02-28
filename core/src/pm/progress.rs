@@ -9,6 +9,12 @@ use tokio::{
 
 use crate::{CoreResult, error::CoreError};
 
+#[derive(Debug, Clone)]
+pub struct CommandProgressEvent {
+    pub progress: f32,
+    pub command_message: Option<String>,
+}
+
 async fn forward_lines<R: AsyncRead + Unpin>(mut reader: R, tx: mpsc::UnboundedSender<String>) {
     let mut buf = [0u8; 4096];
     let mut current = Vec::new();
@@ -67,7 +73,7 @@ fn parse_step_ratio(line: &str, pattern: &Regex) -> Option<f32> {
 pub async fn run_command_with_progress(
     command: &str,
     args: &[String],
-    mut on_progress: impl FnMut(f32),
+    mut on_progress: impl FnMut(CommandProgressEvent),
 ) -> CoreResult<()> {
     let mut child = Command::new(command)
         .args(args)
@@ -110,13 +116,21 @@ pub async fn run_command_with_progress(
     let mut max_progress = 0.0f32;
     let mut tail_logs: VecDeque<String> = VecDeque::new();
 
-    on_progress(0.0);
+    on_progress(CommandProgressEvent {
+        progress: 0.0,
+        command_message: None,
+    });
 
     while let Some(line) = rx.recv().await {
         if tail_logs.len() >= 20 {
             tail_logs.pop_front();
         }
         tail_logs.push_back(line.clone());
+
+        on_progress(CommandProgressEvent {
+            progress: max_progress,
+            command_message: Some(line.clone()),
+        });
 
         if is_dnf {
             if line.contains("Running transaction") {
@@ -137,7 +151,10 @@ pub async fn run_command_with_progress(
                 let value = value.min(0.99);
                 if value > max_progress {
                     max_progress = value;
-                    on_progress(value);
+                    on_progress(CommandProgressEvent {
+                        progress: value,
+                        command_message: None,
+                    });
                 }
                 continue;
             }
@@ -152,14 +169,20 @@ pub async fn run_command_with_progress(
                 let value = value.min(0.99);
                 if value > max_progress {
                     max_progress = value;
-                    on_progress(value);
+                    on_progress(CommandProgressEvent {
+                        progress: value,
+                        command_message: None,
+                    });
                 }
             }
         } else if let Some(value) = parse_percent(&line, &percent_pattern) {
             let value = value.min(0.99);
             if value > max_progress {
                 max_progress = value;
-                on_progress(value);
+                on_progress(CommandProgressEvent {
+                    progress: value,
+                    command_message: None,
+                });
             }
         }
     }
@@ -175,6 +198,9 @@ pub async fn run_command_with_progress(
         return Err(CoreError::UnknownError(detail));
     }
 
-    on_progress(1.0);
+    on_progress(CommandProgressEvent {
+        progress: 1.0,
+        command_message: None,
+    });
     Ok(())
 }

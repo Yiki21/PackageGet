@@ -1,9 +1,8 @@
 //! Top-level application composition and message routing.
 
-use std::sync::Arc;
 use std::time::Instant;
 
-use futures::future::join_all;
+use futures::channel::mpsc;
 use iced::{Length, Subscription, Task};
 use updater_core::{PackageManagerType, PackageUpdate};
 
@@ -93,8 +92,42 @@ pub enum Message {
     Content(content::Message),
     StatusPanel(status_panel::Message),
     ConfigLoaded(Result<updater_core::Config, updater_core::error::CoreError>),
+    InitInstalledProgress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    },
     InitInstalledCounts(Vec<(PackageManagerType, usize)>),
+    InitUpdatesProgress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    },
     InitUpdatesCounts(Vec<(PackageManagerType, Vec<PackageUpdate>)>),
+}
+
+#[derive(Debug, Clone)]
+enum InitInstalledEvent {
+    Progress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    },
+    Done(Vec<(PackageManagerType, usize)>),
+}
+
+#[derive(Debug, Clone)]
+enum InitUpdatesEvent {
+    Progress {
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    },
+    Done(Vec<(PackageManagerType, Vec<PackageUpdate>)>),
 }
 
 impl App {
@@ -135,7 +168,19 @@ impl App {
             Message::Content(content_msg) => task = self.handle_content_message(content_msg),
             Message::StatusPanel(panel_msg) => task = self.handle_status_panel_message(panel_msg),
             Message::ConfigLoaded(result) => task = self.handle_config_loaded(result),
+            Message::InitInstalledProgress {
+                completed,
+                total,
+                manager,
+                command_message,
+            } => self.apply_init_installed_progress(completed, total, manager, command_message),
             Message::InitInstalledCounts(counts) => self.apply_installed_counts(counts),
+            Message::InitUpdatesProgress {
+                completed,
+                total,
+                manager,
+                command_message,
+            } => self.apply_init_updates_progress(completed, total, manager, command_message),
             Message::InitUpdatesCounts(updates) => self.apply_updates_counts(updates),
         }
 
@@ -247,9 +292,8 @@ impl App {
             content::Action::Run(content_task) => content_task.map(Message::Content),
             content::Action::ReloadInstalledData => {
                 self.installed_info.is_loading_count = true;
-                Task::future(Self::init_installed_counts(self.pm_config.clone())).then(
-                    |installed_counts| Task::done(Message::InitInstalledCounts(installed_counts)),
-                )
+                self.installed_info.init_logs.clear();
+                self.start_init_installed_counts_task(self.pm_config.clone())
             }
             content::Action::None => Task::none(),
         }
@@ -276,16 +320,11 @@ impl App {
                 self.pm_config = config;
                 self.installed_info.is_loading_count = true;
                 self.updates_info.is_loading_count = true;
+                self.installed_info.init_logs.clear();
+                self.updates_info.init_logs.clear();
 
-                let installed_task = Task::future(Self::init_installed_counts(
-                    self.pm_config.clone(),
-                ))
-                .then(|installed_counts| {
-                    Task::done(Message::InitInstalledCounts(installed_counts))
-                });
-
-                let updates_task = Task::future(Self::init_updates_counts(self.pm_config.clone()))
-                    .then(|update_counts| Task::done(Message::InitUpdatesCounts(update_counts)));
+                let installed_task = self.start_init_installed_counts_task(self.pm_config.clone());
+                let updates_task = self.start_init_updates_counts_task(self.pm_config.clone());
 
                 Task::batch(vec![installed_task, updates_task])
             }
@@ -299,6 +338,7 @@ impl App {
     fn apply_installed_counts(&mut self, counts: Vec<(PackageManagerType, usize)>) {
         self.installed_info.is_loading_count = false;
         self.installed_info.has_loading_count = true;
+        self.installed_info.init_progress = None;
 
         self.installed_info.installed_packages = counts
             .into_iter()
@@ -309,6 +349,7 @@ impl App {
     fn apply_updates_counts(&mut self, updates: Vec<(PackageManagerType, Vec<PackageUpdate>)>) {
         self.updates_info.is_loading_count = false;
         self.updates_info.has_loading_count = true;
+        self.updates_info.init_progress = None;
 
         self.updates_info.updates_by_manager = updates
             .into_iter()
@@ -319,47 +360,198 @@ impl App {
             .collect();
     }
 
-    async fn init_installed_counts(
-        config: updater_core::Config,
-    ) -> Vec<(PackageManagerType, usize)> {
-        let config = Arc::new(config);
-
-        let pms: Vec<PackageManagerType> = config
-            .system_manager
-            .iter()
-            .map(|pm| pm.manager_type)
-            .chain(config.app_managers.iter().map(|pm| pm.manager_type))
-            .collect();
-
-        join_all(pms.into_iter().map(|pm| {
-            let config = config.clone();
-            async move {
-                let count = pm.count_installed(&config).await.unwrap_or(0);
-                (pm, count)
-            }
-        }))
-        .await
+    fn apply_init_installed_progress(
+        &mut self,
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    ) {
+        self.installed_info.init_progress = Some((completed.min(total), total));
+        Self::push_init_log(
+            &mut self.installed_info.init_logs,
+            "InitInstalled",
+            manager,
+            command_message,
+        );
     }
 
-    async fn init_updates_counts(
-        config: updater_core::Config,
-    ) -> Vec<(PackageManagerType, Vec<PackageUpdate>)> {
-        let config = Arc::new(config);
+    fn apply_init_updates_progress(
+        &mut self,
+        completed: usize,
+        total: usize,
+        manager: PackageManagerType,
+        command_message: String,
+    ) {
+        self.updates_info.init_progress = Some((completed.min(total), total));
+        Self::push_init_log(
+            &mut self.updates_info.init_logs,
+            "InitUpdates",
+            manager,
+            command_message,
+        );
+    }
 
-        let pms: Vec<PackageManagerType> = config
+    fn push_init_log(
+        logs: &mut Vec<String>,
+        phase: &str,
+        manager: PackageManagerType,
+        command_message: String,
+    ) {
+        let command_message = command_message.trim();
+        if command_message.is_empty() {
+            return;
+        }
+
+        logs.push(format!(
+            "[{}][{}] {}",
+            phase,
+            manager.name(),
+            command_message
+        ));
+
+        const MAX_INIT_LOGS: usize = 120;
+        if logs.len() > MAX_INIT_LOGS {
+            let overflow = logs.len() - MAX_INIT_LOGS;
+            logs.drain(0..overflow);
+        }
+    }
+
+    fn configured_managers(config: &updater_core::Config) -> Vec<PackageManagerType> {
+        config
             .system_manager
             .iter()
             .map(|pm| pm.manager_type)
             .chain(config.app_managers.iter().map(|pm| pm.manager_type))
-            .collect();
+            .collect()
+    }
 
-        join_all(pms.into_iter().map(|pm| {
-            let config = config.clone();
-            async move {
-                let updates = pm.list_updates(&config).await.unwrap_or_default();
-                (pm, updates)
+    fn start_init_installed_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
+        let managers = Self::configured_managers(&config);
+        self.installed_info.init_progress = Some((0, managers.len()));
+
+        let (sender, receiver) = mpsc::unbounded::<InitInstalledEvent>();
+        let sender_for_task = sender.clone();
+
+        let init_task = Task::future(async move {
+            let mut counts = Vec::with_capacity(managers.len());
+            let total = managers.len();
+
+            for (index, pm) in managers.into_iter().enumerate() {
+                let _ = sender_for_task.unbounded_send(InitInstalledEvent::Progress {
+                    completed: index,
+                    total,
+                    manager: pm,
+                    command_message: format!("Running count_installed"),
+                });
+
+                let count = match pm.count_installed(&config).await {
+                    Ok(value) => value,
+                    Err(e) => {
+                        log::warn!("count_installed failed for {}: {}", pm.name(), e);
+                        0
+                    }
+                };
+
+                let _ = sender_for_task.unbounded_send(InitInstalledEvent::Progress {
+                    completed: index + 1,
+                    total,
+                    manager: pm,
+                    command_message: format!("Done count_installed -> {}", count),
+                });
+
+                counts.push((pm, count));
             }
-        }))
-        .await
+
+            let _ = sender_for_task.unbounded_send(InitInstalledEvent::Done(counts));
+        })
+        .discard();
+
+        let progress_task = Task::run(receiver, |event| match event {
+            InitInstalledEvent::Progress {
+                completed,
+                total,
+                manager,
+                command_message,
+            } => Message::InitInstalledProgress {
+                completed,
+                total,
+                manager,
+                command_message,
+            },
+            InitInstalledEvent::Done(counts) => Message::InitInstalledCounts(counts),
+        });
+
+        Task::batch(vec![init_task, progress_task])
+    }
+
+    fn start_init_updates_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
+        let managers = Self::configured_managers(&config);
+        self.updates_info.init_progress = Some((0, managers.len()));
+
+        let (sender, receiver) = mpsc::unbounded::<InitUpdatesEvent>();
+        let sender_for_task = sender.clone();
+
+        let init_task = Task::future(async move {
+            let mut updates_by_manager = Vec::with_capacity(managers.len());
+            let total = managers.len();
+
+            for (index, pm) in managers.into_iter().enumerate() {
+                if pm == PackageManagerType::Cargo {
+                    let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Progress {
+                        completed: index + 1,
+                        total,
+                        manager: pm,
+                        command_message: "Skip list_updates during init (lazy load on select)"
+                            .to_string(),
+                    });
+                    continue;
+                }
+
+                let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Progress {
+                    completed: index,
+                    total,
+                    manager: pm,
+                    command_message: format!("Running list_updates"),
+                });
+
+                let updates = match pm.list_updates(&config).await {
+                    Ok(value) => value,
+                    Err(e) => {
+                        log::warn!("list_updates failed for {}: {}", pm.name(), e);
+                        Vec::new()
+                    }
+                };
+
+                let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Progress {
+                    completed: index + 1,
+                    total,
+                    manager: pm,
+                    command_message: format!("Done list_updates -> {} updates", updates.len()),
+                });
+
+                updates_by_manager.push((pm, updates));
+            }
+
+            let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Done(updates_by_manager));
+        })
+        .discard();
+
+        let progress_task = Task::run(receiver, |event| match event {
+            InitUpdatesEvent::Progress {
+                completed,
+                total,
+                manager,
+                command_message,
+            } => Message::InitUpdatesProgress {
+                completed,
+                total,
+                manager,
+                command_message,
+            },
+            InitUpdatesEvent::Done(updates) => Message::InitUpdatesCounts(updates),
+        });
+
+        Task::batch(vec![init_task, progress_task])
     }
 }

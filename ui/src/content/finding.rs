@@ -8,7 +8,7 @@ use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
-    content::shared::{PackageSelectionKey, PackageTaskProgress, SharedUi},
+    content::shared::{PackageSelectionKey, SharedUi},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -31,7 +31,7 @@ pub enum Message {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     InstallPackagesResult(Result<(), String>),
     InstallTaskFinished,
@@ -46,7 +46,7 @@ pub struct FindingInfo {
     pub selected_packages: HashSet<PackageSelectionKey>,
     pub is_installing: bool,
     pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
-    pub install_items: Vec<PackageTaskProgress>,
+    pub install_logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ enum InstallTaskEvent {
         total: usize,
         manager: PackageManagerType,
         current_package: String,
-        package_progress: f32,
+        command_message: Option<String>,
     },
     Done(Result<(), String>),
 }
@@ -168,7 +168,7 @@ impl Finding {
                     return Action::None;
                 }
                 info.is_installing = true;
-                info.install_items = SharedUi::build_task_progress(&info.selected_packages);
+                info.install_logs.clear();
                 let initial_manager = info
                     .selected_packages
                     .iter()
@@ -188,21 +188,24 @@ impl Finding {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => {
-                SharedUi::update_task_progress(
-                    &mut info.install_items,
-                    manager,
-                    &current_package,
-                    package_progress,
-                );
                 info.install_progress = Some((completed, total, manager, current_package));
+                if let Some(command_message) = command_message {
+                    push_command_log(
+                        &mut info.install_logs,
+                        manager,
+                        info.install_progress
+                            .as_ref()
+                            .map_or("", |(_, _, _, package)| package.as_str()),
+                        command_message,
+                    );
+                }
                 Action::None
             }
             Message::InstallPackagesResult(result) => {
                 info.is_installing = false;
                 info.install_progress = None;
-                info.install_items.clear();
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
@@ -733,7 +736,7 @@ impl Finding {
                             total: total_packages,
                             manager: progress.manager,
                             current_package: progress.current_package,
-                            package_progress: progress.package_progress,
+                            command_message: progress.command_message,
                         });
                     })
                     .await;
@@ -761,17 +764,48 @@ impl Finding {
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             } => Message::InstallProgress {
                 completed,
                 total,
                 manager,
                 current_package,
-                package_progress,
+                command_message,
             },
             InstallTaskEvent::Done(result) => Message::InstallPackagesResult(result),
         });
 
         Action::Run(Task::batch(vec![install_task, progress_task]))
+    }
+}
+
+fn push_command_log(
+    logs: &mut Vec<String>,
+    manager: PackageManagerType,
+    package_name: &str,
+    command_message: String,
+) {
+    let command_message = command_message.trim();
+    if command_message.is_empty() {
+        return;
+    }
+
+    let package_name = if package_name.is_empty() {
+        "batch"
+    } else {
+        package_name
+    };
+
+    logs.push(format!(
+        "[Install][{}][{}] {}",
+        manager.name(),
+        package_name,
+        command_message
+    ));
+
+    const MAX_COMMAND_LOGS: usize = 120;
+    if logs.len() > MAX_COMMAND_LOGS {
+        let overflow = logs.len() - MAX_COMMAND_LOGS;
+        logs.drain(0..overflow);
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     error::CoreError,
     pm::{
         cargo::CargoManager, dnf::DnfManager, flatpak::FlatpakManager, go::GoManager,
-        homebrew::HomebrewManager,
+        homebrew::HomebrewManager, progress::CommandProgressEvent,
     },
 };
 
@@ -41,7 +41,7 @@ pub struct InstallProgress {
     pub current_package: String,
     pub completed: usize,
     pub total: usize,
-    pub package_progress: f32,
+    pub command_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -204,12 +204,37 @@ impl PackageManagerType {
         mut on_progress: impl FnMut(InstallProgress),
     ) -> CoreResult<()> {
         let total = package_names.len();
+        if total == 0 {
+            return Ok(());
+        }
+
+        if matches!(self, Self::Dnf) {
+            let mut report = |event: CommandProgressEvent| {
+                let progress = event.progress.clamp(0.0, 1.0);
+                let completed = if progress >= 1.0 {
+                    total
+                } else {
+                    ((progress * total as f32).floor() as usize).min(total)
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: String::new(),
+                    completed,
+                    total,
+                    command_message: event.command_message,
+                });
+            };
+
+            DnfManager::uninstall_packages_with_progress(config, package_names, &mut report)
+                .await?;
+            return Ok(());
+        }
 
         for (index, package_name) in package_names.iter().enumerate() {
             let package_name = package_name.clone();
-            let mut report = |package_progress: f32| {
-                let package_progress = package_progress.clamp(0.0, 1.0);
-                let completed = if package_progress >= 1.0 {
+            let mut report = |event: CommandProgressEvent| {
+                let completed = if event.progress.clamp(0.0, 1.0) >= 1.0 {
                     index + 1
                 } else {
                     index
@@ -220,7 +245,7 @@ impl PackageManagerType {
                     current_package: package_name.clone(),
                     completed,
                     total,
-                    package_progress,
+                    command_message: event.command_message,
                 });
             };
 
@@ -294,12 +319,36 @@ impl PackageManagerType {
         mut on_progress: impl FnMut(InstallProgress),
     ) -> CoreResult<()> {
         let total = package_names.len();
+        if total == 0 {
+            return Ok(());
+        }
+
+        if matches!(self, Self::Dnf) {
+            let mut report = |event: CommandProgressEvent| {
+                let progress = event.progress.clamp(0.0, 1.0);
+                let completed = if progress >= 1.0 {
+                    total
+                } else {
+                    ((progress * total as f32).floor() as usize).min(total)
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: String::new(),
+                    completed,
+                    total,
+                    command_message: event.command_message,
+                });
+            };
+
+            DnfManager::update_packages_with_progress(config, package_names, &mut report).await?;
+            return Ok(());
+        }
 
         for (index, package_name) in package_names.iter().enumerate() {
             let package_name = package_name.clone();
-            let mut report = |package_progress: f32| {
-                let package_progress = package_progress.clamp(0.0, 1.0);
-                let completed = if package_progress >= 1.0 {
+            let mut report = |event: CommandProgressEvent| {
+                let completed = if event.progress.clamp(0.0, 1.0) >= 1.0 {
                     index + 1
                 } else {
                     index
@@ -310,7 +359,7 @@ impl PackageManagerType {
                     current_package: package_name.clone(),
                     completed,
                     total,
-                    package_progress,
+                    command_message: event.command_message,
                 });
             };
 
@@ -384,12 +433,36 @@ impl PackageManagerType {
         mut on_progress: impl FnMut(InstallProgress),
     ) -> CoreResult<()> {
         let total = package_names.len();
+        if total == 0 {
+            return Ok(());
+        }
+
+        if matches!(self, Self::Dnf) {
+            let mut report = |event: CommandProgressEvent| {
+                let progress = event.progress.clamp(0.0, 1.0);
+                let completed = if progress >= 1.0 {
+                    total
+                } else {
+                    ((progress * total as f32).floor() as usize).min(total)
+                };
+
+                on_progress(InstallProgress {
+                    manager: *self,
+                    current_package: String::new(),
+                    completed,
+                    total,
+                    command_message: event.command_message,
+                });
+            };
+
+            DnfManager::install_packages_with_progress(config, package_names, &mut report).await?;
+            return Ok(());
+        }
 
         for (index, package_name) in package_names.iter().enumerate() {
             let package_name = package_name.clone();
-            let mut report = |package_progress: f32| {
-                let package_progress = package_progress.clamp(0.0, 1.0);
-                let completed = if package_progress >= 1.0 {
+            let mut report = |event: CommandProgressEvent| {
+                let completed = if event.progress.clamp(0.0, 1.0) >= 1.0 {
                     index + 1
                 } else {
                     index
@@ -400,7 +473,7 @@ impl PackageManagerType {
                     current_package: package_name.clone(),
                     completed,
                     total,
-                    package_progress,
+                    command_message: event.command_message,
                 });
             };
 
