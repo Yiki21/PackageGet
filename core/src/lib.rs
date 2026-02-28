@@ -6,8 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::CoreError,
     pm::{
-        cargo::CargoManager, dnf::DnfManager, flatpak::FlatpakManager, go::GoManager,
-        homebrew::HomebrewManager, progress::CommandProgressEvent,
+        cargo::CargoManager,
+        dnf::DnfManager,
+        flatpak::FlatpakManager,
+        go::GoManager,
+        homebrew::HomebrewManager,
+        npm::{NpmManager, PnpmManager},
+        progress::CommandProgressEvent,
     },
 };
 
@@ -51,14 +56,18 @@ pub enum PackageManagerType {
     Homebrew,
     Cargo,
     Go,
+    Npm,
+    Pnpm,
 }
 
 pub static ALL_SYSTEM_PACKAGE_MANAGERS: [PackageManagerType; 1] = [PackageManagerType::Dnf];
-pub static ALL_APP_PACKAGE_MANAGERS: [PackageManagerType; 4] = [
+pub static ALL_APP_PACKAGE_MANAGERS: [PackageManagerType; 6] = [
     PackageManagerType::Flatpak,
     PackageManagerType::Homebrew,
     PackageManagerType::Cargo,
     PackageManagerType::Go,
+    PackageManagerType::Npm,
+    PackageManagerType::Pnpm,
 ];
 
 impl PackageManagerType {
@@ -69,6 +78,8 @@ impl PackageManagerType {
             Self::Homebrew => "Homebrew",
             Self::Cargo => "Cargo",
             Self::Go => "Go",
+            Self::Npm => "NPM",
+            Self::Pnpm => "pnpm",
         }
     }
 
@@ -79,6 +90,8 @@ impl PackageManagerType {
             Self::Homebrew => "macOS/Linux 包管理器",
             Self::Cargo => "Rust 编程语言的包管理器",
             Self::Go => "Go 编程语言的包管理器",
+            Self::Npm => "Node.js 默认包管理器",
+            Self::Pnpm => "Node.js 高性能包管理器",
         }
     }
 
@@ -93,6 +106,8 @@ impl PackageManagerType {
             Self::Homebrew => "brew",
             Self::Cargo => "cargo",
             Self::Go => "go",
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
         };
 
         tokio::process::Command::new("which")
@@ -110,6 +125,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::list_updates(config).await,
             Self::Cargo => CargoManager::list_updates(config).await,
             Self::Go => GoManager::list_updates(config).await,
+            Self::Npm => NpmManager::list_updates(config).await,
+            Self::Pnpm => PnpmManager::list_updates(config).await,
         }
     }
 
@@ -124,6 +141,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::get_current_version(config, package_name).await,
             Self::Cargo => CargoManager::get_current_version(config, package_name).await,
             Self::Go => GoManager::get_current_version(config, package_name).await,
+            Self::Npm => NpmManager::get_current_version(config, package_name).await,
+            Self::Pnpm => PnpmManager::get_current_version(config, package_name).await,
         }
     }
 
@@ -134,6 +153,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::list_installed(config).await,
             Self::Cargo => CargoManager::list_installed(config).await,
             Self::Go => GoManager::list_installed(config).await,
+            Self::Npm => NpmManager::list_installed(config).await,
+            Self::Pnpm => PnpmManager::list_installed(config).await,
         }
     }
 
@@ -144,6 +165,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::count_installed(config).await,
             Self::Cargo => CargoManager::count_installed(config).await,
             Self::Go => GoManager::count_installed(config).await,
+            Self::Npm => NpmManager::count_installed(config).await,
+            Self::Pnpm => PnpmManager::count_installed(config).await,
         }
     }
 
@@ -158,6 +181,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::search_package(config, package_name).await,
             Self::Cargo => CargoManager::search_package(config, package_name).await,
             Self::Go => GoManager::search_package(config, package_name).await,
+            Self::Npm => NpmManager::search_package(config, package_name).await,
+            Self::Pnpm => PnpmManager::search_package(config, package_name).await,
         }
     }
 
@@ -172,6 +197,8 @@ impl PackageManagerType {
             }
             Self::Cargo => CargoManager.uninstall_package(config, package_name).await,
             Self::Go => GoManager.uninstall_package(config, package_name).await,
+            Self::Npm => NpmManager.uninstall_package(config, package_name).await,
+            Self::Pnpm => PnpmManager.uninstall_package(config, package_name).await,
         }
     }
 
@@ -194,6 +221,8 @@ impl PackageManagerType {
             }
             Self::Cargo => CargoManager.uninstall_packages(config, package_names).await,
             Self::Go => GoManager.uninstall_packages(config, package_names).await,
+            Self::Npm => NpmManager.uninstall_packages(config, package_names).await,
+            Self::Pnpm => PnpmManager.uninstall_packages(config, package_names).await,
         }
     }
 
@@ -282,6 +311,18 @@ impl PackageManagerType {
                     GoManager::uninstall_package_with_progress(config, &package_name, &mut report)
                         .await?;
                 }
+                Self::Npm => {
+                    NpmManager::uninstall_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Pnpm => {
+                    PnpmManager::uninstall_package_with_progress(
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -299,6 +340,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager.update_packages(config, package_names).await,
             Self::Cargo => CargoManager.update_packages(config, package_names).await,
             Self::Go => GoManager.update_packages(config, package_names).await,
+            Self::Npm => NpmManager.update_packages(config, package_names).await,
+            Self::Pnpm => PnpmManager.update_packages(config, package_names).await,
         }
     }
 
@@ -309,6 +352,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager.update_package(config, package_name).await,
             Self::Cargo => CargoManager.update_package(config, package_name).await,
             Self::Go => GoManager.update_package(config, package_name).await,
+            Self::Npm => NpmManager.update_package(config, package_name).await,
+            Self::Pnpm => PnpmManager.update_package(config, package_name).await,
         }
     }
 
@@ -392,6 +437,14 @@ impl PackageManagerType {
                     GoManager::update_package_with_progress(config, &package_name, &mut report)
                         .await?;
                 }
+                Self::Npm => {
+                    NpmManager::update_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Pnpm => {
+                    PnpmManager::update_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
             }
         }
 
@@ -413,6 +466,8 @@ impl PackageManagerType {
             }
             Self::Cargo => CargoManager.install_packages(config, package_names).await,
             Self::Go => GoManager.install_packages(config, package_names).await,
+            Self::Npm => NpmManager.install_packages(config, package_names).await,
+            Self::Pnpm => PnpmManager.install_packages(config, package_names).await,
         }
     }
 
@@ -423,6 +478,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager.install_package(config, package_name).await,
             Self::Cargo => CargoManager.install_package(config, package_name).await,
             Self::Go => GoManager.install_package(config, package_name).await,
+            Self::Npm => NpmManager.install_package(config, package_name).await,
+            Self::Pnpm => PnpmManager.install_package(config, package_name).await,
         }
     }
 
@@ -504,6 +561,14 @@ impl PackageManagerType {
                 }
                 Self::Go => {
                     GoManager::install_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Npm => {
+                    NpmManager::install_package_with_progress(config, &package_name, &mut report)
+                        .await?;
+                }
+                Self::Pnpm => {
+                    PnpmManager::install_package_with_progress(config, &package_name, &mut report)
                         .await?;
                 }
             }
