@@ -132,6 +132,27 @@ impl PackageManager for CargoManager {
         Ok(packages)
     }
 
+    async fn count_installed(config: &Config) -> CoreResult<usize> {
+        let path = config
+            .get_package_path(PackageManagerType::Cargo)
+            .unwrap_or_else(|| "cargo".to_owned());
+
+        let install_output = Command::new(&path)
+            .arg("install")
+            .arg("--list")
+            .output()
+            .await?;
+
+        if !install_output.status.success() {
+            return Err(crate::error::CoreError::UnknownError(
+                "cargo install --list failed".into(),
+            ));
+        }
+
+        let stdout = String::from_utf8(install_output.stdout)?;
+        Ok(Self::parse_cargo_install_list(&stdout).len())
+    }
+
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
         // 使用 crates.io API 搜索
         let encoded_name = package_name.replace(' ', "%20");
