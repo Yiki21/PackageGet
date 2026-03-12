@@ -15,79 +15,7 @@ pub struct DnfManager;
 #[async_trait]
 impl PackageManager for DnfManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        debug!("Starting dnf list_updates");
-        let path = config
-            .get_package_path(crate::PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
-
-        let output = Command::new(&path).arg("check-upgrade").output().await?;
-
-        let stdout = String::from_utf8(output.stdout)?;
-        debug!("dnf check-upgrade exited: {}", output.status);
-        debug!("dnf output size: {} bytes", stdout.len());
-
-        let mut updates: Vec<PackageUpdate> = Vec::new();
-        let mut seen_packages: HashSet<String> = HashSet::new();
-
-        /*
-         * dnf check-upgrade output format:
-         * package-name.arch  version  repository
-         * cosmic-app-library.x86_64  1.0.6^git20260209.a9da1de-1.fc43  copr:...
-         */
-        for line in stdout.lines() {
-            let line = line.trim();
-
-            // Skip empty lines and header lines
-            if line.is_empty()
-                || line.starts_with("Updating and loading repositories:")
-                || line.starts_with("Repositories loaded.")
-            {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split_whitespace().collect();
-
-            // Expected format: name.arch version repository
-            if parts.len() < 2 {
-                continue;
-            }
-
-            let name = parts[0]
-                .rsplit_once('.')
-                .map(|(n, _)| n)
-                .unwrap_or(parts[0]);
-
-            // Skip if we've already processed this package (handle duplicates)
-            if seen_packages.contains(name) {
-                debug!("Skipping duplicate package: {}", name);
-                continue;
-            }
-            seen_packages.insert(name.to_string());
-
-            let new_version = parts[1];
-
-            // Get current version, but don't fail entire function if one package fails
-            let current_version = Self::get_current_version(config, name)
-                .await
-                .unwrap_or_else(|e| {
-                    debug!("Failed to get current version for {}: {}", name, e);
-                    "unknown".to_string()
-                });
-
-            debug!(
-                "Found update: {}: {} -> {}",
-                name, current_version, new_version
-            );
-
-            updates.push(PackageUpdate {
-                name: name.to_owned(),
-                current_version,
-                new_version: new_version.to_owned(),
-            });
-        }
-
-        debug!("Total updates found: {}", updates.len());
-        Ok(updates)
+        Self::list_updates_with_refresh(config, false).await
     }
 
     async fn get_current_version(_config: &Config, package_name: &str) -> CoreResult<String> {
@@ -206,6 +134,7 @@ impl PackageManager for DnfManager {
         let mut packages = Vec::new();
         let mut seen_packages = HashSet::new();
 
+        debug!("Starting dnf search_package");
         debug!("dnf search output size: {} bytes", stdout.len());
 
         // dnf search 输出格式：
@@ -273,6 +202,65 @@ impl PackageManager for DnfManager {
 }
 
 impl DnfManager {
+    pub async fn list_updates_with_refresh(
+        config: &Config,
+        refresh: bool,
+    ) -> CoreResult<Vec<PackageUpdate>> {
+        debug!("Starting dnf list_updates (refresh={})", refresh);
+        let path = config
+            .get_package_path(crate::PackageManagerType::Dnf)
+            .unwrap_or_else(|| "dnf".to_owned());
+
+        let mut command = Command::new(&path);
+        command.arg("check-upgrade");
+        if refresh {
+            command.arg("--refresh");
+        }
+
+        let output = command.output().await?;
+
+        let stdout = String::from_utf8(output.stdout)?;
+        debug!("dnf check-upgrade exited: {}", output.status);
+        debug!("dnf output size: {} bytes", stdout.len());
+
+        let mut updates: Vec<PackageUpdate> = Vec::new();
+        let mut seen_packages: HashSet<String> = HashSet::new();
+
+        for raw_line in stdout.lines() {
+            let Some((name, new_version)) = parse_check_upgrade_entry(raw_line) else {
+                continue;
+            };
+
+            // Skip if we've already processed this package (handle duplicates)
+            if seen_packages.contains(name) {
+                debug!("Skipping duplicate package: {}", name);
+                continue;
+            }
+            seen_packages.insert(name.to_string());
+
+            // Get current version, but don't fail entire function if one package fails
+            let current_version = Self::get_current_version(config, name)
+                .await
+                .unwrap_or_else(|e| {
+                    debug!("Failed to get current version for {}: {}", name, e);
+                    "unknown".to_string()
+                });
+
+            debug!(
+                "Found update: {}: {} -> {}",
+                name, current_version, new_version
+            );
+
+            updates.push(PackageUpdate {
+                name: name.to_owned(),
+                current_version,
+                new_version: new_version.to_owned(),
+            });
+        }
+
+        debug!("Total updates found: {}", updates.len());
+        Ok(updates)
+    }
     pub async fn uninstall_packages_with_progress(
         config: &Config,
         package_names: &[String],
@@ -314,7 +302,12 @@ impl DnfManager {
             .get_package_path(PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let mut args = vec![path, "upgrade".to_string(), "-y".to_string()];
+        let mut args = vec![
+            path,
+            "upgrade".to_string(),
+            "-y".to_string(),
+            "--skip-unavailable".to_string(),
+        ];
         args.extend(package_names.iter().cloned());
 
         run_command_with_progress("pkexec", &args, on_progress).await
@@ -356,6 +349,40 @@ impl DnfManager {
     }
 }
 
+fn parse_check_upgrade_entry(raw_line: &str) -> Option<(&str, &str)> {
+    // Obsoleted package rows are indented and should not be treated as direct upgrades.
+    if raw_line
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_whitespace())
+    {
+        return None;
+    }
+
+    let line = raw_line.trim();
+    if line.is_empty()
+        || line.starts_with("Updating and loading repositories:")
+        || line.starts_with("Repositories loaded.")
+        || line.starts_with("Available upgrades")
+        || line.starts_with("Obsoleting packages")
+    {
+        return None;
+    }
+
+    // Expected format: name.arch version repository
+    let mut parts = line.split_whitespace();
+    let package_with_arch = parts.next()?;
+    let new_version = parts.next()?;
+    let _repo = parts.next()?;
+
+    let (name, arch) = package_with_arch.rsplit_once('.')?;
+    if name.is_empty() || arch.is_empty() {
+        return None;
+    }
+
+    Some((name, new_version))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +412,26 @@ mod tests {
             Ok(version) => println!("Current version of {}: {}", package_name, version),
             Err(e) => eprintln!("Error: {}", e),
         }
+    }
+
+    #[test]
+    fn test_parse_check_upgrade_entry_parses_normal_line() {
+        let line = "akonadi-calendar.x86_64 25.12.3-1.fc43 updates";
+        let parsed = parse_check_upgrade_entry(line);
+
+        assert_eq!(parsed, Some(("akonadi-calendar", "25.12.3-1.fc43")));
+    }
+
+    #[test]
+    fn test_parse_check_upgrade_entry_skips_headers() {
+        assert!(parse_check_upgrade_entry("Repositories loaded.").is_none());
+        assert!(parse_check_upgrade_entry("Available upgrades").is_none());
+        assert!(parse_check_upgrade_entry("Obsoleting packages").is_none());
+    }
+
+    #[test]
+    fn test_parse_check_upgrade_entry_skips_indented_obsoleted_rows() {
+        let line = "    kernel-headers.x86_64 6.18.3-200.fc43 updates";
+        assert!(parse_check_upgrade_entry(line).is_none());
     }
 }

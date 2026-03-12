@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, process::Stdio};
+use std::{collections::VecDeque, path::Path, process::Stdio};
 
 use regex::Regex;
 use tokio::{
@@ -61,13 +61,38 @@ fn parse_percent(line: &str, pattern: &Regex) -> Option<f32> {
 fn parse_step_ratio(line: &str, pattern: &Regex) -> Option<f32> {
     let mut best = None;
     for cap in pattern.captures_iter(line) {
-        let current = cap.get(1)?.as_str().parse::<f32>().ok()?;
-        let total = cap.get(2)?.as_str().parse::<f32>().ok()?;
-        if total > 0.0 {
-            best = Some((current / total).clamp(0.0, 1.0));
+        let current = cap.get(1)?.as_str().parse::<usize>().ok()?;
+        let total = cap.get(2)?.as_str().parse::<usize>().ok()?;
+
+        // Filter out non-progress fragments such as "2026/03".
+        if total > 0 && current > 0 && current <= total {
+            let ratio = current as f32 / total as f32;
+            best = Some(best.map_or(ratio, |prev: f32| prev.max(ratio)));
         }
     }
     best
+}
+
+fn command_looks_like_dnf(command: &str) -> bool {
+    let executable = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+
+    executable == "dnf" || executable.starts_with("dnf")
+}
+
+fn is_dnf_command(command: &str, args: &[String]) -> bool {
+    command_looks_like_dnf(command)
+        || args
+            .first()
+            .is_some_and(|first| command_looks_like_dnf(first))
+}
+
+fn is_dnf_transaction_marker(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("running transaction") || line.contains("运行事务")
 }
 
 pub async fn run_command_with_progress(
@@ -104,15 +129,12 @@ pub async fn run_command_with_progress(
 
     let percent_pattern =
         Regex::new(r"([0-9]{1,3}(?:\.[0-9]+)?)%").expect("valid regex for percent parsing");
-    let step_pattern =
-        Regex::new(r"\[([0-9]+)\s*/\s*([0-9]+)\]").expect("valid regex for step parsing");
-    let is_dnf = command == "dnf"
-        || command.ends_with("/dnf")
-        || args
-            .first()
-            .is_some_and(|first| first == "dnf" || first.ends_with("/dnf"));
+    let step_pattern = Regex::new(r"(?:[\[(]\s*)?([0-9]+)\s*/\s*([0-9]+)(?:\s*[\])])?")
+        .expect("valid regex for step parsing");
+    let is_dnf = is_dnf_command(command, args);
 
     let mut in_transaction_phase = false;
+    let mut previous_step_ratio = None::<f32>;
     let mut max_progress = 0.0f32;
     let mut tail_logs: VecDeque<String> = VecDeque::new();
 
@@ -133,11 +155,21 @@ pub async fn run_command_with_progress(
         });
 
         if is_dnf {
-            if line.contains("Running transaction") {
+            if is_dnf_transaction_marker(&line) {
                 in_transaction_phase = true;
             }
 
             if let Some(step_ratio) = parse_step_ratio(&line, &step_pattern) {
+                // Some DNF outputs do not include a localized transaction marker.
+                // A significant ratio reset is typically the phase boundary.
+                if !in_transaction_phase
+                    && previous_step_ratio
+                        .is_some_and(|prev| prev >= 0.9 && step_ratio < prev - 0.2)
+                {
+                    in_transaction_phase = true;
+                }
+                previous_step_ratio = Some(step_ratio);
+
                 // DNF typically has two phases:
                 // 1) download and resolve
                 // 2) running transaction
@@ -203,4 +235,55 @@ pub async fn run_command_with_progress(
         command_message: None,
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step_pattern() -> Regex {
+        Regex::new(r"(?:[\[(]\s*)?([0-9]+)\s*/\s*([0-9]+)(?:\s*[\])])?")
+            .expect("step regex should compile")
+    }
+
+    #[test]
+    fn parse_step_ratio_supports_common_dnf_formats() {
+        let pattern = step_pattern();
+
+        let bracketed = parse_step_ratio("Progress: [3/10]", &pattern);
+        let parenthesized = parse_step_ratio("(4/10): package.rpm", &pattern);
+        let plain = parse_step_ratio("Upgrading : foo.x86_64 7/10", &pattern);
+
+        assert_eq!(bracketed, Some(0.3));
+        assert_eq!(parenthesized, Some(0.4));
+        assert_eq!(plain, Some(0.7));
+    }
+
+    #[test]
+    fn parse_step_ratio_ignores_non_progress_pairs() {
+        let pattern = step_pattern();
+
+        // Year/month style pairs should be ignored.
+        assert_eq!(parse_step_ratio("mirror path 2026/03", &pattern), None);
+        // Zero-total is not a valid progress signal.
+        assert_eq!(parse_step_ratio("Transaction: 0/0", &pattern), None);
+    }
+
+    #[test]
+    fn is_dnf_command_detects_wrapped_and_custom_binary_names() {
+        assert!(is_dnf_command("dnf", &[]));
+        assert!(is_dnf_command("/usr/bin/dnf5", &[]));
+        assert!(is_dnf_command(
+            "pkexec",
+            &[String::from("/usr/local/bin/dnf5"), String::from("upgrade")]
+        ));
+        assert!(!is_dnf_command("pkexec", &[String::from("/usr/bin/apt")]));
+    }
+
+    #[test]
+    fn is_dnf_transaction_marker_supports_multiple_locales() {
+        assert!(is_dnf_transaction_marker("Running transaction"));
+        assert!(is_dnf_transaction_marker("开始运行事务"));
+        assert!(!is_dnf_transaction_marker("Downloading packages"));
+    }
 }

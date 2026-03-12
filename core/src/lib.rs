@@ -130,6 +130,22 @@ impl PackageManagerType {
         }
     }
 
+    pub async fn list_updates_with_refresh(
+        &self,
+        config: &Config,
+        refresh: bool,
+    ) -> CoreResult<Vec<PackageUpdate>> {
+        match self {
+            Self::Dnf => DnfManager::list_updates_with_refresh(config, refresh).await,
+            Self::Flatpak => FlatpakManager::list_updates(config).await,
+            Self::Homebrew => HomebrewManager::list_updates(config).await,
+            Self::Cargo => CargoManager::list_updates(config).await,
+            Self::Go => GoManager::list_updates(config).await,
+            Self::Npm => NpmManager::list_updates(config).await,
+            Self::Pnpm => PnpmManager::list_updates(config).await,
+        }
+    }
+
     pub async fn get_current_version(
         &self,
         config: &Config,

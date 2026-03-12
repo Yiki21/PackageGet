@@ -129,11 +129,11 @@ impl Updates {
                             Action::None
                         } else {
                             info.loading_updates.insert(pm_type);
-                            Self::load_updates_action(pm_config, pm_type)
+                            Self::load_updates_action(pm_config, pm_type, false)
                         }
                     } else {
                         info.loading_updates.insert(pm_type);
-                        Self::load_updates_action(pm_config, pm_type)
+                        Self::load_updates_action(pm_config, pm_type, false)
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
@@ -252,7 +252,7 @@ impl Updates {
                         // Create loading tasks for selected package managers
                         let tasks: Vec<Task<Message>> = pm_types
                             .into_iter()
-                            .map(|pm_type| Self::create_load_task(pm_config, pm_type))
+                            .map(|pm_type| Self::create_load_task(pm_config, pm_type, false))
                             .collect();
 
                         Action::Run(Task::batch(tasks))
@@ -279,7 +279,7 @@ impl Updates {
                 // Create loading tasks for all package managers
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|pm_type| Self::create_load_task(pm_config, pm_type))
+                    .map(|pm_type| Self::create_load_task(pm_config, pm_type, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -297,7 +297,7 @@ impl Updates {
 
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|pm_type| Self::create_load_task(pm_config, pm_type))
+                    .map(|pm_type| Self::create_load_task(pm_config, pm_type, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -722,12 +722,13 @@ impl Updates {
     fn create_load_task(
         pm_config: &updater_core::Config,
         pm_type: PackageManagerType,
+        force_refresh: bool,
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
 
         Task::future(async move {
             pm_type
-                .list_updates(&pm_config)
+                .list_updates_with_refresh(&pm_config, force_refresh)
                 .await
                 .map_err(|e| format!("Failed to load updates for {}: {}", pm_type.name(), e))
         })
@@ -737,8 +738,9 @@ impl Updates {
     fn load_updates_action(
         pm_config: &updater_core::Config,
         pm_type: PackageManagerType,
+        force_refresh: bool,
     ) -> Action {
-        Action::Run(Self::create_load_task(pm_config, pm_type))
+        Action::Run(Self::create_load_task(pm_config, pm_type, force_refresh))
     }
 
     fn update_packages_action(pm_config: &updater_core::Config, info: &UpdatesInfo) -> Action {
