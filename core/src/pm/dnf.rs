@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use log::debug;
-use std::collections::HashSet;
+use std::{collections::HashSet, process::ExitStatus};
 use tokio::process::Command;
 
 use crate::{
@@ -211,13 +211,23 @@ impl DnfManager {
             .get_package_path(crate::PackageManagerType::Dnf)
             .unwrap_or_else(|| "dnf".to_owned());
 
-        let mut command = Command::new(&path);
-        command.arg("check-upgrade");
-        if refresh {
-            command.arg("--refresh");
-        }
+        let (program, args) = build_check_upgrade_command(&path, refresh);
+        let output = Command::new(&program).args(&args).output().await?;
 
-        let output = command.output().await?;
+        if !is_check_upgrade_status_ok(&output.status) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            let detail = if stderr.is_empty() {
+                "no stderr output".to_string()
+            } else {
+                stderr.to_string()
+            };
+            return Err(CoreError::CommandError(format!(
+                "dnf check-upgrade failed with status {:?}: {}",
+                output.status.code(),
+                detail
+            )));
+        }
 
         let stdout = String::from_utf8(output.stdout)?;
         debug!("dnf check-upgrade exited: {}", output.status);
@@ -349,6 +359,26 @@ impl DnfManager {
     }
 }
 
+fn build_check_upgrade_command(path: &str, refresh: bool) -> (String, Vec<String>) {
+    if refresh {
+        return (
+            "pkexec".to_string(),
+            vec![
+                path.to_string(),
+                "check-upgrade".to_string(),
+                "--refresh".to_string(),
+            ],
+        );
+    }
+
+    (path.to_string(), vec!["check-upgrade".to_string()])
+}
+
+fn is_check_upgrade_status_ok(status: &ExitStatus) -> bool {
+    // dnf check-upgrade returns code 100 when updates are available.
+    status.success() || status.code() == Some(100)
+}
+
 fn parse_check_upgrade_entry(raw_line: &str) -> Option<(&str, &str)> {
     // Obsoleted package rows are indented and should not be treated as direct upgrades.
     if raw_line
@@ -433,5 +463,19 @@ mod tests {
     fn test_parse_check_upgrade_entry_skips_indented_obsoleted_rows() {
         let line = "    kernel-headers.x86_64 6.18.3-200.fc43 updates";
         assert!(parse_check_upgrade_entry(line).is_none());
+    }
+
+    #[test]
+    fn test_build_check_upgrade_command_without_refresh() {
+        let (program, args) = build_check_upgrade_command("/usr/bin/dnf", false);
+        assert_eq!(program, "/usr/bin/dnf");
+        assert_eq!(args, vec!["check-upgrade"]);
+    }
+
+    #[test]
+    fn test_build_check_upgrade_command_with_refresh_uses_pkexec() {
+        let (program, args) = build_check_upgrade_command("/usr/bin/dnf", true);
+        assert_eq!(program, "pkexec");
+        assert_eq!(args, vec!["/usr/bin/dnf", "check-upgrade", "--refresh"]);
     }
 }
