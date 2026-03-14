@@ -546,9 +546,9 @@ fn global_package_command_args(
                 package_name.to_owned(),
             ]),
             "update" => Ok(vec![
-                "update".to_owned(),
+                "install".to_owned(),
                 "-g".to_owned(),
-                package_name.to_owned(),
+                format!("{}@latest", package_name),
             ]),
             "uninstall" => Ok(vec![
                 "uninstall".to_owned(),
@@ -567,9 +567,9 @@ fn global_package_command_args(
                 package_name.to_owned(),
             ]),
             "update" => Ok(vec![
-                "update".to_owned(),
+                "add".to_owned(),
                 "-g".to_owned(),
-                package_name.to_owned(),
+                format!("{}@latest", package_name),
             ]),
             "uninstall" => Ok(vec![
                 "remove".to_owned(),
@@ -665,6 +665,29 @@ mod tests {
         assert_eq!(
             global_package_command_args(PackageManagerType::Pnpm, "install", "eslint").unwrap(),
             vec!["add".to_owned(), "-g".to_owned(), "eslint".to_owned()]
+        );
+    }
+
+    #[test]
+    fn test_global_package_update_args_force_latest() {
+        assert_eq!(
+            global_package_command_args(PackageManagerType::Npm, "update", "@google/gemini-cli")
+                .unwrap(),
+            vec![
+                "install".to_owned(),
+                "-g".to_owned(),
+                "@google/gemini-cli@latest".to_owned()
+            ]
+        );
+
+        assert_eq!(
+            global_package_command_args(PackageManagerType::Pnpm, "update", "@google/gemini-cli")
+                .unwrap(),
+            vec![
+                "add".to_owned(),
+                "-g".to_owned(),
+                "@google/gemini-cli@latest".to_owned()
+            ]
         );
     }
 

@@ -13,6 +13,7 @@ pub struct Settings {
     pub is_saving: bool,
     pub is_detecting: bool,
     pub selecting_manager: Option<PackageManagerType>,
+    pub detected_in_path: Vec<PackageManagerType>,
     pub save_status: Option<SaveStatus>,
 }
 
@@ -25,7 +26,9 @@ pub enum SaveStatus {
 #[derive(Debug, Clone)]
 pub enum Message {
     DetectPackageManagers,
-    FinishDetect(Config),
+    FinishDetect(Vec<PackageManagerType>),
+    AddDetectedManager(PackageManagerType),
+    UnloadManager(PackageManagerType),
     SaveConfig,
     SaveConfigResult(Result<(), String>),
     ConfigReloaded(Result<(), String>),
@@ -208,13 +211,37 @@ impl Settings {
         match message {
             Message::DetectPackageManagers => {
                 self.is_detecting = true;
-                let task = Task::future(Config::detect_package_managers())
-                    .then(|detected_config| Task::done(Message::FinishDetect(detected_config)));
+                let task = Task::future(Config::detect_available_app_managers())
+                    .then(|detected_managers| Task::done(Message::FinishDetect(detected_managers)));
                 Action::Run(task)
             }
-            Message::FinishDetect(result) => {
+            Message::FinishDetect(detected_managers) => {
                 self.is_detecting = false;
-                *pm_config = result;
+                self.detected_in_path = detected_managers;
+                Action::None
+            }
+            Message::AddDetectedManager(manager_type) => {
+                let exists = pm_config
+                    .app_managers
+                    .iter()
+                    .any(|manager| manager.manager_type == manager_type);
+
+                if !exists {
+                    pm_config.app_managers.push(PackageManagerConfig {
+                        manager_type,
+                        custom_path: None,
+                    });
+                }
+                Action::None
+            }
+            Message::UnloadManager(manager_type) => {
+                pm_config
+                    .app_managers
+                    .retain(|manager| manager.manager_type != manager_type);
+
+                if manager_type == PackageManagerType::Go {
+                    pm_config.go_bin_dir = None;
+                }
                 Action::None
             }
             Message::SaveConfig => {
@@ -328,7 +355,7 @@ impl Settings {
 
     pub fn view(&self, pm_config: &updater_core::Config) -> iced::Element<'static, Message> {
         use iced::Length;
-        use iced::widget::{column, container};
+        use iced::widget::{column, container, scrollable};
 
         let content = column![
             self.view_header(),
@@ -342,7 +369,7 @@ impl Settings {
         .padding(20)
         .width(Length::Fill);
 
-        container(content)
+        container(scrollable(content).width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -400,11 +427,12 @@ impl Settings {
         &self,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'static, Message> {
-        use iced::widget::{column, text};
+        use iced::Alignment;
+        use iced::widget::{column, container, row, text};
 
         let managers_list = if pm_config.app_managers.is_empty() {
             column![
-                text("No application package managers detected")
+                text("No application package managers in UI management")
                     .size(16)
                     .color(app::colors::ON_SURFACE_MUTED)
             ]
@@ -413,7 +441,23 @@ impl Settings {
                 pm_config
                     .app_managers
                     .iter()
-                    .map(|manager| self.view_manager_item(manager, true, pm_config))
+                    .map(|manager| {
+                        let unload_btn = Self::secondary_button(
+                            "Unload",
+                            14.0,
+                            Some(Message::UnloadManager(manager.manager_type)),
+                        );
+
+                        row![
+                            container(self.view_manager_item(manager, true, false, pm_config))
+                                .width(iced::Length::Fill),
+                            unload_btn
+                        ]
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .width(iced::Length::Fill)
+                        .into()
+                    })
                     .collect::<Vec<_>>(),
             )
             .spacing(12)
@@ -430,7 +474,7 @@ impl Settings {
         pm_config: &updater_core::Config,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
-        use iced::widget::{column, row, svg, text};
+        use iced::widget::{column, container, row, svg, text};
 
         let selection_list: Vec<PackageManagerConfig> = ALL_APP_PACKAGE_MANAGERS
             .iter()
@@ -440,6 +484,22 @@ impl Settings {
                 custom_path: None,
             })
             .collect();
+
+        let detected_count = selection_list
+            .iter()
+            .filter(|manager| self.detected_in_path.contains(&manager.manager_type))
+            .count();
+
+        let detect_tip = if self.is_detecting {
+            "Scanning $PATH...".to_string()
+        } else if detected_count == 0 {
+            "Click \"Scan $PATH\" to discover available managers.".to_string()
+        } else {
+            format!(
+                "Detected {} manager(s) in $PATH. They will only be added after manual Add.",
+                detected_count
+            )
+        };
 
         let managers_list: iced::Element<'_, Message> = if selection_list.is_empty() {
             column![
@@ -453,17 +513,42 @@ impl Settings {
                 selection_list
                     .iter()
                     .map(|manager| {
+                        let detected_in_path =
+                            self.detected_in_path.contains(&manager.manager_type);
+
+                        let action_message = if detected_in_path {
+                            Message::AddDetectedManager(manager.manager_type)
+                        } else {
+                            Message::OpenDialog(manager.manager_type)
+                        };
+
+                        let action_label = if detected_in_path {
+                            "Add"
+                        } else {
+                            "Select Path"
+                        };
+
                         let add_btn = Self::icon_button(
                             svg::Svg::new(ADD_ICON.clone()).width(16).height(16),
-                            "Add",
+                            action_label,
                             16.0,
-                            Some(Message::OpenDialog(manager.manager_type)),
+                            Some(action_message),
                         );
 
-                        row![self.view_manager_item(manager, false, pm_config), add_btn]
-                            .spacing(12)
-                            .align_y(Alignment::Center)
-                            .into()
+                        row![
+                            container(self.view_manager_item(
+                                manager,
+                                false,
+                                detected_in_path,
+                                pm_config
+                            ))
+                            .width(iced::Length::Fill),
+                            add_btn
+                        ]
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .width(iced::Length::Fill)
+                        .into()
                     })
                     .collect::<Vec<_>>(),
             )
@@ -473,6 +558,9 @@ impl Settings {
 
         column![
             Self::section_title("Add Other Package Manager"),
+            text(detect_tip)
+                .size(14)
+                .color(app::colors::ON_SURFACE_MUTED),
             managers_list
         ]
         .spacing(12)
@@ -484,6 +572,7 @@ impl Settings {
         &self,
         manager: &PackageManagerConfig,
         is_configured: bool,
+        detected_in_path: bool,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'static, Message> {
         use iced::widget::{column, row, text};
@@ -504,6 +593,8 @@ impl Settings {
                 .as_ref()
                 .map(|p| format!("Path: {}", p))
                 .unwrap_or_else(|| "Path: $PATH (System Default)".to_string())
+        } else if detected_in_path {
+            "Detected in $PATH. Click Add to use system default path.".to_string()
         } else {
             manager.manager_type.description().to_string()
         };
@@ -576,9 +667,9 @@ impl Settings {
         };
 
         let detect_label = if self.is_detecting {
-            "Detecting..."
+            "Scanning $PATH..."
         } else {
-            "Detect Package Managers"
+            "Scan $PATH"
         };
 
         let detect_btn = Self::icon_button(

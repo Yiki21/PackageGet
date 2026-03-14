@@ -260,11 +260,15 @@ impl GoManager {
             )));
         }
 
-        let s = String::from_utf8_lossy(&output.stdout);
-        Ok(s.split_whitespace()
-            .last()
-            .map(|v| v.to_string())
-            .unwrap_or_default())
+        let stdout = String::from_utf8(output.stdout)?;
+        if let Some(version) = Self::parse_latest_version_from_list_output(&stdout) {
+            return Ok(version);
+        }
+
+        Err(crate::error::CoreError::UnknownError(format!(
+            "No valid version found for package: {}",
+            package_name
+        )))
     }
 
     /// List all installed Go binaries
@@ -325,6 +329,22 @@ impl GoManager {
             .and_then(|caps| caps.get(1))
             .map(|m| m.as_str().to_string())
     }
+
+    /// Parse latest version from `go list -m -versions` output.
+    /// Output format: `module/path v0.1.0 v0.2.0 ...`
+    fn parse_latest_version_from_list_output(output: &str) -> Option<String> {
+        let tokens: Vec<&str> = output.split_whitespace().collect();
+        if tokens.len() <= 1 {
+            return None;
+        }
+
+        tokens
+            .iter()
+            .skip(1)
+            .rev()
+            .find(|token| token.starts_with('v'))
+            .map(|token| (*token).to_owned())
+    }
 }
 
 #[cfg(test)]
@@ -372,6 +392,20 @@ mod tests {
     fn test_extract_version_none() {
         let info = "some random text without version";
         let version = GoManager::extract_version(info);
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn test_parse_latest_version_from_list_output() {
+        let output = "github.com/user/tool v0.1.0 v0.2.0 v0.2.1\n";
+        let version = GoManager::parse_latest_version_from_list_output(output);
+        assert_eq!(version, Some("v0.2.1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_latest_version_from_list_output_without_versions() {
+        let output = "github.com/user/tool\n";
+        let version = GoManager::parse_latest_version_from_list_output(output);
         assert_eq!(version, None);
     }
 }

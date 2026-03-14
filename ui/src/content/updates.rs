@@ -52,6 +52,7 @@ pub struct UpdatesInfo {
     pub is_updating: bool,
     pub update_progress: Option<(usize, usize, PackageManagerType, String)>,
     pub update_logs: Vec<String>,
+    pub last_update_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +195,7 @@ impl Updates {
                     return Action::None;
                 }
                 info.is_updating = true;
+                info.last_update_error = None;
                 info.update_logs.clear();
                 let initial_manager = info
                     .selected_packages
@@ -235,6 +237,7 @@ impl Updates {
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
+                        info.last_update_error = None;
                         // Reload updates after successful update
                         // Trigger refresh to reload all package manager data
                         let pm_types: Vec<PackageManagerType> =
@@ -259,6 +262,7 @@ impl Updates {
                     }
                     Err(e) => {
                         log::error!("Failed to update packages: {}", e);
+                        info.last_update_error = Some(e);
                         Action::None
                     }
                 }
@@ -614,7 +618,7 @@ impl Updates {
     }
 
     fn batch_actions_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
-        use iced::widget::{button, checkbox, row, text};
+        use iced::widget::{button, checkbox, column, row, text};
 
         let selected_count = info.selected_packages.len();
         let is_enabled = selected_count > 0 && !info.is_updating;
@@ -713,10 +717,22 @@ impl Updates {
             update_button
         };
 
-        row![select_all_checkbox, update_button]
+        let actions_row = row![select_all_checkbox, update_button]
             .spacing(12)
-            .align_y(iced::Alignment::Center)
+            .align_y(iced::Alignment::Center);
+
+        if let Some(error) = &info.last_update_error {
+            column![
+                actions_row,
+                text(format!("Update failed: {}", error))
+                    .size(13)
+                    .color(app::colors::ERROR)
+            ]
+            .spacing(8)
             .into()
+        } else {
+            actions_row.into()
+        }
     }
 
     fn create_load_task(

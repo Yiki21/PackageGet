@@ -48,31 +48,50 @@ impl Config {
     /// Detect Package Managers in $PATH and initialize config
     pub async fn detect_package_managers() -> Self {
         let mut system_manager: Option<PackageManagerConfig> = None;
-        for sys_pm in &ALL_SYSTEM_PACKAGE_MANAGERS {
-            if sys_pm.is_available().await {
-                system_manager = Some(PackageManagerConfig {
-                    manager_type: *sys_pm,
-                    custom_path: None,
-                });
-                break;
-            }
+        if let Some(system_type) = Self::detect_system_manager_type().await {
+            system_manager = Some(PackageManagerConfig {
+                manager_type: system_type,
+                custom_path: None,
+            });
         }
 
-        let mut app_managers: Vec<PackageManagerConfig> = Vec::new();
-        for app_pm in ALL_APP_PACKAGE_MANAGERS.iter() {
-            if app_pm.is_available().await {
-                app_managers.push(PackageManagerConfig {
-                    manager_type: *app_pm,
-                    custom_path: None,
-                });
-            }
-        }
+        let app_managers: Vec<PackageManagerConfig> = Self::detect_available_app_managers()
+            .await
+            .into_iter()
+            .map(|manager_type| PackageManagerConfig {
+                manager_type,
+                custom_path: None,
+            })
+            .collect();
 
         Config {
             system_manager,
             app_managers,
             go_bin_dir: None,
         }
+    }
+
+    /// Detect available system manager in $PATH (first match by priority)
+    pub async fn detect_system_manager_type() -> Option<PackageManagerType> {
+        for manager_type in &ALL_SYSTEM_PACKAGE_MANAGERS {
+            if manager_type.is_available().await {
+                return Some(*manager_type);
+            }
+        }
+        None
+    }
+
+    /// Detect available app package managers in $PATH
+    pub async fn detect_available_app_managers() -> Vec<PackageManagerType> {
+        let mut managers = Vec::new();
+
+        for manager_type in &ALL_APP_PACKAGE_MANAGERS {
+            if manager_type.is_available().await {
+                managers.push(*manager_type);
+            }
+        }
+
+        managers
     }
 
     /// Reload configuration from file
