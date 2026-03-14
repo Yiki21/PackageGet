@@ -4,7 +4,10 @@ use tokio::{fs, process::Command};
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -16,19 +19,24 @@ struct InstalledBinary {
     path: String,
 }
 
+fn command_path(config: &Config) -> String {
+    manager_command_path(config, PackageManagerType::Go)
+}
+
 #[async_trait]
 impl PackageManager for GoManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
+        let path = command_path(config);
         let binaries = Self::list_installed_binaries(config).await?;
         let mut updates = Vec::new();
 
         for binary in binaries {
             // Try to get version info from the binary
-            if let Ok(local_info) = Self::get_binary_info(&binary.path).await {
+            if let Ok(local_info) = Self::get_binary_info(&path, &binary.path).await {
                 // Extract module path, e.g., github.com/user/repo
                 if let Some(module) = Self::extract_module_path(&local_info) {
                     // Get latest version
-                    if let Ok(latest_version) = Self::get_latest_version(&module).await {
+                    if let Ok(latest_version) = Self::get_latest_version(&path, &module).await {
                         // Extract local version
                         if let Some(local_version) = Self::extract_version(&local_info)
                             && local_version != latest_version
@@ -49,11 +57,12 @@ impl PackageManager for GoManager {
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
+        let path = command_path(config);
         let binaries = Self::list_installed_binaries(config).await?;
 
         // Try to find matching binary
         for binary in binaries {
-            if let Ok(info) = Self::get_binary_info(&binary.path).await
+            if let Ok(info) = Self::get_binary_info(&path, &binary.path).await
                 && let Some(module) = Self::extract_module_path(&info)
                 && (module == package_name || binary.name == package_name)
                 && let Some(version) = Self::extract_version(&info)
@@ -69,11 +78,12 @@ impl PackageManager for GoManager {
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
+        let path = command_path(config);
         let binaries = Self::list_installed_binaries(config).await?;
 
         let mut packages = Vec::new();
         for binary in binaries {
-            if let Ok(info) = Self::get_binary_info(&binary.path).await
+            if let Ok(info) = Self::get_binary_info(&path, &binary.path).await
                 && let Some(_module) = Self::extract_module_path(&info)
             {
                 let version = Self::extract_version(&info).unwrap_or_else(|| "unknown".to_string());
@@ -93,9 +103,7 @@ impl PackageManager for GoManager {
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Go)
-            .unwrap_or_else(|| "go".to_owned());
+        let path = command_path(config);
 
         let output = Command::new(&path)
             .arg("list")
@@ -210,9 +218,7 @@ impl GoManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Go)
-            .unwrap_or_else(|| "go".to_owned());
+        let path = command_path(config);
 
         let install_path = if package_name.contains('@') {
             package_name.to_string()
@@ -229,9 +235,7 @@ impl GoManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Go)
-            .unwrap_or_else(|| "go".to_owned());
+        let path = command_path(config);
 
         let install_path = if package_name.contains('@') {
             package_name.to_string()
@@ -244,8 +248,8 @@ impl GoManager {
     }
 
     /// Get latest version using go list
-    async fn get_latest_version(package_name: &str) -> CoreResult<String> {
-        let output = Command::new("go")
+    async fn get_latest_version(path: &str, package_name: &str) -> CoreResult<String> {
+        let output = Command::new(path)
             .arg("list")
             .arg("-m")
             .arg("-versions")
@@ -294,8 +298,8 @@ impl GoManager {
     }
 
     /// Get build info of a binary (using go version -m)
-    async fn get_binary_info(binary_path: &str) -> CoreResult<String> {
-        let output = Command::new("go")
+    async fn get_binary_info(path: &str, binary_path: &str) -> CoreResult<String> {
+        let output = Command::new(path)
             .arg("version")
             .arg("-m")
             .arg(binary_path)

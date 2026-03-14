@@ -5,7 +5,10 @@ use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -14,56 +17,124 @@ pub struct NpmManager;
 #[derive(Debug, Clone, Copy)]
 pub struct PnpmManager;
 
-#[async_trait]
-impl PackageManager for NpmManager {
-    async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        list_updates_by_manager(config, PackageManagerType::Npm).await
-    }
+#[derive(Debug, Clone, Copy)]
+enum GlobalPackageAction {
+    Install,
+    Update,
+    Uninstall,
+}
 
-    async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        get_current_version_by_manager(config, PackageManagerType::Npm, package_name).await
-    }
-
-    async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        list_installed_by_manager(config, PackageManagerType::Npm).await
-    }
-
-    async fn count_installed(config: &Config) -> CoreResult<usize> {
-        count_installed_by_manager(config, PackageManagerType::Npm).await
-    }
-
-    async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        search_package_by_manager(config, PackageManagerType::Npm, package_name).await
-    }
-
-    async fn uninstall_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
+impl GlobalPackageAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Update => "update",
+            Self::Uninstall => "uninstall",
         }
-
-        Ok(())
-    }
-
-    async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::update_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::install_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
     }
 }
+
+fn command_path(config: &Config, manager_type: PackageManagerType) -> String {
+    manager_command_path(config, manager_type)
+}
+
+async fn run_packages_silent(
+    config: &Config,
+    manager_type: PackageManagerType,
+    action: GlobalPackageAction,
+    package_names: &[String],
+) -> CoreResult<()> {
+    for package_name in package_names {
+        run_global_package_command_with_progress(
+            config,
+            manager_type,
+            action.as_str(),
+            package_name,
+            |_| {},
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+macro_rules! impl_global_js_manager {
+    ($manager:ty, $manager_type:expr) => {
+        #[async_trait]
+        impl PackageManager for $manager {
+            async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
+                list_updates_by_manager(config, $manager_type).await
+            }
+
+            async fn get_current_version(
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<String> {
+                get_current_version_by_manager(config, $manager_type, package_name).await
+            }
+
+            async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
+                list_installed_by_manager(config, $manager_type).await
+            }
+
+            async fn count_installed(config: &Config) -> CoreResult<usize> {
+                count_installed_by_manager(config, $manager_type).await
+            }
+
+            async fn search_package(
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<Vec<PackageInfo>> {
+                search_package_by_manager(config, $manager_type, package_name).await
+            }
+
+            async fn uninstall_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                run_packages_silent(
+                    config,
+                    $manager_type,
+                    GlobalPackageAction::Uninstall,
+                    package_names,
+                )
+                .await
+            }
+
+            async fn update_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                run_packages_silent(
+                    config,
+                    $manager_type,
+                    GlobalPackageAction::Update,
+                    package_names,
+                )
+                .await
+            }
+
+            async fn install_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                run_packages_silent(
+                    config,
+                    $manager_type,
+                    GlobalPackageAction::Install,
+                    package_names,
+                )
+                .await
+            }
+        }
+    };
+}
+
+impl_global_js_manager!(NpmManager, PackageManagerType::Npm);
+impl_global_js_manager!(PnpmManager, PackageManagerType::Pnpm);
 
 impl NpmManager {
     pub async fn uninstall_package_with_progress(
@@ -112,57 +183,6 @@ impl NpmManager {
     }
 }
 
-#[async_trait]
-impl PackageManager for PnpmManager {
-    async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        list_updates_by_manager(config, PackageManagerType::Pnpm).await
-    }
-
-    async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        get_current_version_by_manager(config, PackageManagerType::Pnpm, package_name).await
-    }
-
-    async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        list_installed_by_manager(config, PackageManagerType::Pnpm).await
-    }
-
-    async fn count_installed(config: &Config) -> CoreResult<usize> {
-        count_installed_by_manager(config, PackageManagerType::Pnpm).await
-    }
-
-    async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        search_package_by_manager(config, PackageManagerType::Pnpm, package_name).await
-    }
-
-    async fn uninstall_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::update_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::install_package_with_progress(config, package_name, |_| {}).await?;
-        }
-
-        Ok(())
-    }
-}
-
 impl PnpmManager {
     pub async fn uninstall_package_with_progress(
         config: &Config,
@@ -208,20 +228,6 @@ impl PnpmManager {
         )
         .await
     }
-}
-
-fn manager_default_path(manager_type: PackageManagerType) -> &'static str {
-    match manager_type {
-        PackageManagerType::Npm => "npm",
-        PackageManagerType::Pnpm => "pnpm",
-        _ => "",
-    }
-}
-
-fn manager_command_path(config: &Config, manager_type: PackageManagerType) -> String {
-    config
-        .get_package_path(manager_type)
-        .unwrap_or_else(|| manager_default_path(manager_type).to_owned())
 }
 
 fn parse_global_dependencies(value: &serde_json::Value) -> Vec<(String, String)> {
@@ -301,7 +307,7 @@ async fn list_installed_by_manager(
     config: &Config,
     manager_type: PackageManagerType,
 ) -> CoreResult<Vec<PackageInfo>> {
-    let path = manager_command_path(config, manager_type);
+    let path = command_path(config, manager_type);
 
     let output = Command::new(&path)
         .arg("ls")
@@ -408,7 +414,7 @@ async fn list_updates_by_manager(
     config: &Config,
     manager_type: PackageManagerType,
 ) -> CoreResult<Vec<PackageUpdate>> {
-    let path = manager_command_path(config, manager_type);
+    let path = command_path(config, manager_type);
 
     let mut command = Command::new(&path);
     match manager_type {
@@ -452,7 +458,7 @@ async fn search_package_by_manager(
     manager_type: PackageManagerType,
     package_name: &str,
 ) -> CoreResult<Vec<PackageInfo>> {
-    let path = manager_command_path(config, manager_type);
+    let path = command_path(config, manager_type);
     let output = Command::new(&path)
         .arg("search")
         .arg(package_name)
@@ -527,7 +533,7 @@ async fn run_global_package_command_with_progress(
     package_name: &str,
     on_progress: impl FnMut(CommandProgressEvent),
 ) -> CoreResult<()> {
-    let path = manager_command_path(config, manager_type);
+    let path = command_path(config, manager_type);
     let args = global_package_command_args(manager_type, action, package_name)?;
 
     run_command_with_progress(&path, &args, on_progress).await

@@ -4,11 +4,18 @@ use async_trait::async_trait;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct HomebrewManager;
+
+fn command_path(config: &Config) -> String {
+    manager_command_path(config, PackageManagerType::Homebrew)
+}
 
 #[async_trait]
 impl PackageManager for HomebrewManager {
@@ -21,9 +28,7 @@ impl PackageManager for HomebrewManager {
          * git (2.43.0) < 2.44.0
          * node (20.11.0) < 20.11.1
          */
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("outdated")
@@ -69,9 +74,7 @@ impl PackageManager for HomebrewManager {
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("list")
@@ -110,9 +113,7 @@ impl PackageManager for HomebrewManager {
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("info")
@@ -189,9 +190,7 @@ impl PackageManager for HomebrewManager {
     }
 
     async fn count_installed(config: &Config) -> CoreResult<usize> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("list")
@@ -207,9 +206,7 @@ impl PackageManager for HomebrewManager {
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("search")
@@ -285,9 +282,7 @@ impl HomebrewManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let args = vec!["uninstall".to_string(), package_name.to_owned()];
 
@@ -299,9 +294,7 @@ impl HomebrewManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let args = vec!["upgrade".to_string(), package_name.to_owned()];
 
@@ -313,9 +306,7 @@ impl HomebrewManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Homebrew)
-            .unwrap_or_else(|| "brew".to_owned());
+        let path = command_path(config);
 
         let args = vec!["install".to_string(), package_name.to_owned()];
 

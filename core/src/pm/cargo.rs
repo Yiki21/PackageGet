@@ -6,7 +6,10 @@ use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -19,12 +22,14 @@ struct InstalledCrate {
     bins: Vec<String>,
 }
 
+fn command_path(config: &Config) -> String {
+    manager_command_path(config, PackageManagerType::Cargo)
+}
+
 #[async_trait]
 impl PackageManager for CargoManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let install_output = Command::new(&path)
             .arg("install")
@@ -59,9 +64,7 @@ impl PackageManager for CargoManager {
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let install_output = Command::new(&path)
             .arg("install")
@@ -91,9 +94,7 @@ impl PackageManager for CargoManager {
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let install_output = Command::new(&path)
             .arg("install")
@@ -133,9 +134,7 @@ impl PackageManager for CargoManager {
     }
 
     async fn count_installed(config: &Config) -> CoreResult<usize> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let install_output = Command::new(&path)
             .arg("install")
@@ -249,9 +248,7 @@ impl PackageManager for CargoManager {
 
 impl CargoManager {
     async fn get_installed_versions(config: &Config) -> HashMap<String, String> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let output = match Command::new(&path)
             .arg("install")
@@ -283,9 +280,7 @@ impl CargoManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let args = vec!["uninstall".to_string(), package_name.to_owned()];
 
@@ -297,9 +292,7 @@ impl CargoManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let args = vec![
             "install".to_string(),
@@ -315,9 +308,7 @@ impl CargoManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Cargo)
-            .unwrap_or_else(|| "cargo".to_owned());
+        let path = command_path(config);
 
         let args = vec!["install".to_string(), package_name.to_owned()];
 

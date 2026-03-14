@@ -6,11 +6,18 @@ use tokio::process::Command;
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     error::CoreError,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct DnfManager;
+
+fn command_path(config: &Config) -> String {
+    manager_command_path(config, PackageManagerType::Dnf)
+}
 
 #[async_trait]
 impl PackageManager for DnfManager {
@@ -115,9 +122,7 @@ impl PackageManager for DnfManager {
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
+        let path = command_path(config);
 
         let output = Command::new(&path)
             .arg("search")
@@ -207,9 +212,7 @@ impl DnfManager {
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
         debug!("Starting dnf list_updates (refresh={})", refresh);
-        let path = config
-            .get_package_path(crate::PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
+        let path = command_path(config);
 
         let (program, args) = build_check_upgrade_command(&path, refresh);
         let output = Command::new(&program).args(&args).output().await?;
@@ -280,9 +283,7 @@ impl DnfManager {
             return Ok(());
         }
 
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
+        let path = command_path(config);
 
         let mut args = vec![path, "remove".to_string(), "-y".to_string()];
         args.extend(package_names.iter().cloned());
@@ -308,9 +309,7 @@ impl DnfManager {
             return Ok(());
         }
 
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
+        let path = command_path(config);
 
         let mut args = vec![
             path,
@@ -340,9 +339,7 @@ impl DnfManager {
             return Ok(());
         }
 
-        let path = config
-            .get_package_path(PackageManagerType::Dnf)
-            .unwrap_or_else(|| "dnf".to_owned());
+        let path = command_path(config);
 
         let mut args = vec![path, "install".to_string(), "-y".to_string()];
         args.extend(package_names.iter().cloned());

@@ -4,11 +4,18 @@ use async_trait::async_trait;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::progress::{CommandProgressEvent, run_command_with_progress},
+    pm::{
+        common::manager_command_path,
+        progress::{CommandProgressEvent, run_command_with_progress},
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct FlatpakManager;
+
+fn command_path(config: &Config) -> String {
+    manager_command_path(config, PackageManagerType::Flatpak)
+}
 
 #[async_trait]
 impl PackageManager for FlatpakManager {
@@ -18,9 +25,7 @@ impl PackageManager for FlatpakManager {
          * org.fedoraproject.MediaWriter  5.2.9  stable
          * org.freedesktop.Platform       24.08  24.08
          */
-        let path = config
-            .get_package_path(crate::PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("list")
@@ -85,9 +90,7 @@ impl PackageManager for FlatpakManager {
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        let path = config
-            .get_package_path(crate::PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("info")
@@ -133,9 +136,7 @@ impl PackageManager for FlatpakManager {
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("list")
@@ -213,9 +214,7 @@ impl PackageManager for FlatpakManager {
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
             .arg("search")
@@ -301,9 +300,7 @@ impl FlatpakManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let args = vec![
             "uninstall".to_string(),
@@ -319,9 +316,7 @@ impl FlatpakManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let args = vec![
             "update".to_string(),
@@ -337,9 +332,7 @@ impl FlatpakManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = config
-            .get_package_path(PackageManagerType::Flatpak)
-            .unwrap_or_else(|| "flatpak".to_owned());
+        let path = command_path(config);
 
         let args = vec![
             "install".to_string(),
