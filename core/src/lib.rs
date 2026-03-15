@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::CoreError,
     pm::{
+        apt::AptManager,
         cargo::CargoManager,
         dnf::DnfManager,
         flatpak::FlatpakManager,
         go::GoManager,
         homebrew::HomebrewManager,
         npm::{NpmManager, PnpmManager},
+        pacman::PacmanManager,
         progress::CommandProgressEvent,
+        zypper::ZypperManager,
     },
 };
 
@@ -58,7 +61,10 @@ enum PackageAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum PackageManagerType {
+    Apt,
     Dnf,
+    Pacman,
+    Zypper,
     Flatpak,
     Homebrew,
     Cargo,
@@ -67,7 +73,12 @@ pub enum PackageManagerType {
     Pnpm,
 }
 
-pub static ALL_SYSTEM_PACKAGE_MANAGERS: [PackageManagerType; 1] = [PackageManagerType::Dnf];
+pub static ALL_SYSTEM_PACKAGE_MANAGERS: [PackageManagerType; 4] = [
+    PackageManagerType::Apt,
+    PackageManagerType::Dnf,
+    PackageManagerType::Pacman,
+    PackageManagerType::Zypper,
+];
 pub static ALL_APP_PACKAGE_MANAGERS: [PackageManagerType; 6] = [
     PackageManagerType::Flatpak,
     PackageManagerType::Homebrew,
@@ -76,8 +87,11 @@ pub static ALL_APP_PACKAGE_MANAGERS: [PackageManagerType; 6] = [
     PackageManagerType::Npm,
     PackageManagerType::Pnpm,
 ];
-pub static ALL_PACKAGE_MANAGERS: [PackageManagerType; 7] = [
+pub static ALL_PACKAGE_MANAGERS: [PackageManagerType; 10] = [
+    PackageManagerType::Apt,
     PackageManagerType::Dnf,
+    PackageManagerType::Pacman,
+    PackageManagerType::Zypper,
     PackageManagerType::Flatpak,
     PackageManagerType::Homebrew,
     PackageManagerType::Cargo,
@@ -89,7 +103,10 @@ pub static ALL_PACKAGE_MANAGERS: [PackageManagerType; 7] = [
 macro_rules! dispatch_manager_static {
     ($manager:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
         match $manager {
+            PackageManagerType::Apt => AptManager::$method($($arg),*).await,
             PackageManagerType::Dnf => DnfManager::$method($($arg),*).await,
+            PackageManagerType::Pacman => PacmanManager::$method($($arg),*).await,
+            PackageManagerType::Zypper => ZypperManager::$method($($arg),*).await,
             PackageManagerType::Flatpak => FlatpakManager::$method($($arg),*).await,
             PackageManagerType::Homebrew => HomebrewManager::$method($($arg),*).await,
             PackageManagerType::Cargo => CargoManager::$method($($arg),*).await,
@@ -103,7 +120,10 @@ macro_rules! dispatch_manager_static {
 macro_rules! dispatch_manager_instance {
     ($manager:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
         match $manager {
+            PackageManagerType::Apt => AptManager.$method($($arg),*).await,
             PackageManagerType::Dnf => DnfManager.$method($($arg),*).await,
+            PackageManagerType::Pacman => PacmanManager.$method($($arg),*).await,
+            PackageManagerType::Zypper => ZypperManager.$method($($arg),*).await,
             PackageManagerType::Flatpak => FlatpakManager.$method($($arg),*).await,
             PackageManagerType::Homebrew => HomebrewManager.$method($($arg),*).await,
             PackageManagerType::Cargo => CargoManager.$method($($arg),*).await,
@@ -117,7 +137,14 @@ macro_rules! dispatch_manager_instance {
 macro_rules! dispatch_package_progress_method {
     ($manager:expr, $method:ident($config:expr, $package_name:expr, $report:expr)) => {
         match $manager {
+            PackageManagerType::Apt => AptManager::$method($config, $package_name, $report).await,
             PackageManagerType::Dnf => DnfManager::$method($config, $package_name, $report).await,
+            PackageManagerType::Pacman => {
+                PacmanManager::$method($config, $package_name, $report).await
+            }
+            PackageManagerType::Zypper => {
+                ZypperManager::$method($config, $package_name, $report).await
+            }
             PackageManagerType::Flatpak => {
                 FlatpakManager::$method($config, $package_name, $report).await
             }
@@ -137,7 +164,10 @@ macro_rules! dispatch_package_progress_method {
 impl PackageManagerType {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Apt => "APT",
             Self::Dnf => "DNF",
+            Self::Pacman => "Pacman",
+            Self::Zypper => "Zypper",
             Self::Flatpak => "Flatpak",
             Self::Homebrew => "Homebrew",
             Self::Cargo => "Cargo",
@@ -149,7 +179,10 @@ impl PackageManagerType {
 
     pub fn description(&self) -> &'static str {
         match self {
+            Self::Apt => "Debian/Ubuntu 系统包管理器",
             Self::Dnf => "Fedora/RHEL 系统包管理器",
+            Self::Pacman => "Arch Linux 系统包管理器",
+            Self::Zypper => "openSUSE/SUSE 系统包管理器",
             Self::Flatpak => "跨平台应用沙箱管理器",
             Self::Homebrew => "macOS/Linux 包管理器",
             Self::Cargo => "Rust 编程语言的包管理器",
@@ -160,12 +193,15 @@ impl PackageManagerType {
     }
 
     pub fn is_system_manager(&self) -> bool {
-        matches!(self, Self::Dnf)
+        matches!(self, Self::Apt | Self::Dnf | Self::Pacman | Self::Zypper)
     }
 
     pub async fn is_available(&self) -> bool {
         let cmd = match self {
+            Self::Apt => "apt",
             Self::Dnf => "dnf",
+            Self::Pacman => "pacman",
+            Self::Zypper => "zypper",
             Self::Flatpak => "flatpak",
             Self::Homebrew => "brew",
             Self::Cargo => "cargo",
@@ -191,10 +227,12 @@ impl PackageManagerType {
         config: &Config,
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
-        if matches!(self, Self::Dnf) {
-            DnfManager::list_updates_with_refresh(config, refresh).await
-        } else {
-            self.list_updates(config).await
+        match self {
+            Self::Apt => AptManager::list_updates_with_refresh(config, refresh).await,
+            Self::Dnf => DnfManager::list_updates_with_refresh(config, refresh).await,
+            Self::Pacman => PacmanManager::list_updates_with_refresh(config, refresh).await,
+            Self::Zypper => ZypperManager::list_updates_with_refresh(config, refresh).await,
+            _ => self.list_updates(config).await,
         }
     }
 
@@ -315,7 +353,7 @@ impl PackageManagerType {
             return Ok(());
         }
 
-        if matches!(self, Self::Dnf) {
+        if self.is_system_manager() {
             let mut report = |event: CommandProgressEvent| {
                 let progress = event.progress.clamp(0.0, 1.0);
                 let completed = if progress >= 1.0 {
@@ -333,8 +371,14 @@ impl PackageManagerType {
                 });
             };
 
-            Self::run_dnf_batch_action_with_progress(action, config, package_names, &mut report)
-                .await?;
+            Self::run_system_batch_action_with_progress(
+                *self,
+                action,
+                config,
+                package_names,
+                &mut report,
+            )
+            .await?;
             return Ok(());
         }
 
@@ -368,22 +412,69 @@ impl PackageManagerType {
         Ok(())
     }
 
-    async fn run_dnf_batch_action_with_progress(
+    async fn run_system_batch_action_with_progress(
+        manager: PackageManagerType,
         action: PackageAction,
         config: &Config,
         package_names: &[String],
         report: &mut impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        match action {
-            PackageAction::Uninstall => {
-                DnfManager::uninstall_packages_with_progress(config, package_names, report).await
-            }
-            PackageAction::Update => {
-                DnfManager::update_packages_with_progress(config, package_names, report).await
-            }
-            PackageAction::Install => {
-                DnfManager::install_packages_with_progress(config, package_names, report).await
-            }
+        match manager {
+            PackageManagerType::Apt => match action {
+                PackageAction::Uninstall => {
+                    AptManager::uninstall_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Update => {
+                    AptManager::update_packages_with_progress(config, package_names, report).await
+                }
+                PackageAction::Install => {
+                    AptManager::install_packages_with_progress(config, package_names, report).await
+                }
+            },
+            PackageManagerType::Dnf => match action {
+                PackageAction::Uninstall => {
+                    DnfManager::uninstall_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Update => {
+                    DnfManager::update_packages_with_progress(config, package_names, report).await
+                }
+                PackageAction::Install => {
+                    DnfManager::install_packages_with_progress(config, package_names, report).await
+                }
+            },
+            PackageManagerType::Pacman => match action {
+                PackageAction::Uninstall => {
+                    PacmanManager::uninstall_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Update => {
+                    PacmanManager::update_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Install => {
+                    PacmanManager::install_packages_with_progress(config, package_names, report)
+                        .await
+                }
+            },
+            PackageManagerType::Zypper => match action {
+                PackageAction::Uninstall => {
+                    ZypperManager::uninstall_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Update => {
+                    ZypperManager::update_packages_with_progress(config, package_names, report)
+                        .await
+                }
+                PackageAction::Install => {
+                    ZypperManager::install_packages_with_progress(config, package_names, report)
+                        .await
+                }
+            },
+            _ => Err(CoreError::UnknownError(
+                "batch action is only supported for system package managers".to_owned(),
+            )),
         }
     }
 
