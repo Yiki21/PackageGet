@@ -20,73 +20,8 @@ fn command_path(config: &Config) -> String {
 #[async_trait]
 impl PackageManager for FlatpakManager {
     async fn list_updates(config: &Config) -> crate::CoreResult<Vec<crate::PackageUpdate>> {
-        /*
-         * flatpak list --updates --app --columns=application,version,branch --no-heading
-         * org.fedoraproject.MediaWriter  5.2.9  stable
-         * org.freedesktop.Platform       24.08  24.08
-         */
-        let path = command_path(config);
-
-        let output = tokio::process::Command::new(&path)
-            .arg("list")
-            .arg("--updates")
-            .arg("--app")
-            .arg("--columns=application,version,branch")
-            .arg("--no-heading")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(crate::error::CoreError::UnknownError(
-                "flatpak list --updates failed".into(),
-            ));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let installed_info = Self::get_all_installed_info().await?;
-        let mut updates: Vec<PackageUpdate> = Vec::new();
-
-        for line in stdout.lines() {
-            let line = line.trim();
-
-            if line.is_empty() {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.is_empty() {
-                continue;
-            }
-
-            let app_id = parts[0];
-            let new_version = parts.get(1).map(|s| s.trim()).unwrap_or("");
-            let new_branch = parts.get(2).map(|s| s.trim()).unwrap_or("unknown");
-
-            let current_version = installed_info
-                .get(app_id)
-                .map(|(v, b)| {
-                    if v.is_empty() {
-                        format!("branch: {}", b)
-                    } else {
-                        format!("{} ({})", v, b)
-                    }
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let new_version_str = if new_version.is_empty() {
-                format!("branch: {}", new_branch)
-            } else {
-                format!("{} ({})", new_version, new_branch)
-            };
-
-            updates.push(PackageUpdate {
-                name: app_id.to_owned(),
-                current_version,
-                new_version: new_version_str,
-            });
-        }
-
-        Ok(updates)
+        let installed_info = Self::get_all_installed_info(config).await?;
+        Self::list_updates_via_remote_ls(config, &installed_info).await
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
@@ -146,7 +81,7 @@ impl PackageManager for FlatpakManager {
             .await?;
 
         if !output.status.success() {
-            let installed_info = Self::get_all_installed_info().await?;
+            let installed_info = Self::get_all_installed_info(config).await?;
             return Ok(installed_info
                 .into_iter()
                 .map(|(name, (version, branch))| {
@@ -295,6 +230,110 @@ impl PackageManager for FlatpakManager {
 }
 
 impl FlatpakManager {
+    async fn list_updates_via_remote_ls(
+        config: &Config,
+        installed_info: &HashMap<String, (String, String)>,
+    ) -> CoreResult<Vec<PackageUpdate>> {
+        let path = command_path(config);
+        let output = tokio::process::Command::new(&path)
+            .arg("remote-ls")
+            .arg("--updates")
+            .arg("--columns=application,version,branch,commit")
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(crate::error::CoreError::UnknownError(if stderr.is_empty() {
+                "flatpak remote-ls --updates failed".to_string()
+            } else {
+                format!("flatpak remote-ls --updates failed: {}", stderr)
+            }));
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut updates: Vec<PackageUpdate> = Vec::new();
+        for line in stdout.lines() {
+            let Some((app_id, version, branch, commit)) = Self::parse_update_line(line) else {
+                continue;
+            };
+
+            if let Some(update) = Self::build_package_update(
+                app_id,
+                version,
+                branch,
+                Some(commit),
+                installed_info,
+            ) {
+                updates.push(update);
+            }
+        }
+
+        Ok(updates)
+    }
+
+    fn parse_update_line(line: &str) -> Option<(&str, &str, &str, &str)> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let app_id = parts.first()?.trim();
+        if app_id.is_empty()
+            || app_id.eq_ignore_ascii_case("application")
+            || app_id.eq_ignore_ascii_case("application id")
+            || app_id.eq_ignore_ascii_case("name")
+        {
+            return None;
+        }
+
+        let version = parts.get(1).map(|s| s.trim()).unwrap_or("");
+        let branch = parts.get(2).map(|s| s.trim()).unwrap_or("");
+        let commit = parts.get(3).map(|s| s.trim()).unwrap_or("");
+
+        Some((app_id, version, branch, commit))
+    }
+
+    fn build_package_update(
+        app_id: &str,
+        new_version: &str,
+        new_branch: &str,
+        new_commit: Option<&str>,
+        installed_info: &HashMap<String, (String, String)>,
+    ) -> Option<PackageUpdate> {
+        let (installed_version, installed_branch) = installed_info.get(app_id)?;
+        let current_version = if installed_version.is_empty() {
+            format!("branch: {}", installed_branch)
+        } else {
+            format!("{} ({})", installed_version, installed_branch)
+        };
+
+        let new_version_str = if !new_version.is_empty() {
+            if new_branch.is_empty() {
+                new_version.to_string()
+            } else {
+                format!("{} ({})", new_version, new_branch)
+            }
+        } else if !new_branch.is_empty() {
+            format!("branch: {}", new_branch)
+        } else if let Some(commit) = new_commit.filter(|c| !c.is_empty()) {
+            format!("commit: {}", commit)
+        } else {
+            "unknown".to_string()
+        };
+
+        Some(PackageUpdate {
+            name: app_id.to_owned(),
+            current_version,
+            new_version: new_version_str,
+        })
+    }
+
     pub async fn uninstall_package_with_progress(
         config: &Config,
         package_name: &str,
@@ -381,10 +420,13 @@ impl FlatpakManager {
         }
     }
 
-    async fn get_all_installed_info() -> CoreResult<HashMap<String, (String, String)>> {
-        let output = tokio::process::Command::new("flatpak")
+    async fn get_all_installed_info(config: &Config) -> CoreResult<HashMap<String, (String, String)>> {
+        let path = command_path(config);
+
+        let output = tokio::process::Command::new(&path)
             .arg("list")
             .arg("--columns=application,version,branch")
+            .arg("--no-heading")
             .output()
             .await?;
 
@@ -397,32 +439,31 @@ impl FlatpakManager {
         let stdout = String::from_utf8(output.stdout)?;
         let mut info_map = HashMap::new();
 
-        for (i, line) in stdout.lines().enumerate() {
-            if i == 0 {
-                continue;
-            }
-
+        for line in stdout.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
 
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            match parts.len() {
-                3 => {
-                    info_map.insert(
-                        parts[0].to_string(),
-                        (parts[1].to_string(), parts[2].to_string()),
-                    );
-                }
-                2 => {
-                    info_map.insert(parts[0].to_string(), (String::new(), parts[1].to_string()));
-                }
-                1 => {
-                    info_map.insert(parts[0].to_string(), (String::new(), "unknown".to_string()));
-                }
-                _ => continue,
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.is_empty() {
+                continue;
             }
+
+            let app_id = parts[0].trim();
+            if app_id.is_empty() {
+                continue;
+            }
+
+            let version = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
+            let branch = parts
+                .get(2)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
+
+            info_map.insert(app_id.to_string(), (version, branch));
         }
         Ok(info_map)
     }
@@ -464,7 +505,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_installed_info() {
-        match FlatpakManager::get_all_installed_info().await {
+        let config = crate::Config::default();
+        match FlatpakManager::get_all_installed_info(&config).await {
             Ok(info) => {
                 println!("Found {} installed packages:", info.len());
                 for (app_id, (version, branch)) in info.iter().take(5) {
