@@ -10,33 +10,53 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
+    /// Whether config save is in progress.
     pub is_saving: bool,
+    /// Whether package-manager auto detection is in progress.
     pub is_detecting: bool,
+    /// Manager currently waiting for custom-path selection.
     pub selecting_manager: Option<PackageManagerType>,
+    /// Managers detected from PATH scan.
     pub detected_in_path: Vec<PackageManagerType>,
+    /// Last save result shown in UI.
     pub save_status: Option<SaveStatus>,
 }
 
 #[derive(Debug, Clone)]
 pub enum SaveStatus {
+    /// Save completed successfully.
     Success,
+    /// Save failed with error detail.
     Error(String),
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Package-manager detection message.
     DetectPackageManagers,
+    /// Detection result message.
     FinishDetect(Vec<PackageManagerType>),
+    /// Manager-add message.
     AddDetectedManager(PackageManagerType),
+    /// Manager-remove message.
     UnloadManager(PackageManagerType),
+    /// Config-save message.
     SaveConfig,
+    /// Config-save result message.
     SaveConfigResult(Result<(), String>),
+    /// Config-reload result message.
     ConfigReloaded(Result<(), String>),
+    /// Manager-path dialog message.
     OpenDialog(PackageManagerType),
+    /// Manager-path selection message.
     SelectedPath(FileHandle),
+    /// Selection-cancel message.
     CancelSelection,
+    /// Go-bin directory dialog message.
     OpenGoBinDirDialog,
+    /// Go-bin directory selection message.
     SelectedGoBinDir(FileHandle),
+    /// Go-bin directory clear message.
     ClearGoBinDir,
 }
 
@@ -48,7 +68,9 @@ impl From<Message> for content::Message {
 
 #[derive(Debug)]
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
 }
 
@@ -260,7 +282,7 @@ impl Settings {
                         log::debug!("Configuration saved successfully");
                         self.save_status = Some(SaveStatus::Success);
 
-                        // Reload config after save
+                        // Reload configuration after save.
                         let mut config = pm_config.clone();
                         let task = Task::perform(
                             async move { config.reload().await.map_err(|e| e.to_string()) },
@@ -422,7 +444,7 @@ impl Settings {
         .into()
     }
 
-    /// App Package Manager Section
+    /// App package manager section.
     fn view_app_manager_section(
         &self,
         pm_config: &updater_core::Config,
@@ -607,7 +629,7 @@ impl Settings {
                 .into(),
         ];
 
-        // GO Binary
+        // Go binary configuration.
         if is_configured && manager.manager_type == PackageManagerType::Go {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
@@ -615,14 +637,11 @@ impl Settings {
         Self::styled_container(column(content_items).spacing(8)).into()
     }
 
-    /// Just For fun To change return type from Vec to Iterator
-    /// Optimized code is often more complex and takes more effort to write than unoptimized code.
-    /// For this reason, it is only worth optimizing hot code.
+    /// Go binary configuration rows.
     fn view_go_bin_config(
         &self,
         pm_config: &updater_core::Config,
     ) -> impl Iterator<Item = iced::Element<'static, Message>> {
-        // Vec<iced::Element<'static, Message>>
         use iced::Alignment;
         use iced::widget::{row, text};
 
@@ -656,7 +675,7 @@ impl Settings {
         [info_elem, buttons.into()].into_iter()
     }
 
-    /// Buttons Widgets
+    /// Action buttons row.
     fn view_buttons(&self) -> iced::Element<'static, Message> {
         use iced::widget::{container, row, svg};
 
@@ -702,7 +721,7 @@ impl Settings {
             .into()
     }
 
-    /// Status View
+    /// Save status view.
     fn view_status(&self) -> iced::Element<'static, Message> {
         use iced::{
             Border,

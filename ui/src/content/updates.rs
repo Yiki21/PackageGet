@@ -13,57 +13,94 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Updates {
+    /// Search text for filtering updates in UI.
     search_query: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Package-manager selection message.
     SelectPackageManager(PackageManagerType, bool),
+    /// Updates-load result message.
     LoadUpdatesResult(PackageManagerType, Result<Vec<PackageUpdate>, String>),
+    /// Search-query change message.
     SearchQueryChanged(String),
+    /// Sort-option change message.
     SortOptionChanged(SortOption),
+    /// Package-selection toggle message.
     TogglePackageSelection(PackageManagerType, String, bool),
+    /// Select-all toggle message.
     ToggleSelectAll(bool),
+    /// Update-selected message.
     UpdateSelectedPackages,
+    /// Update progress message.
     UpdateProgress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to update.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Update result message.
     UpdatePackagesResult(Result<(), String>),
+    /// Update-task completion message.
     UpdateTaskFinished,
+    /// Selected-managers refresh message.
     RefreshSelected,
+    /// Full refresh message.
     RefreshAll,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdatesInfo {
+    /// Updates cache by manager `(count, updates)`.
     pub updates_by_manager: HashMap<PackageManagerType, (usize, Vec<PackageUpdate>)>,
+    /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
+    /// Managers currently loading update list.
     pub loading_updates: HashSet<PackageManagerType>,
+    /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
+    /// Whether counts have ever been loaded.
     pub has_loading_count: bool,
+    /// Initialization progress `(completed, total)`.
     pub init_progress: Option<(usize, usize)>,
+    /// Initialization command logs.
     pub init_logs: Vec<String>,
+    /// Current sort option.
     pub sort_by: SortOption,
+    /// Selected package keys for batch operations.
     pub selected_packages: HashSet<PackageSelectionKey>,
+    /// Whether update operation is in progress.
     pub is_updating: bool,
+    /// Update progress `(completed, total, manager, package)`.
     pub update_progress: Option<(usize, usize, PackageManagerType, String)>,
+    /// Update command logs.
     pub update_logs: Vec<String>,
+    /// Last update error shown in UI.
     pub last_update_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 enum UpdateTaskEvent {
     Progress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to update.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Final update result.
     Done(Result<(), String>),
 }
 
@@ -74,7 +111,9 @@ impl From<Message> for content::Message {
 }
 
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
 }
 
@@ -121,6 +160,11 @@ impl Updates {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
                 if selected {
+                    // Managers still in init phase are not selectable yet.
+                    if info.is_loading_count && !info.updates_by_manager.contains_key(&pm_type) {
+                        return Action::None;
+                    }
+
                     info.selected_managers.insert(pm_type);
 
                     if info.loading_updates.contains(&pm_type) {
@@ -175,7 +219,7 @@ impl Updates {
             }
             Message::ToggleSelectAll(select_all) => {
                 if select_all {
-                    // Select all visible packages from selected managers
+                    // Select all visible packages from selected managers.
                     for pm_type in &info.selected_managers {
                         if let Some((_, packages)) = info.updates_by_manager.get(pm_type) {
                             for pkg in packages {
@@ -185,7 +229,7 @@ impl Updates {
                         }
                     }
                 } else {
-                    // Deselect all
+                    // Clear all selected packages.
                     info.selected_packages.clear();
                 }
                 Action::None
@@ -238,8 +282,7 @@ impl Updates {
                     Ok(_) => {
                         info.selected_packages.clear();
                         info.last_update_error = None;
-                        // Reload updates after successful update
-                        // Trigger refresh to reload all package manager data
+                        // Reload updates after a successful update run.
                         let pm_types: Vec<PackageManagerType> =
                             info.selected_managers.iter().copied().collect();
 
@@ -247,12 +290,12 @@ impl Updates {
                             return Action::None;
                         }
 
-                        // Set loading state for selected package managers
+                        // Mark selected managers as loading.
                         for pm_type in &pm_types {
                             info.loading_updates.insert(*pm_type);
                         }
 
-                        // Create loading tasks for selected package managers
+                        // Create load tasks for selected managers.
                         let tasks: Vec<Task<Message>> = pm_types
                             .into_iter()
                             .map(|pm_type| Self::create_load_task(pm_config, pm_type, false))
@@ -275,12 +318,12 @@ impl Updates {
                     return Action::None;
                 }
 
-                // Set loading state for all package managers
+                // Mark selected managers as loading.
                 for pm_type in &pm_types {
                     info.loading_updates.insert(*pm_type);
                 }
 
-                // Create loading tasks for all package managers
+                // Create load tasks for selected managers.
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
                     .map(|pm_type| Self::create_load_task(pm_config, pm_type, true))
@@ -341,14 +384,14 @@ impl Updates {
         .into()
     }
 
-    // === View components ===
+    // View components.
 
     fn manager_filter_view<'a>(
         &self,
         info: &'a UpdatesInfo,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'a, Message> {
-        let filters_content = if info.is_loading_count || !info.has_loading_count {
+        let filters_content = if !info.has_loading_count {
             SharedUi::loading_manager_filter_view(
                 pm_config,
                 if info.is_loading_count {
@@ -382,6 +425,9 @@ impl Updates {
                 entries,
                 &info.selected_managers,
                 &info.loading_updates,
+                move |pm_type| {
+                    info.is_loading_count && !info.updates_by_manager.contains_key(&pm_type)
+                },
                 Message::SelectPackageManager,
             )
         };
@@ -439,7 +485,7 @@ impl Updates {
     fn updates_list_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
         use iced::widget::{column, scrollable};
 
-        if info.is_loading_count || !info.has_loading_count {
+        if !info.has_loading_count {
             return SharedUi::centered_message(if info.is_loading_count {
                 "Loading update information..."
             } else {
@@ -623,7 +669,7 @@ impl Updates {
         let selected_count = info.selected_packages.len();
         let is_enabled = selected_count > 0 && !info.is_updating;
 
-        // Count total visible packages from selected managers
+        // Count visible packages in selected managers.
         let total_visible: usize = info
             .selected_managers
             .iter()
@@ -763,7 +809,7 @@ impl Updates {
         let pm_config = pm_config.clone();
         let selected_packages = info.selected_packages.clone();
 
-        // Group packages by their package manager
+        // Group selected packages by package manager.
         let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
 
         for pm_type in info.selected_managers.iter() {

@@ -25,56 +25,91 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Installed {
+    /// Search text for filtering installed packages in UI.
     search_query: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Package-manager selection message.
     SelectPackageManager(PackageManagerType, bool),
+    /// Installed-load result message.
     LoadInstalledResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
+    /// Installed refresh message.
     RefreshInfo,
+    /// Search-query change message.
     SearchQueryChanged(String),
+    /// Sort-option change message.
     SortOptionChanged(SortOption),
+    /// Package-selection toggle message.
     TogglePackageSelection(PackageManagerType, String, bool),
+    /// Select-all toggle message.
     ToggleSelectAll(bool),
+    /// Remove-selected message.
     RemoveSelectedPackages,
+    /// Remove progress message.
     RemoveProgress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to remove.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Remove result message.
     RemovePackagesResult(Result<(), String>),
+    /// Remove-task completion message.
     RemoveTaskFinished,
 }
 
 /// Information about installed packages passed from app state
 #[derive(Debug, Clone, Default)]
 pub struct InstalledInfo {
+    /// Installed package cache by manager `(count, packages)`.
     pub installed_packages: HashMap<PackageManagerType, (usize, Vec<PackageInfo>)>,
+    /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
+    /// Managers currently loading full installed package list.
     pub loading_installed: HashSet<PackageManagerType>,
+    /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
+    /// Whether counts have ever been loaded.
     pub has_loading_count: bool,
+    /// Initialization progress `(completed, total)`.
     pub init_progress: Option<(usize, usize)>,
+    /// Initialization command logs.
     pub init_logs: Vec<String>,
+    /// Current sort option.
     pub sort_by: SortOption,
+    /// Selected package keys for batch operations.
     pub selected_packages: HashSet<PackageSelectionKey>,
+    /// Whether remove operation is in progress.
     pub is_removing: bool,
+    /// Remove progress `(completed, total, manager, package)`.
     pub remove_progress: Option<(usize, usize, PackageManagerType, String)>,
+    /// Remove command logs.
     pub remove_logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 enum RemoveTaskEvent {
     Progress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to remove.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Final remove result.
     Done(Result<(), String>),
 }
 
@@ -85,8 +120,11 @@ impl From<Message> for content::Message {
 }
 
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
+    /// Cache-clear and reload request action.
     ClearCacheAndReload,
 }
 
@@ -132,6 +170,11 @@ impl Installed {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
                 if selected {
+                    // Managers still in init phase are not selectable yet.
+                    if info.is_loading_count && !info.installed_packages.contains_key(&pm_type) {
+                        return Action::None;
+                    }
+
                     info.selected_managers.insert(pm_type);
                     if let Some((count, packages)) = info.installed_packages.get(&pm_type) {
                         if *count == packages.len() {
@@ -172,12 +215,12 @@ impl Installed {
                     return Action::None;
                 }
 
-                // Set loading state for all package managers
+                // Mark all managers as loading.
                 for pm_type in &pm_types {
                     info.loading_installed.insert(*pm_type);
                 }
 
-                // Create loading tasks for all package managers
+                // Create load tasks for all managers.
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
                     .map(|pm_type| Self::create_load_task(pm_config, pm_type))
@@ -204,7 +247,7 @@ impl Installed {
             }
             Message::ToggleSelectAll(select_all) => {
                 if select_all {
-                    // Select all visible packages from selected managers
+                    // Select all visible packages from selected managers.
                     for pm_type in &info.selected_managers {
                         if let Some((_, packages)) = info.installed_packages.get(pm_type) {
                             for pkg in packages {
@@ -214,7 +257,7 @@ impl Installed {
                         }
                     }
                 } else {
-                    // Deselect all
+                    // Clear all selected packages.
                     info.selected_packages.clear();
                 }
                 Action::None
@@ -265,7 +308,7 @@ impl Installed {
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
-                        // Reload packages after removal
+                        // Reload package data after removal.
                         Action::ClearCacheAndReload
                     }
                     Err(e) => {
@@ -309,14 +352,14 @@ impl Installed {
         .into()
     }
 
-    // === View components ===
+    // View components.
 
     fn manager_filter_view<'a>(
         &self,
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'a, Message> {
-        let filters_content = if info.is_loading_count || !info.has_loading_count {
+        let filters_content = if !info.has_loading_count {
             SharedUi::loading_manager_filter_view(
                 pm_config,
                 if info.is_loading_count {
@@ -325,19 +368,33 @@ impl Installed {
                     "Waiting to load package information"
                 },
             )
-        } else if info.installed_packages.is_empty() {
-            SharedUi::empty_filter_view("No installed packages found")
         } else {
-            let entries = info
-                .installed_packages
+            let managers = SharedUi::configured_managers(pm_config);
+            if managers.is_empty() {
+                return SharedUi::filter_section(
+                    "Filter Package Managers",
+                    SharedUi::empty_filter_view("No package managers detected"),
+                );
+            }
+
+            let entries = managers
                 .iter()
-                .map(|(pm_type, (count, _))| (*pm_type, *count))
+                .map(|pm_type| {
+                    let count = info
+                        .installed_packages
+                        .get(pm_type)
+                        .map_or(0, |(count, _)| *count);
+                    (*pm_type, count)
+                })
                 .collect();
 
             SharedUi::active_manager_filter_view(
                 entries,
                 &info.selected_managers,
                 &info.loading_installed,
+                move |pm_type| {
+                    info.is_loading_count && !info.installed_packages.contains_key(&pm_type)
+                },
                 Message::SelectPackageManager,
             )
         };
@@ -372,7 +429,7 @@ impl Installed {
         .into()
     }
 
-    // === Package list views ===
+    // Package list views.
 
     fn search_input_view(&self) -> iced::Element<'static, Message> {
         SharedUi::search_input_view(
@@ -386,7 +443,7 @@ impl Installed {
     fn packages_list_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
         use iced::widget::{column, scrollable};
 
-        if info.is_loading_count || !info.has_loading_count {
+        if !info.has_loading_count {
             return self.centered_message(if info.is_loading_count {
                 "Loading package information..."
             } else {
@@ -557,7 +614,7 @@ impl Installed {
         let selected_count = info.selected_packages.len();
         let is_enabled = selected_count > 0 && !info.is_removing;
 
-        // Count total visible packages from selected managers
+        // Count visible packages in selected managers.
         let total_visible: usize = info
             .selected_managers
             .iter()
@@ -686,7 +743,7 @@ impl Installed {
         let pm_config = pm_config.clone();
         let selected_packages = info.selected_packages.clone();
 
-        // Group packages by their package manager
+        // Group selected packages by package manager.
         let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
 
         for pm_type in info.selected_managers.iter() {

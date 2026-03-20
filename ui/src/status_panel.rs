@@ -15,12 +15,19 @@ use crate::{
 /// Stateful bottom panel that presents overall progress and command output.
 #[derive(Debug, Clone)]
 pub struct StatusPanel {
+    /// Progress bar animation state.
     progress_animation: Animation<f32>,
+    /// Target progress value for animation.
     progress_target: f32,
+    /// Last frame/update timestamp.
     last_frame: Instant,
+    /// Current status text shown to user.
     status_label: String,
+    /// Current interpolated progress value in [0, 1].
     progress: f32,
+    /// Merged command logs displayed in panel.
     command_logs: Vec<String>,
+    /// Aggregated known progress as `(done, total)`.
     progress_counts: Option<(usize, usize)>,
 }
 
@@ -30,7 +37,9 @@ pub struct StatusPanel {
 /// non-panel updates so the panel can recalculate animation targets.
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
+    /// Frame tick message from the window subscription.
     Tick(Instant),
+    /// Sync message after non-panel state updates.
     Sync(Instant),
 }
 
@@ -38,7 +47,9 @@ pub enum Message {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(Task<Message>),
 }
 
@@ -50,7 +61,9 @@ impl From<Message> for app::Message {
 
 #[derive(Debug, Default)]
 struct ProgressCounter {
+    /// Aggregated total units of work.
     total: usize,
+    /// Aggregated completed units of work.
     done: usize,
 }
 

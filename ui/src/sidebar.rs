@@ -12,29 +12,38 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct SideBar {
+    /// Currently selected sidebar tab.
     pub active_tab: Tab,
 }
 
-// Will move to separate files later
+// TODO: Move sidebar types into dedicated files.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Copy)]
 pub enum Tab {
+    /// Search/install page.
     #[default]
     Finding,
+    /// Available updates page.
     Updates,
+    /// Installed packages page.
     Installed,
+    /// Settings page.
     Settings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
+    /// Tab selection message.
     Select(Tab),
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum Action {
+    /// No-op action.
     None,
+    /// Content page switch action.
     ChangeContent(ActiveContentPage),
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
 }
 

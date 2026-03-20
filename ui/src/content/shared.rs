@@ -262,6 +262,7 @@ impl SharedUi {
         entries: Vec<(PackageManagerType, usize)>,
         selected_managers: &'a HashSet<PackageManagerType>,
         loading_managers: &'a HashSet<PackageManagerType>,
+        is_initializing: impl Fn(PackageManagerType) -> bool + Copy + 'a,
         on_toggle: impl Fn(PackageManagerType, bool) -> Message + Copy + 'a,
     ) -> iced::widget::Column<'a, Message>
     where
@@ -270,9 +271,13 @@ impl SharedUi {
         column(entries.into_iter().map(move |(pm_type, count)| {
             let is_selected = selected_managers.contains(&pm_type);
             let is_loading = loading_managers.contains(&pm_type);
+            let is_initializing = is_initializing(pm_type);
+            let is_disabled = is_loading || is_initializing;
 
             let label = if is_loading {
                 format!("{} (Loading...)", pm_type.name())
+            } else if is_initializing {
+                format!("{} (Initializing...)", pm_type.name())
             } else {
                 format!("{} ({})", pm_type.name(), count)
             };
@@ -281,9 +286,9 @@ impl SharedUi {
                 .label(label)
                 .spacing(10)
                 .text_size(15)
-                .style(SharedUi::checkbox_style(is_loading));
+                .style(SharedUi::checkbox_style(is_disabled));
 
-            if is_loading {
+            if is_disabled {
                 checkbox.into()
             } else {
                 checkbox

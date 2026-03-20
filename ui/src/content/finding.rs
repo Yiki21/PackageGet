@@ -13,51 +13,82 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Finding {
+    /// Search query being edited by user.
     search_query: String,
-    last_search_query: String, // Track last executed search
+    /// Last executed query used for post-install refresh.
+    last_search_query: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Package-manager selection message.
     SelectPackageManager(PackageManagerType, bool),
+    /// Search-query change message.
     SearchQueryChanged(String),
+    /// Search execution message.
     ExecuteSearch,
+    /// Search result message.
     SearchResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
+    /// Sort-option change message.
     SortOptionChanged(SortOption),
+    /// Package-selection toggle message.
     TogglePackageSelection(PackageManagerType, String, bool),
+    /// Install-selected message.
     InstallSelectedPackages,
+    /// Install progress message.
     InstallProgress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to install.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Install result message.
     InstallPackagesResult(Result<(), String>),
+    /// Install-task completion message.
     InstallTaskFinished,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FindingInfo {
+    /// Search results grouped by manager.
     pub search_results: HashMap<PackageManagerType, Vec<PackageInfo>>,
+    /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
+    /// Managers currently running search.
     pub searching_managers: HashSet<PackageManagerType>,
+    /// Current sort option.
     pub sort_by: SortOption,
+    /// Selected package keys for batch operations.
     pub selected_packages: HashSet<PackageSelectionKey>,
+    /// Whether install operation is in progress.
     pub is_installing: bool,
+    /// Install progress `(completed, total, manager, package)`.
     pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
+    /// Install command logs.
     pub install_logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 enum InstallTaskEvent {
     Progress {
+        /// Number of finished packages.
         completed: usize,
+        /// Total packages to install.
         total: usize,
+        /// Manager currently executing command.
         manager: PackageManagerType,
+        /// Current package being processed.
         current_package: String,
+        /// Optional command output/status line.
         command_message: Option<String>,
     },
+    /// Final install result.
     Done(Result<(), String>),
 }
 
@@ -68,7 +99,9 @@ impl From<Message> for content::Message {
 }
 
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
 }
 
@@ -120,18 +153,18 @@ impl Finding {
                     return Action::None;
                 }
 
-                // Only search in selected managers
+                // Search only in selected managers.
                 if info.selected_managers.is_empty() {
                     return Action::None;
                 }
 
-                // Clear previous results before running a new search
+                // Clear previous results before running a new search.
                 info.search_results.clear();
                 info.selected_packages.clear();
                 info.searching_managers.clear();
                 self.last_search_query = query.to_string();
 
-                // Mark all selected managers as searching
+                // Mark selected managers as searching.
                 for pm_type in info.selected_managers.iter() {
                     info.searching_managers.insert(*pm_type);
                 }
@@ -209,9 +242,9 @@ impl Finding {
                 match result {
                     Ok(_) => {
                         info.selected_packages.clear();
-                        // Re-execute search to update package status
+                        // Re-run search to refresh package status.
                         if !self.last_search_query.is_empty() {
-                            // Mark all selected managers as searching
+                            // Mark selected managers as searching.
                             for pm_type in info.selected_managers.iter() {
                                 info.searching_managers.insert(*pm_type);
                             }
@@ -263,7 +296,7 @@ impl Finding {
         .into()
     }
 
-    // === View components ===
+    // View components.
 
     fn manager_filter_view<'a>(
         &self,
@@ -453,8 +486,7 @@ impl Finding {
                 sorted.sort_by(|a, b| a.name.cmp(&b.name));
             }
             SortOption::Relevance => {
-                // For relevance, keep original order (usually search engines return by relevance)
-                // or do a more sophisticated relevance sort
+                // Keep provider order for relevance sorting.
             }
         }
 
@@ -508,7 +540,7 @@ impl Finding {
         let version_text = package.version.trim();
 
         let main_row = if is_not_installed {
-            // Show "Not Installed" badge with distinct styling
+            // Render a dedicated badge for not-installed packages.
             row![
                 checkbox,
                 name_with_desc,
@@ -534,7 +566,7 @@ impl Finding {
                 })
             ]
         } else if !version_text.is_empty() && version_text != "unknown" {
-            // Search result version (not necessarily installed version)
+            // Render result version (not necessarily installed version).
             row![
                 checkbox,
                 name_with_desc,
@@ -658,7 +690,7 @@ impl Finding {
             .into()
     }
 
-    // === Action creators ===
+    // Action creators.
 
     fn execute_search_action(
         pm_config: &updater_core::Config,
@@ -692,7 +724,7 @@ impl Finding {
         let pm_config = pm_config.clone();
         let selected_packages = info.selected_packages.clone();
 
-        // Group packages by their package manager
+        // Group selected packages by package manager.
         let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
 
         for (pm_type, packages) in info.search_results.iter() {

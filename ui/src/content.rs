@@ -10,40 +10,55 @@ use crate::{
     content::{finding::Finding, installed::Installed, setting::Settings, updates::Updates},
 };
 
-// pub use installed::SortOption;
 pub use finding::FindingInfo;
 pub use installed::InstalledInfo;
 pub use updates::UpdatesInfo;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ActiveContentPage {
+    /// Search/install page.
     #[default]
     Finding,
+    /// Available updates page.
     Updates,
+    /// Installed packages page.
     Installed,
+    /// Settings page.
     Settings,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Content {
+    /// Currently visible content page.
     pub active_content: ActiveContentPage,
+    /// Settings page state.
     pub settings: Settings,
+    /// Installed page state.
     pub installed: Installed,
+    /// Updates page state.
     pub updates: Updates,
+    /// Finding page state.
     pub finding: Finding,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Settings page message.
     Settings(setting::Message),
+    /// Installed page message.
     Installed(installed::Message),
+    /// Updates page message.
     Updates(updates::Message),
+    /// Finding page message.
     Finding(finding::Message),
 }
 
 pub enum Action {
+    /// No-op action.
     None,
+    /// Asynchronous task action.
     Run(iced::Task<Message>),
+    /// Installed-data reload request action.
     ReloadInstalledData,
 }
 
