@@ -244,11 +244,13 @@ impl FlatpakManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(crate::error::CoreError::UnknownError(if stderr.is_empty() {
-                "flatpak remote-ls --updates failed".to_string()
-            } else {
-                format!("flatpak remote-ls --updates failed: {}", stderr)
-            }));
+            return Err(crate::error::CoreError::UnknownError(
+                if stderr.is_empty() {
+                    "flatpak remote-ls --updates failed".to_string()
+                } else {
+                    format!("flatpak remote-ls --updates failed: {}", stderr)
+                },
+            ));
         }
 
         let stdout = String::from_utf8(output.stdout)?;
@@ -258,13 +260,9 @@ impl FlatpakManager {
                 continue;
             };
 
-            if let Some(update) = Self::build_package_update(
-                app_id,
-                version,
-                branch,
-                Some(commit),
-                installed_info,
-            ) {
+            if let Some(update) =
+                Self::build_package_update(app_id, version, branch, Some(commit), installed_info)
+            {
                 updates.push(update);
             }
         }
@@ -420,7 +418,9 @@ impl FlatpakManager {
         }
     }
 
-    async fn get_all_installed_info(config: &Config) -> CoreResult<HashMap<String, (String, String)>> {
+    async fn get_all_installed_info(
+        config: &Config,
+    ) -> CoreResult<HashMap<String, (String, String)>> {
         let path = command_path(config);
 
         let output = tokio::process::Command::new(&path)
