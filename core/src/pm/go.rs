@@ -219,12 +219,7 @@ impl GoManager {
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = command_path(config);
-
-        let install_path = if package_name.contains('@') {
-            package_name.to_string()
-        } else {
-            format!("{}@latest", package_name)
-        };
+        let install_path = Self::resolve_install_path(config, package_name).await?;
 
         let args = vec!["install".to_string(), install_path];
         run_command_with_progress(&path, &args, on_progress).await
@@ -236,12 +231,7 @@ impl GoManager {
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         let path = command_path(config);
-
-        let install_path = if package_name.contains('@') {
-            package_name.to_string()
-        } else {
-            format!("{}@latest", package_name)
-        };
+        let install_path = Self::resolve_install_path(config, package_name).await?;
 
         let args = vec!["install".to_string(), install_path];
         run_command_with_progress(&path, &args, on_progress).await
@@ -314,6 +304,49 @@ impl GoManager {
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    async fn resolve_install_path(config: &Config, package_name: &str) -> CoreResult<String> {
+        if package_name.contains('@') {
+            return Ok(package_name.to_string());
+        }
+
+        if Self::looks_like_module_path(package_name) {
+            return Ok(format!("{package_name}@latest"));
+        }
+
+        let path = command_path(config);
+        let binaries = Self::list_installed_binaries(config).await?;
+
+        for binary in binaries {
+            if binary.name != package_name {
+                continue;
+            }
+
+            if let Ok(info) = Self::get_binary_info(&path, &binary.path).await
+                && let Some(module_path) = Self::extract_module_path(&info)
+            {
+                return Ok(Self::build_install_path(&module_path));
+            }
+        }
+
+        Ok(Self::build_install_path(package_name))
+    }
+
+    fn build_install_path(package_name: &str) -> String {
+        if package_name.contains('@') {
+            package_name.to_string()
+        } else {
+            format!("{package_name}@latest")
+        }
+    }
+
+    fn looks_like_module_path(package_name: &str) -> bool {
+        package_name.contains('/')
+            || package_name
+                .split('/')
+                .next()
+                .is_some_and(|segment| segment.contains('.'))
     }
 
     /// Extract module path from go version -m output
@@ -411,5 +444,27 @@ mod tests {
         let output = "github.com/user/tool\n";
         let version = GoManager::parse_latest_version_from_list_output(output);
         assert_eq!(version, None);
+    }
+
+    #[test]
+    fn test_build_install_path_appends_latest_for_module_path() {
+        let install_path = GoManager::build_install_path("github.com/nao1215/gup");
+        assert_eq!(install_path, "github.com/nao1215/gup@latest");
+    }
+
+    #[test]
+    fn test_build_install_path_preserves_explicit_version() {
+        let install_path = GoManager::build_install_path("github.com/nao1215/gup@v1.1.3");
+        assert_eq!(install_path, "github.com/nao1215/gup@v1.1.3");
+    }
+
+    #[test]
+    fn test_looks_like_module_path_for_domain_based_package() {
+        assert!(GoManager::looks_like_module_path("github.com/nao1215/gup"));
+    }
+
+    #[test]
+    fn test_looks_like_module_path_for_binary_name() {
+        assert!(!GoManager::looks_like_module_path("gup"));
     }
 }
