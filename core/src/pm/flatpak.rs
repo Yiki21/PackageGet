@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    process::Stdio,
+};
 
 use async_trait::async_trait;
 
@@ -21,7 +24,7 @@ fn command_path(config: &Config) -> String {
 impl PackageManager for FlatpakManager {
     async fn list_updates(config: &Config) -> crate::CoreResult<Vec<crate::PackageUpdate>> {
         let installed_info = Self::get_all_installed_info(config).await?;
-        Self::list_updates_via_remote_ls(config, &installed_info).await
+        Self::list_updates_via_update(config, &installed_info).await
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
@@ -230,71 +233,107 @@ impl PackageManager for FlatpakManager {
 }
 
 impl FlatpakManager {
-    async fn list_updates_via_remote_ls(
+    async fn list_updates_via_update(
         config: &Config,
         installed_info: &HashMap<String, (String, String)>,
     ) -> CoreResult<Vec<PackageUpdate>> {
         let path = command_path(config);
         let output = tokio::process::Command::new(&path)
-            .arg("remote-ls")
-            .arg("--updates")
-            .arg("--columns=application,version,branch,commit")
+            .arg("update")
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdin(Stdio::null())
             .output()
             .await?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(crate::error::CoreError::UnknownError(
-                if stderr.is_empty() {
-                    "flatpak remote-ls --updates failed".to_string()
-                } else {
-                    format!("flatpak remote-ls --updates failed: {}", stderr)
-                },
-            ));
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let combined_output = match (stdout.trim(), stderr.trim()) {
+            ("", "") => String::new(),
+            ("", _) => stderr.clone(),
+            (_, "") => stdout.clone(),
+            _ => format!("{stdout}\n{stderr}"),
+        };
+
+        let updates = Self::parse_updates_from_update_output(&combined_output, installed_info);
+        if !updates.is_empty() || output.status.success() {
+            return Ok(updates);
         }
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut updates: Vec<PackageUpdate> = Vec::new();
-        for line in stdout.lines() {
-            let Some((app_id, version, branch, commit)) = Self::parse_update_line(line) else {
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        Err(crate::error::CoreError::UnknownError(
+            if detail.is_empty() {
+                "flatpak update failed".to_string()
+            } else {
+                format!("flatpak update failed: {}", detail)
+            },
+        ))
+    }
+
+    fn parse_updates_from_update_output(
+        output: &str,
+        installed_info: &HashMap<String, (String, String)>,
+    ) -> Vec<PackageUpdate> {
+        let mut updates = Vec::new();
+        let mut seen = HashSet::new();
+
+        for line in output.lines() {
+            let Some((app_id, branch)) = Self::parse_update_listing_line(line) else {
                 continue;
             };
 
+            if !seen.insert(app_id.to_string()) {
+                continue;
+            }
+
             if let Some(update) =
-                Self::build_package_update(app_id, version, branch, Some(commit), installed_info)
+                Self::build_package_update(app_id, "", branch, None, installed_info)
             {
                 updates.push(update);
             }
         }
 
-        Ok(updates)
+        updates
     }
 
-    fn parse_update_line(line: &str) -> Option<(&str, &str, &str, &str)> {
-        let line = line.trim();
-        if line.is_empty() {
+    fn parse_update_listing_line(line: &str) -> Option<(&str, &str)> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 || !Self::is_numbered_update_row(parts[0]) {
             return None;
         }
 
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.is_empty() {
-            return None;
-        }
-
-        let app_id = parts.first()?.trim();
-        if app_id.is_empty()
-            || app_id.eq_ignore_ascii_case("application")
-            || app_id.eq_ignore_ascii_case("application id")
-            || app_id.eq_ignore_ascii_case("name")
+        let mut index = 1;
+        if parts
+            .get(index)
+            .is_some_and(|part| part.starts_with('[') && part.ends_with(']'))
         {
+            index += 1;
+        }
+
+        let app_id = *parts.get(index)?;
+        if !app_id.contains('.') {
             return None;
         }
 
-        let version = parts.get(1).map(|s| s.trim()).unwrap_or("");
-        let branch = parts.get(2).map(|s| s.trim()).unwrap_or("");
-        let commit = parts.get(3).map(|s| s.trim()).unwrap_or("");
+        let branch = *parts.get(index + 1)?;
+        let op = *parts.get(index + 2)?;
+        if op.len() != 1 || !op.chars().all(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
 
-        Some((app_id, version, branch, commit))
+        Some((app_id, branch))
+    }
+
+    fn is_numbered_update_row(part: &str) -> bool {
+        let Some(number) = part.strip_suffix('.') else {
+            return false;
+        };
+
+        !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
     }
 
     fn build_package_update(
@@ -318,7 +357,7 @@ impl FlatpakManager {
                 format!("{} ({})", new_version, new_branch)
             }
         } else if !new_branch.is_empty() {
-            format!("branch: {}", new_branch)
+            format!("update available ({})", new_branch)
         } else if let Some(commit) = new_commit.filter(|c| !c.is_empty()) {
             format!("commit: {}", commit)
         } else {
@@ -501,6 +540,22 @@ mod tests {
         let (v, b) = FlatpakManager::extract_version_and_branch(&["stable", "x86_64", "flathub"]);
         assert_eq!(v, "");
         assert_eq!(b, "stable");
+    }
+
+    #[test]
+    fn test_parse_update_listing_line_handles_terminal_output() {
+        let parsed = FlatpakManager::parse_update_listing_line(
+            " 1. [✓] org.gnome.Platform.Locale 49 u flathub 18.5 kB / 385.5 MB",
+        );
+        assert_eq!(parsed, Some(("org.gnome.Platform.Locale", "49")));
+    }
+
+    #[test]
+    fn test_parse_update_listing_line_handles_non_tty_output() {
+        let parsed = FlatpakManager::parse_update_listing_line(
+            " 3.\t\torg.freedesktop.Platform.Locale\t25.08\tu\tflathub\t< 378.7 MB",
+        );
+        assert_eq!(parsed, Some(("org.freedesktop.Platform.Locale", "25.08")));
     }
 
     #[tokio::test]
