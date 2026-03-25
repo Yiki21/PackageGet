@@ -465,7 +465,6 @@ impl FlatpakManager {
         let output = tokio::process::Command::new(&path)
             .arg("list")
             .arg("--columns=application,version,branch")
-            .arg("--no-heading")
             .output()
             .await?;
 
@@ -478,7 +477,7 @@ impl FlatpakManager {
         let stdout = String::from_utf8(output.stdout)?;
         let mut info_map = HashMap::new();
 
-        for line in stdout.lines() {
+        for (index, line) in stdout.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -490,6 +489,9 @@ impl FlatpakManager {
             }
 
             let app_id = parts[0].trim();
+            if index == 0 && app_id.eq_ignore_ascii_case("application") {
+                continue;
+            }
             if app_id.is_empty() {
                 continue;
             }
