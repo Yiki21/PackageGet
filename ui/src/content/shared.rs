@@ -4,7 +4,10 @@ use iced::widget::{column, container, text, text_input};
 use iced::{Border, Element};
 use updater_core::{Config, PackageManagerType};
 
-use crate::app;
+use crate::{
+    app,
+    content::errors::{ManagerErrors, joined_manager_names},
+};
 
 pub type PackageSelectionKey = (PackageManagerType, String);
 
@@ -202,6 +205,104 @@ impl SharedUi {
         ]
         .spacing(12)
         .into()
+    }
+
+    pub fn section_with_note<'a, Message>(
+        title: &'static str,
+        note: Option<Element<'a, Message>>,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        let mut section = column![Self::section_title(title)];
+        if let Some(note) = note {
+            section = section.push(note);
+        }
+
+        section
+            .push(Self::styled_container(content))
+            .spacing(12)
+            .into()
+    }
+
+    pub fn manager_filter_section<'a, Message>(
+        title: &'static str,
+        filters_content: impl Into<Element<'a, Message>>,
+        init_errors: &ManagerErrors,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        let note = (!init_errors.is_empty()).then(|| {
+            text(format!(
+                "Initialization failed for: {}",
+                joined_manager_names(init_errors)
+            ))
+            .size(13)
+            .color(app::colors::ERROR)
+            .into()
+        });
+
+        Self::section_with_note(title, note, filters_content)
+    }
+
+    pub fn content_page_layout<'a, Message>(
+        sidebar: impl Into<Element<'a, Message>>,
+        main: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        use iced::widget::{container, row};
+
+        row![
+            container(sidebar).width(iced::Length::FillPortion(1)),
+            container(main).width(iced::Length::FillPortion(3))
+        ]
+        .spacing(24)
+        .into()
+    }
+
+    pub fn manager_section<'a, Message>(
+        pm_type: PackageManagerType,
+        subtitle: String,
+        error_prefix: &'static str,
+        error: Option<&str>,
+        body: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        use iced::widget::{column, row};
+
+        let header = row![
+            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
+            text(subtitle).size(16).color(app::colors::ON_SURFACE_MUTED)
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+
+        if let Some(error) = error {
+            return column![
+                header,
+                Self::styled_container(
+                    text(format!("{}: {}", error_prefix, error))
+                        .size(14)
+                        .color(app::colors::ERROR)
+                )
+            ]
+            .spacing(12)
+            .into();
+        }
+
+        let Some(body) = body else {
+            return column![].into();
+        };
+
+        column![header, Self::styled_container(body)]
+            .spacing(12)
+            .into()
     }
 
     pub fn loading_manager_filter_view<'a, Message>(

@@ -7,7 +7,7 @@ use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
     app, content,
-    content::errors::{ManagerErrors, apply_manager_counted_items_result, joined_manager_names},
+    content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
         BatchProgress, PackageBatchAction, collect_selected_package_groups, push_command_log,
@@ -334,30 +334,22 @@ impl Updates {
         info: &'a UpdatesInfo,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{column, container, row};
+        use iced::widget::column;
 
-        row![
-            container(
-                column![
-                    self.manager_filter_view(info, pm_config),
-                    self.sort_order_view(info),
-                    self.refresh_actions_view()
-                ]
-                .spacing(24)
-            )
-            .width(iced::Length::FillPortion(1)),
-            container(
-                column![
-                    self.search_input_view(),
-                    self.batch_actions_view(info),
-                    self.updates_list_view(info)
-                ]
-                .spacing(20)
-            )
-            .width(iced::Length::FillPortion(3))
-        ]
-        .spacing(24)
-        .into()
+        SharedUi::content_page_layout(
+            column![
+                self.manager_filter_view(info, pm_config),
+                self.sort_order_view(info),
+                self.refresh_actions_view()
+            ]
+            .spacing(24),
+            column![
+                self.search_input_view(),
+                self.batch_actions_view(info),
+                self.updates_list_view(info)
+            ]
+            .spacing(20),
+        )
     }
 
     // View components.
@@ -408,23 +400,11 @@ impl Updates {
             )
         };
 
-        let init_error_note = (!info.init_errors.is_empty()).then(|| {
-            iced::widget::text(format!(
-                "Initialization failed for: {}",
-                joined_manager_names(&info.init_errors)
-            ))
-            .size(13)
-            .color(app::colors::ERROR)
-        });
-
-        let mut section = iced::widget::column![SharedUi::section_title("Filter Package Managers")];
-        if let Some(note) = init_error_note {
-            section = section.push(note);
-        }
-        section
-            .push(SharedUi::styled_container(filters_content))
-            .spacing(12)
-            .into()
+        SharedUi::manager_filter_section(
+            "Filter Package Managers",
+            filters_content,
+            &info.init_errors,
+        )
     }
 
     fn refresh_actions_view<'a>(&self) -> iced::Element<'a, Message> {
@@ -549,52 +529,31 @@ impl Updates {
         packages: &'a [PackageUpdate],
         info: &'a UpdatesInfo,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{column, row, text};
-
         let is_loading = info.loading_updates.contains(&pm_type);
-
-        let header = row![
-            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
-            text(if is_loading {
-                "(Loading...)".to_owned()
-            } else {
-                format!("({} updates)", count)
-            })
-            .size(16)
-            .color(app::colors::ON_SURFACE_MUTED)
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center);
-
         let filtered_packages = self.filter_and_sort_updates(packages, info.sort_by);
+        let subtitle = if is_loading {
+            "(Loading...)".to_owned()
+        } else {
+            format!("({} updates)", count)
+        };
 
-        if let Some(error) = info.load_errors.get(&pm_type) {
-            return column![
-                header,
-                SharedUi::styled_container(
-                    text(format!("Failed to load updates: {}", error))
-                        .size(14)
-                        .color(app::colors::ERROR)
-                )
-            ]
-            .spacing(12)
-            .into();
-        }
-
-        if filtered_packages.is_empty() {
-            return column![].into();
-        }
-
-        let updates_list = column(
-            filtered_packages
-                .into_iter()
-                .map(|pkg| self.package_item_view(pm_type, pkg, info)),
-        )
-        .spacing(8);
-
-        column![header, SharedUi::styled_container(updates_list)]
-            .spacing(12)
+        let body = (!filtered_packages.is_empty()).then(|| {
+            iced::widget::column(
+                filtered_packages
+                    .into_iter()
+                    .map(|pkg| self.package_item_view(pm_type, pkg, info)),
+            )
+            .spacing(8)
             .into()
+        });
+
+        SharedUi::manager_section(
+            pm_type,
+            subtitle,
+            "Failed to load updates",
+            info.load_errors.get(&pm_type).map(String::as_str),
+            body,
+        )
     }
 
     fn filter_and_sort_updates<'a>(
