@@ -59,169 +59,360 @@ enum PackageAction {
     Install,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub enum PackageManagerType {
-    Apt,
-    Dnf,
-    Pacman,
-    Zypper,
-    Flatpak,
-    Homebrew,
-    Cargo,
-    Go,
-    Npm,
-    Pnpm,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManagerKind {
+    System,
+    App,
 }
 
-pub static ALL_SYSTEM_PACKAGE_MANAGERS: [PackageManagerType; 4] = [
-    PackageManagerType::Apt,
-    PackageManagerType::Dnf,
-    PackageManagerType::Pacman,
-    PackageManagerType::Zypper,
-];
-pub static ALL_APP_PACKAGE_MANAGERS: [PackageManagerType; 6] = [
-    PackageManagerType::Flatpak,
-    PackageManagerType::Homebrew,
-    PackageManagerType::Cargo,
-    PackageManagerType::Go,
-    PackageManagerType::Npm,
-    PackageManagerType::Pnpm,
-];
-pub static ALL_PACKAGE_MANAGERS: [PackageManagerType; 10] = [
-    PackageManagerType::Apt,
-    PackageManagerType::Dnf,
-    PackageManagerType::Pacman,
-    PackageManagerType::Zypper,
-    PackageManagerType::Flatpak,
-    PackageManagerType::Homebrew,
-    PackageManagerType::Cargo,
-    PackageManagerType::Go,
-    PackageManagerType::Npm,
-    PackageManagerType::Pnpm,
-];
+#[derive(Debug, Clone, Copy)]
+struct PackageManagerMetadata {
+    name: &'static str,
+    description: &'static str,
+    command: &'static str,
+    kind: PackageManagerKind,
+}
 
-macro_rules! dispatch_manager_static {
-    ($manager:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
-        match $manager {
-            PackageManagerType::Apt => AptManager::$method($($arg),*).await,
-            PackageManagerType::Dnf => DnfManager::$method($($arg),*).await,
-            PackageManagerType::Pacman => PacmanManager::$method($($arg),*).await,
-            PackageManagerType::Zypper => ZypperManager::$method($($arg),*).await,
-            PackageManagerType::Flatpak => FlatpakManager::$method($($arg),*).await,
-            PackageManagerType::Homebrew => HomebrewManager::$method($($arg),*).await,
-            PackageManagerType::Cargo => CargoManager::$method($($arg),*).await,
-            PackageManagerType::Go => GoManager::$method($($arg),*).await,
-            PackageManagerType::Npm => NpmManager::$method($($arg),*).await,
-            PackageManagerType::Pnpm => PnpmManager::$method($($arg),*).await,
+macro_rules! define_package_managers {
+    (
+        system {
+            $( $system_variant:ident : $system_manager:ident => ($system_name:expr, $system_description:expr, $system_command:expr), )*
+        }
+        app {
+            $( $app_variant:ident : $app_manager:ident => ($app_name:expr, $app_description:expr, $app_command:expr), )*
+        }
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+        pub enum PackageManagerType {
+            $($system_variant,)*
+            $($app_variant,)*
+        }
+
+        pub const ALL_SYSTEM_PACKAGE_MANAGERS: &[PackageManagerType] = &[
+            $(PackageManagerType::$system_variant,)*
+        ];
+
+        pub const ALL_APP_PACKAGE_MANAGERS: &[PackageManagerType] = &[
+            $(PackageManagerType::$app_variant,)*
+        ];
+
+        pub const ALL_PACKAGE_MANAGERS: &[PackageManagerType] = &[
+            $(PackageManagerType::$system_variant,)*
+            $(PackageManagerType::$app_variant,)*
+        ];
+
+        impl PackageManagerType {
+            fn metadata(self) -> PackageManagerMetadata {
+                match self {
+                    $(
+                        Self::$system_variant => PackageManagerMetadata {
+                            name: $system_name,
+                            description: $system_description,
+                            command: $system_command,
+                            kind: PackageManagerKind::System,
+                        },
+                    )*
+                    $(
+                        Self::$app_variant => PackageManagerMetadata {
+                            name: $app_name,
+                            description: $app_description,
+                            command: $app_command,
+                            kind: PackageManagerKind::App,
+                        },
+                    )*
+                }
+            }
+
+            pub fn name(&self) -> &'static str {
+                self.metadata().name
+            }
+
+            pub fn description(&self) -> &'static str {
+                self.metadata().description
+            }
+
+            pub fn is_system_manager(&self) -> bool {
+                self.metadata().kind == PackageManagerKind::System
+            }
+
+            pub async fn is_available(&self) -> bool {
+                tokio::process::Command::new("which")
+                    .arg(self.metadata().command)
+                    .output()
+                    .await
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            }
+
+            pub async fn list_updates(&self, config: &Config) -> CoreResult<Vec<PackageUpdate>> {
+                match self {
+                    $(Self::$system_variant => $system_manager::list_updates(config).await,)*
+                    $(Self::$app_variant => $app_manager::list_updates(config).await,)*
+                }
+            }
+
+            pub async fn get_current_version(
+                &self,
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<String> {
+                match self {
+                    $(Self::$system_variant => $system_manager::get_current_version(config, package_name).await,)*
+                    $(Self::$app_variant => $app_manager::get_current_version(config, package_name).await,)*
+                }
+            }
+
+            pub async fn list_installed(&self, config: &Config) -> CoreResult<Vec<PackageInfo>> {
+                match self {
+                    $(Self::$system_variant => $system_manager::list_installed(config).await,)*
+                    $(Self::$app_variant => $app_manager::list_installed(config).await,)*
+                }
+            }
+
+            pub async fn count_installed(&self, config: &Config) -> CoreResult<usize> {
+                match self {
+                    $(Self::$system_variant => $system_manager::count_installed(config).await,)*
+                    $(Self::$app_variant => $app_manager::count_installed(config).await,)*
+                }
+            }
+
+            pub async fn search_package(
+                &self,
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<Vec<PackageInfo>> {
+                match self {
+                    $(Self::$system_variant => $system_manager::search_package(config, package_name).await,)*
+                    $(Self::$app_variant => $app_manager::search_package(config, package_name).await,)*
+                }
+            }
+
+            pub async fn uninstall_package(
+                &self,
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.uninstall_package(config, package_name).await,)*
+                    $(Self::$app_variant => $app_manager.uninstall_package(config, package_name).await,)*
+                }
+            }
+
+            pub async fn uninstall_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.uninstall_packages(config, package_names).await,)*
+                    $(Self::$app_variant => $app_manager.uninstall_packages(config, package_names).await,)*
+                }
+            }
+
+            pub async fn uninstall_packages_with_progress(
+                &self,
+                config: &Config,
+                package_names: &[String],
+                mut on_progress: impl FnMut(InstallProgress),
+            ) -> CoreResult<()> {
+                self.run_packages_with_progress(
+                    PackageAction::Uninstall,
+                    config,
+                    package_names,
+                    &mut on_progress,
+                )
+                .await
+            }
+
+            pub async fn update_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.update_packages(config, package_names).await,)*
+                    $(Self::$app_variant => $app_manager.update_packages(config, package_names).await,)*
+                }
+            }
+
+            pub async fn update_package(
+                &self,
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.update_package(config, package_name).await,)*
+                    $(Self::$app_variant => $app_manager.update_package(config, package_name).await,)*
+                }
+            }
+
+            pub async fn update_packages_with_progress(
+                &self,
+                config: &Config,
+                package_names: &[String],
+                mut on_progress: impl FnMut(InstallProgress),
+            ) -> CoreResult<()> {
+                self.run_packages_with_progress(
+                    PackageAction::Update,
+                    config,
+                    package_names,
+                    &mut on_progress,
+                )
+                .await
+            }
+
+            pub async fn install_packages(
+                &self,
+                config: &Config,
+                package_names: &[String],
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.install_packages(config, package_names).await,)*
+                    $(Self::$app_variant => $app_manager.install_packages(config, package_names).await,)*
+                }
+            }
+
+            pub async fn install_package(
+                &self,
+                config: &Config,
+                package_name: &str,
+            ) -> CoreResult<()> {
+                match self {
+                    $(Self::$system_variant => $system_manager.install_package(config, package_name).await,)*
+                    $(Self::$app_variant => $app_manager.install_package(config, package_name).await,)*
+                }
+            }
+
+            pub async fn install_packages_with_progress(
+                &self,
+                config: &Config,
+                package_names: &[String],
+                mut on_progress: impl FnMut(InstallProgress),
+            ) -> CoreResult<()> {
+                self.run_packages_with_progress(
+                    PackageAction::Install,
+                    config,
+                    package_names,
+                    &mut on_progress,
+                )
+                .await
+            }
+
+            async fn run_packages_with_progress(
+                &self,
+                action: PackageAction,
+                config: &Config,
+                package_names: &[String],
+                on_progress: &mut impl FnMut(InstallProgress),
+            ) -> CoreResult<()> {
+                let total = package_names.len();
+                if total == 0 {
+                    return Ok(());
+                }
+
+                if self.is_system_manager() {
+                    let mut report = |event: CommandProgressEvent| {
+                        let progress = event.progress.clamp(0.0, 1.0);
+                        let completed = if progress >= 1.0 {
+                            total
+                        } else {
+                            ((progress * total as f32).floor() as usize).min(total)
+                        };
+
+                        on_progress(InstallProgress {
+                            manager: *self,
+                            current_package: String::new(),
+                            completed,
+                            total,
+                            command_message: event.command_message,
+                        });
+                    };
+
+                    Self::run_system_batch_action_with_progress(
+                        *self,
+                        action,
+                        config,
+                        package_names,
+                        &mut report,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+
+                for (index, package_name) in package_names.iter().enumerate() {
+                    let package_name = package_name.clone();
+                    let mut report = |event: CommandProgressEvent| {
+                        let completed = if event.progress.clamp(0.0, 1.0) >= 1.0 {
+                            index + 1
+                        } else {
+                            index
+                        };
+
+                        on_progress(InstallProgress {
+                            manager: *self,
+                            current_package: package_name.clone(),
+                            completed,
+                            total,
+                            command_message: event.command_message,
+                        });
+                    };
+
+                    self.run_single_package_action_with_progress(
+                        action,
+                        config,
+                        &package_name,
+                        &mut report,
+                    )
+                    .await?;
+                }
+
+                Ok(())
+            }
+
+            async fn run_single_package_action_with_progress(
+                &self,
+                action: PackageAction,
+                config: &Config,
+                package_name: &str,
+                report: &mut impl FnMut(CommandProgressEvent),
+            ) -> CoreResult<()> {
+                match action {
+                    PackageAction::Uninstall => match self {
+                        $(Self::$system_variant => $system_manager::uninstall_package_with_progress(config, package_name, report).await,)*
+                        $(Self::$app_variant => $app_manager::uninstall_package_with_progress(config, package_name, report).await,)*
+                    },
+                    PackageAction::Update => match self {
+                        $(Self::$system_variant => $system_manager::update_package_with_progress(config, package_name, report).await,)*
+                        $(Self::$app_variant => $app_manager::update_package_with_progress(config, package_name, report).await,)*
+                    },
+                    PackageAction::Install => match self {
+                        $(Self::$system_variant => $system_manager::install_package_with_progress(config, package_name, report).await,)*
+                        $(Self::$app_variant => $app_manager::install_package_with_progress(config, package_name, report).await,)*
+                    },
+                }
+            }
         }
     };
 }
 
-macro_rules! dispatch_manager_instance {
-    ($manager:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
-        match $manager {
-            PackageManagerType::Apt => AptManager.$method($($arg),*).await,
-            PackageManagerType::Dnf => DnfManager.$method($($arg),*).await,
-            PackageManagerType::Pacman => PacmanManager.$method($($arg),*).await,
-            PackageManagerType::Zypper => ZypperManager.$method($($arg),*).await,
-            PackageManagerType::Flatpak => FlatpakManager.$method($($arg),*).await,
-            PackageManagerType::Homebrew => HomebrewManager.$method($($arg),*).await,
-            PackageManagerType::Cargo => CargoManager.$method($($arg),*).await,
-            PackageManagerType::Go => GoManager.$method($($arg),*).await,
-            PackageManagerType::Npm => NpmManager.$method($($arg),*).await,
-            PackageManagerType::Pnpm => PnpmManager.$method($($arg),*).await,
-        }
-    };
-}
-
-macro_rules! dispatch_package_progress_method {
-    ($manager:expr, $method:ident($config:expr, $package_name:expr, $report:expr)) => {
-        match $manager {
-            PackageManagerType::Apt => AptManager::$method($config, $package_name, $report).await,
-            PackageManagerType::Dnf => DnfManager::$method($config, $package_name, $report).await,
-            PackageManagerType::Pacman => {
-                PacmanManager::$method($config, $package_name, $report).await
-            }
-            PackageManagerType::Zypper => {
-                ZypperManager::$method($config, $package_name, $report).await
-            }
-            PackageManagerType::Flatpak => {
-                FlatpakManager::$method($config, $package_name, $report).await
-            }
-            PackageManagerType::Homebrew => {
-                HomebrewManager::$method($config, $package_name, $report).await
-            }
-            PackageManagerType::Cargo => {
-                CargoManager::$method($config, $package_name, $report).await
-            }
-            PackageManagerType::Go => GoManager::$method($config, $package_name, $report).await,
-            PackageManagerType::Npm => NpmManager::$method($config, $package_name, $report).await,
-            PackageManagerType::Pnpm => PnpmManager::$method($config, $package_name, $report).await,
-        }
-    };
+define_package_managers! {
+    system {
+        Apt: AptManager => ("APT", "Debian/Ubuntu 系统包管理器", "apt"),
+        Dnf: DnfManager => ("DNF", "Fedora/RHEL 系统包管理器", "dnf"),
+        Pacman: PacmanManager => ("Pacman", "Arch Linux 系统包管理器", "pacman"),
+        Zypper: ZypperManager => ("Zypper", "openSUSE/SUSE 系统包管理器", "zypper"),
+    }
+    app {
+        Flatpak: FlatpakManager => ("Flatpak", "跨平台应用沙箱管理器", "flatpak"),
+        Homebrew: HomebrewManager => ("Homebrew", "macOS/Linux 包管理器", "brew"),
+        Cargo: CargoManager => ("Cargo", "Rust 编程语言的包管理器", "cargo"),
+        Go: GoManager => ("Go", "Go 编程语言的包管理器", "go"),
+        Npm: NpmManager => ("NPM", "Node.js 默认包管理器", "npm"),
+        Pnpm: PnpmManager => ("pnpm", "Node.js 高性能包管理器", "pnpm"),
+    }
 }
 
 impl PackageManagerType {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Apt => "APT",
-            Self::Dnf => "DNF",
-            Self::Pacman => "Pacman",
-            Self::Zypper => "Zypper",
-            Self::Flatpak => "Flatpak",
-            Self::Homebrew => "Homebrew",
-            Self::Cargo => "Cargo",
-            Self::Go => "Go",
-            Self::Npm => "NPM",
-            Self::Pnpm => "pnpm",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::Apt => "Debian/Ubuntu 系统包管理器",
-            Self::Dnf => "Fedora/RHEL 系统包管理器",
-            Self::Pacman => "Arch Linux 系统包管理器",
-            Self::Zypper => "openSUSE/SUSE 系统包管理器",
-            Self::Flatpak => "跨平台应用沙箱管理器",
-            Self::Homebrew => "macOS/Linux 包管理器",
-            Self::Cargo => "Rust 编程语言的包管理器",
-            Self::Go => "Go 编程语言的包管理器",
-            Self::Npm => "Node.js 默认包管理器",
-            Self::Pnpm => "Node.js 高性能包管理器",
-        }
-    }
-
-    pub fn is_system_manager(&self) -> bool {
-        matches!(self, Self::Apt | Self::Dnf | Self::Pacman | Self::Zypper)
-    }
-
-    pub async fn is_available(&self) -> bool {
-        let cmd = match self {
-            Self::Apt => "apt",
-            Self::Dnf => "dnf",
-            Self::Pacman => "pacman",
-            Self::Zypper => "zypper",
-            Self::Flatpak => "flatpak",
-            Self::Homebrew => "brew",
-            Self::Cargo => "cargo",
-            Self::Go => "go",
-            Self::Npm => "npm",
-            Self::Pnpm => "pnpm",
-        };
-
-        tokio::process::Command::new("which")
-            .arg(cmd)
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    pub async fn list_updates(&self, config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        dispatch_manager_static!(self, list_updates(config))
-    }
-
     pub async fn list_updates_with_refresh(
         &self,
         config: &Config,
@@ -236,182 +427,6 @@ impl PackageManagerType {
         }
     }
 
-    pub async fn get_current_version(
-        &self,
-        config: &Config,
-        package_name: &str,
-    ) -> CoreResult<String> {
-        dispatch_manager_static!(self, get_current_version(config, package_name))
-    }
-
-    pub async fn list_installed(&self, config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        dispatch_manager_static!(self, list_installed(config))
-    }
-
-    pub async fn count_installed(&self, config: &Config) -> CoreResult<usize> {
-        dispatch_manager_static!(self, count_installed(config))
-    }
-
-    pub async fn search_package(
-        &self,
-        config: &Config,
-        package_name: &str,
-    ) -> CoreResult<Vec<PackageInfo>> {
-        dispatch_manager_static!(self, search_package(config, package_name))
-    }
-
-    pub async fn uninstall_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
-        dispatch_manager_instance!(self, uninstall_package(config, package_name))
-    }
-
-    pub async fn uninstall_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        dispatch_manager_instance!(self, uninstall_packages(config, package_names))
-    }
-
-    pub async fn uninstall_packages_with_progress(
-        &self,
-        config: &Config,
-        package_names: &[String],
-        mut on_progress: impl FnMut(InstallProgress),
-    ) -> CoreResult<()> {
-        self.run_packages_with_progress(
-            PackageAction::Uninstall,
-            config,
-            package_names,
-            &mut on_progress,
-        )
-        .await
-    }
-
-    pub async fn update_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        dispatch_manager_instance!(self, update_packages(config, package_names))
-    }
-
-    pub async fn update_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
-        dispatch_manager_instance!(self, update_package(config, package_name))
-    }
-
-    pub async fn update_packages_with_progress(
-        &self,
-        config: &Config,
-        package_names: &[String],
-        mut on_progress: impl FnMut(InstallProgress),
-    ) -> CoreResult<()> {
-        self.run_packages_with_progress(
-            PackageAction::Update,
-            config,
-            package_names,
-            &mut on_progress,
-        )
-        .await
-    }
-
-    pub async fn install_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        dispatch_manager_instance!(self, install_packages(config, package_names))
-    }
-
-    pub async fn install_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
-        dispatch_manager_instance!(self, install_package(config, package_name))
-    }
-
-    pub async fn install_packages_with_progress(
-        &self,
-        config: &Config,
-        package_names: &[String],
-        mut on_progress: impl FnMut(InstallProgress),
-    ) -> CoreResult<()> {
-        self.run_packages_with_progress(
-            PackageAction::Install,
-            config,
-            package_names,
-            &mut on_progress,
-        )
-        .await
-    }
-
-    async fn run_packages_with_progress(
-        &self,
-        action: PackageAction,
-        config: &Config,
-        package_names: &[String],
-        on_progress: &mut impl FnMut(InstallProgress),
-    ) -> CoreResult<()> {
-        let total = package_names.len();
-        if total == 0 {
-            return Ok(());
-        }
-
-        if self.is_system_manager() {
-            let mut report = |event: CommandProgressEvent| {
-                let progress = event.progress.clamp(0.0, 1.0);
-                let completed = if progress >= 1.0 {
-                    total
-                } else {
-                    ((progress * total as f32).floor() as usize).min(total)
-                };
-
-                on_progress(InstallProgress {
-                    manager: *self,
-                    current_package: String::new(),
-                    completed,
-                    total,
-                    command_message: event.command_message,
-                });
-            };
-
-            Self::run_system_batch_action_with_progress(
-                *self,
-                action,
-                config,
-                package_names,
-                &mut report,
-            )
-            .await?;
-            return Ok(());
-        }
-
-        for (index, package_name) in package_names.iter().enumerate() {
-            let package_name = package_name.clone();
-            let mut report = |event: CommandProgressEvent| {
-                let completed = if event.progress.clamp(0.0, 1.0) >= 1.0 {
-                    index + 1
-                } else {
-                    index
-                };
-
-                on_progress(InstallProgress {
-                    manager: *self,
-                    current_package: package_name.clone(),
-                    completed,
-                    total,
-                    command_message: event.command_message,
-                });
-            };
-
-            self.run_single_package_action_with_progress(
-                action,
-                config,
-                &package_name,
-                &mut report,
-            )
-            .await?;
-        }
-
-        Ok(())
-    }
-
     async fn run_system_batch_action_with_progress(
         manager: PackageManagerType,
         action: PackageAction,
@@ -420,7 +435,7 @@ impl PackageManagerType {
         report: &mut impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
         match manager {
-            PackageManagerType::Apt => match action {
+            Self::Apt => match action {
                 PackageAction::Uninstall => {
                     AptManager::uninstall_packages_with_progress(config, package_names, report)
                         .await
@@ -432,7 +447,7 @@ impl PackageManagerType {
                     AptManager::install_packages_with_progress(config, package_names, report).await
                 }
             },
-            PackageManagerType::Dnf => match action {
+            Self::Dnf => match action {
                 PackageAction::Uninstall => {
                     DnfManager::uninstall_packages_with_progress(config, package_names, report)
                         .await
@@ -444,7 +459,7 @@ impl PackageManagerType {
                     DnfManager::install_packages_with_progress(config, package_names, report).await
                 }
             },
-            PackageManagerType::Pacman => match action {
+            Self::Pacman => match action {
                 PackageAction::Uninstall => {
                     PacmanManager::uninstall_packages_with_progress(config, package_names, report)
                         .await
@@ -458,7 +473,7 @@ impl PackageManagerType {
                         .await
                 }
             },
-            PackageManagerType::Zypper => match action {
+            Self::Zypper => match action {
                 PackageAction::Uninstall => {
                     ZypperManager::uninstall_packages_with_progress(config, package_names, report)
                         .await
@@ -475,31 +490,6 @@ impl PackageManagerType {
             _ => Err(CoreError::UnknownError(
                 "batch action is only supported for system package managers".to_owned(),
             )),
-        }
-    }
-
-    async fn run_single_package_action_with_progress(
-        &self,
-        action: PackageAction,
-        config: &Config,
-        package_name: &str,
-        report: &mut impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        match action {
-            PackageAction::Uninstall => dispatch_package_progress_method!(
-                self,
-                uninstall_package_with_progress(config, package_name, report)
-            ),
-            PackageAction::Update => {
-                dispatch_package_progress_method!(
-                    self,
-                    update_package_with_progress(config, package_name, report)
-                )
-            }
-            PackageAction::Install => dispatch_package_progress_method!(
-                self,
-                install_package_with_progress(config, package_name, report)
-            ),
         }
     }
 }
@@ -579,25 +569,26 @@ mod tests {
 
     #[test]
     fn manager_sets_have_no_duplicates() {
-        let all_unique: HashSet<PackageManagerType> = ALL_PACKAGE_MANAGERS.into_iter().collect();
+        let all_unique: HashSet<PackageManagerType> =
+            ALL_PACKAGE_MANAGERS.iter().copied().collect();
         assert_eq!(all_unique.len(), ALL_PACKAGE_MANAGERS.len());
 
         let system_unique: HashSet<PackageManagerType> =
-            ALL_SYSTEM_PACKAGE_MANAGERS.into_iter().collect();
+            ALL_SYSTEM_PACKAGE_MANAGERS.iter().copied().collect();
         assert_eq!(system_unique.len(), ALL_SYSTEM_PACKAGE_MANAGERS.len());
 
         let app_unique: HashSet<PackageManagerType> =
-            ALL_APP_PACKAGE_MANAGERS.into_iter().collect();
+            ALL_APP_PACKAGE_MANAGERS.iter().copied().collect();
         assert_eq!(app_unique.len(), ALL_APP_PACKAGE_MANAGERS.len());
     }
 
     #[test]
     fn system_and_app_managers_cover_all_managers() {
         let mut union: HashSet<PackageManagerType> =
-            ALL_SYSTEM_PACKAGE_MANAGERS.into_iter().collect();
-        union.extend(ALL_APP_PACKAGE_MANAGERS);
+            ALL_SYSTEM_PACKAGE_MANAGERS.iter().copied().collect();
+        union.extend(ALL_APP_PACKAGE_MANAGERS.iter().copied());
 
-        let all: HashSet<PackageManagerType> = ALL_PACKAGE_MANAGERS.into_iter().collect();
+        let all: HashSet<PackageManagerType> = ALL_PACKAGE_MANAGERS.iter().copied().collect();
         assert_eq!(union, all);
     }
 }

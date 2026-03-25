@@ -2,13 +2,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::channel::mpsc;
 use iced::{Border, Task};
 use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
     app, content,
+    content::errors::{ManagerErrors, apply_manager_counted_items_result, joined_manager_names},
     content::shared::{PackageSelectionKey, SharedUi},
+    content::workflows::{
+        BatchProgress, PackageBatchAction, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
+    },
 };
 
 #[derive(Debug, Clone, Default)]
@@ -48,8 +52,6 @@ pub enum Message {
     },
     /// Update result message.
     UpdatePackagesResult(Result<(), String>),
-    /// Update-task completion message.
-    UpdateTaskFinished,
     /// Selected-managers refresh message.
     RefreshSelected,
     /// Full refresh message.
@@ -60,6 +62,10 @@ pub enum Message {
 pub struct UpdatesInfo {
     /// Updates cache by manager `(count, updates)`.
     pub updates_by_manager: HashMap<PackageManagerType, (usize, Vec<PackageUpdate>)>,
+    /// Initial update-loading failures grouped by manager.
+    pub init_errors: ManagerErrors,
+    /// Full update-list loading failures grouped by manager.
+    pub load_errors: ManagerErrors,
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
     /// Managers currently loading update list.
@@ -84,24 +90,6 @@ pub struct UpdatesInfo {
     pub update_logs: Vec<String>,
     /// Last update error shown in UI.
     pub last_update_error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-enum UpdateTaskEvent {
-    Progress {
-        /// Number of finished packages.
-        completed: usize,
-        /// Total packages to update.
-        total: usize,
-        /// Manager currently executing command.
-        manager: PackageManagerType,
-        /// Current package being processed.
-        current_package: String,
-        /// Optional command output/status line.
-        command_message: Option<String>,
-    },
-    /// Final update result.
-    Done(Result<(), String>),
 }
 
 impl From<Message> for content::Message {
@@ -131,15 +119,6 @@ impl SortOption {
             SortOption::Name => "Name",
             SortOption::CurrentVersion => "Current Version",
             SortOption::NewVersion => "New Version",
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn description(&self) -> &'static str {
-        match self {
-            SortOption::Name => "Sort by package name",
-            SortOption::CurrentVersion => "Sort by current version",
-            SortOption::NewVersion => "Sort by new version",
         }
     }
 
@@ -189,15 +168,12 @@ impl Updates {
             }
             Message::LoadUpdatesResult(pm_type, result) => {
                 info.loading_updates.remove(&pm_type);
-                match result {
-                    Ok(packages) => {
-                        let count = packages.len();
-                        info.updates_by_manager.insert(pm_type, (count, packages));
-                    }
-                    Err(_) => {
-                        info.updates_by_manager.insert(pm_type, (0, Vec::new()));
-                    }
-                }
+                apply_manager_counted_items_result(
+                    &mut info.updates_by_manager,
+                    &mut info.load_errors,
+                    pm_type,
+                    result,
+                );
                 Action::None
             }
             Message::SearchQueryChanged(query) => {
@@ -266,6 +242,7 @@ impl Updates {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.update_logs,
+                        PackageBatchAction::Update,
                         manager,
                         info.update_progress
                             .as_ref()
@@ -349,7 +326,6 @@ impl Updates {
 
                 Action::Run(Task::batch(tasks))
             }
-            Message::UpdateTaskFinished => Action::None,
         }
     }
 
@@ -432,7 +408,23 @@ impl Updates {
             )
         };
 
-        SharedUi::filter_section("Filter Package Managers", filters_content)
+        let init_error_note = (!info.init_errors.is_empty()).then(|| {
+            iced::widget::text(format!(
+                "Initialization failed for: {}",
+                joined_manager_names(&info.init_errors)
+            ))
+            .size(13)
+            .color(app::colors::ERROR)
+        });
+
+        let mut section = iced::widget::column![SharedUi::section_title("Filter Package Managers")];
+        if let Some(note) = init_error_note {
+            section = section.push(note);
+        }
+        section
+            .push(SharedUi::styled_container(filters_content))
+            .spacing(12)
+            .into()
     }
 
     fn refresh_actions_view<'a>(&self) -> iced::Element<'a, Message> {
@@ -516,8 +508,11 @@ impl Updates {
             .collect();
 
         let total_updates: usize = filtered_managers.iter().map(|(_, (count, _))| *count).sum();
+        let has_visible_errors = filtered_managers
+            .iter()
+            .any(|(pm_type, _)| info.load_errors.contains_key(pm_type));
 
-        if total_updates == 0 {
+        if total_updates == 0 && !has_visible_errors {
             return SharedUi::centered_message("No updates available");
         }
 
@@ -529,7 +524,7 @@ impl Updates {
                     .any(|pkg| pkg.name.to_lowercase().contains(&search_query))
             });
 
-            if !has_any_match {
+            if !has_any_match && !has_visible_errors {
                 return SharedUi::centered_message("No updates match your search");
             }
         }
@@ -572,6 +567,19 @@ impl Updates {
         .align_y(iced::Alignment::Center);
 
         let filtered_packages = self.filter_and_sort_updates(packages, info.sort_by);
+
+        if let Some(error) = info.load_errors.get(&pm_type) {
+            return column![
+                header,
+                SharedUi::styled_container(
+                    text(format!("Failed to load updates: {}", error))
+                        .size(14)
+                        .color(app::colors::ERROR)
+                )
+            ]
+            .spacing(12)
+            .into();
+        }
 
         if filtered_packages.is_empty() {
             return column![].into();
@@ -806,126 +814,34 @@ impl Updates {
     }
 
     fn update_packages_action(pm_config: &updater_core::Config, info: &UpdatesInfo) -> Action {
-        let pm_config = pm_config.clone();
-        let selected_packages = info.selected_packages.clone();
+        let manager_groups = collect_selected_package_groups(
+            info.selected_managers.iter().filter_map(|pm_type| {
+                info.updates_by_manager
+                    .get(pm_type)
+                    .map(|(_, packages)| (*pm_type, packages.as_slice()))
+            }),
+            &info.selected_packages,
+            |package| package.name.as_str(),
+        );
 
-        // Group selected packages by package manager.
-        let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
-
-        for pm_type in info.selected_managers.iter() {
-            if let Some((_, packages)) = info.updates_by_manager.get(pm_type) {
-                for pkg in packages {
-                    if selected_packages.contains(&SharedUi::selection_key(*pm_type, &pkg.name)) {
-                        packages_by_manager
-                            .entry(*pm_type)
-                            .or_default()
-                            .push(pkg.name.clone());
-                    }
-                }
-            }
-        }
-
-        let total_packages: usize = packages_by_manager.values().map(Vec::len).sum();
-
-        if total_packages == 0 {
-            return Action::Run(Task::done(Message::UpdatePackagesResult(Ok(()))));
-        }
-
-        let mut manager_groups: Vec<(PackageManagerType, Vec<String>)> =
-            packages_by_manager.into_iter().collect();
-        manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
-        for (_, package_names) in manager_groups.iter_mut() {
-            package_names.sort();
-        }
-
-        let (sender, receiver) = mpsc::unbounded::<UpdateTaskEvent>();
-        let update_sender = sender.clone();
-
-        let update_task =
-            Task::future(async move {
-                let mut global_offset = 0usize;
-
-                for (pm_type, package_names) in manager_groups {
-                    let offset = global_offset;
-                    let progress_sender = update_sender.clone();
-
-                    let result = pm_type
-                        .update_packages_with_progress(&pm_config, &package_names, |progress| {
-                            let _ = progress_sender.unbounded_send(UpdateTaskEvent::Progress {
-                                completed: offset + progress.completed,
-                                total: total_packages,
-                                manager: progress.manager,
-                                current_package: progress.current_package,
-                                command_message: progress.command_message,
-                            });
-                        })
-                        .await;
-
-                    match result {
-                        Ok(()) => {
-                            global_offset += package_names.len();
-                        }
-                        Err(e) => {
-                            let _ = update_sender.unbounded_send(UpdateTaskEvent::Done(Err(
-                                format!("Failed to update packages from {}: {}", pm_type.name(), e),
-                            )));
-                            return;
-                        }
-                    }
-                }
-
-                let _ = update_sender.unbounded_send(UpdateTaskEvent::Done(Ok(())));
-            })
-            .map(|_| Message::UpdateTaskFinished);
-
-        let progress_task = Task::run(receiver, |event| match event {
-            UpdateTaskEvent::Progress {
-                completed,
-                total,
-                manager,
-                current_package,
-                command_message,
-            } => Message::UpdateProgress {
+        Action::Run(run_grouped_package_action(
+            pm_config,
+            PackageBatchAction::Update,
+            manager_groups,
+            |BatchProgress {
+                 completed,
+                 total,
+                 manager,
+                 current_package,
+                 command_message,
+             }| Message::UpdateProgress {
                 completed,
                 total,
                 manager,
                 current_package,
                 command_message,
             },
-            UpdateTaskEvent::Done(result) => Message::UpdatePackagesResult(result),
-        });
-
-        Action::Run(Task::batch(vec![update_task, progress_task]))
-    }
-}
-
-fn push_command_log(
-    logs: &mut Vec<String>,
-    manager: PackageManagerType,
-    package_name: &str,
-    command_message: String,
-) {
-    let command_message = command_message.trim();
-    if command_message.is_empty() {
-        return;
-    }
-
-    let package_name = if package_name.is_empty() {
-        "batch"
-    } else {
-        package_name
-    };
-
-    logs.push(format!(
-        "[Update][{}][{}] {}",
-        manager.name(),
-        package_name,
-        command_message
-    ));
-
-    const MAX_COMMAND_LOGS: usize = 120;
-    if logs.len() > MAX_COMMAND_LOGS {
-        let overflow = logs.len() - MAX_COMMAND_LOGS;
-        logs.drain(0..overflow);
+            Message::UpdatePackagesResult,
+        ))
     }
 }

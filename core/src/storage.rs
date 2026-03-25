@@ -73,7 +73,7 @@ impl Config {
 
     /// Detect available system manager in $PATH (first match by priority)
     pub async fn detect_system_manager_type() -> Option<PackageManagerType> {
-        for manager_type in &ALL_SYSTEM_PACKAGE_MANAGERS {
+        for manager_type in ALL_SYSTEM_PACKAGE_MANAGERS {
             if manager_type.is_available().await {
                 return Some(*manager_type);
             }
@@ -85,7 +85,7 @@ impl Config {
     pub async fn detect_available_app_managers() -> Vec<PackageManagerType> {
         let mut managers = Vec::new();
 
-        for manager_type in &ALL_APP_PACKAGE_MANAGERS {
+        for manager_type in ALL_APP_PACKAGE_MANAGERS {
             if manager_type.is_available().await {
                 managers.push(*manager_type);
             }

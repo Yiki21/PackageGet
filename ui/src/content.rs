@@ -1,9 +1,10 @@
+mod errors;
 mod finding;
-#[allow(dead_code, unused)]
 mod installed;
 mod setting;
 mod shared;
 mod updates;
+mod workflows;
 
 use crate::{
     app,

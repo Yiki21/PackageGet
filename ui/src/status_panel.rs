@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use iced::{Animation, Border, Length, Subscription, Task};
+use iced::{Animation, Border, Length, Subscription};
 
 use crate::{
     app::{self, colors},
@@ -45,12 +45,9 @@ pub enum Message {
 
 /// Side effects produced by [`StatusPanel::update`].
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Action {
     /// No-op action.
     None,
-    /// Asynchronous task action.
-    Run(Task<Message>),
 }
 
 impl From<Message> for app::Message {

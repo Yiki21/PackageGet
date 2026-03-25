@@ -5,6 +5,7 @@ use crate::app::App;
 mod app;
 mod content;
 mod icon;
+mod init_workflows;
 mod sidebar;
 mod status_panel;
 

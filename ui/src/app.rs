@@ -1,18 +1,14 @@
 //! Top-level application composition and message routing.
 
 use std::collections::HashSet;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
 use std::time::Instant;
 
-use futures::channel::mpsc;
 use iced::{Length, Subscription, Task};
 use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
     content::{self, Content, FindingInfo, InstalledInfo, UpdatesInfo},
+    init_workflows::{InitProgress, run_manager_init_task},
     sidebar::{self, SideBar},
     status_panel::{self, StatusPanel},
 };
@@ -116,8 +112,8 @@ pub enum Message {
     InitInstalledCount {
         /// Source manager.
         manager: PackageManagerType,
-        /// Installed package count value.
-        count: usize,
+        /// Installed package count value or failure detail.
+        result: Result<usize, String>,
     },
     /// Installed initialization completion message.
     InitInstalledFinished,
@@ -136,73 +132,11 @@ pub enum Message {
     InitUpdatesCount {
         /// Source manager.
         manager: PackageManagerType,
-        /// Update entries.
-        updates: Vec<PackageUpdate>,
+        /// Update entries or failure detail.
+        result: Result<Vec<PackageUpdate>, String>,
     },
     /// Updates initialization completion message.
     InitUpdatesFinished,
-}
-
-#[derive(Debug, Clone)]
-enum InitInstalledEvent {
-    /// Installed worker start event.
-    Started {
-        /// Total manager count.
-        total: usize,
-        /// Reporting manager.
-        manager: PackageManagerType,
-        /// Progress detail message.
-        command_message: String,
-    },
-    /// Installed worker completion event.
-    Completed {
-        /// Total manager count.
-        total: usize,
-        /// Reporting manager.
-        manager: PackageManagerType,
-        /// Progress detail message.
-        command_message: String,
-    },
-    /// Installed count payload event.
-    Item {
-        /// Source manager.
-        manager: PackageManagerType,
-        /// Installed package count value.
-        count: usize,
-    },
-    /// Installed workers completion event.
-    Finished,
-}
-
-#[derive(Debug, Clone)]
-enum InitUpdatesEvent {
-    /// Updates worker start event.
-    Started {
-        /// Total manager count.
-        total: usize,
-        /// Reporting manager.
-        manager: PackageManagerType,
-        /// Progress detail message.
-        command_message: String,
-    },
-    /// Updates worker completion event.
-    Completed {
-        /// Total manager count.
-        total: usize,
-        /// Reporting manager.
-        manager: PackageManagerType,
-        /// Progress detail message.
-        command_message: String,
-    },
-    /// Updates payload event.
-    Item {
-        /// Source manager.
-        manager: PackageManagerType,
-        /// Update entries.
-        updates: Vec<PackageUpdate>,
-    },
-    /// Updates workers completion event.
-    Finished,
 }
 
 impl App {
@@ -249,8 +183,8 @@ impl App {
                 manager,
                 command_message,
             } => self.apply_init_installed_progress(completed, total, manager, command_message),
-            Message::InitInstalledCount { manager, count } => {
-                self.apply_init_installed_count(manager, count)
+            Message::InitInstalledCount { manager, result } => {
+                self.apply_init_installed_count(manager, result)
             }
             Message::InitInstalledFinished => self.finish_init_installed_counts(),
             Message::InitUpdatesProgress {
@@ -259,8 +193,8 @@ impl App {
                 manager,
                 command_message,
             } => self.apply_init_updates_progress(completed, total, manager, command_message),
-            Message::InitUpdatesCount { manager, updates } => {
-                self.apply_init_updates_count(manager, updates)
+            Message::InitUpdatesCount { manager, result } => {
+                self.apply_init_updates_count(manager, result)
             }
             Message::InitUpdatesFinished => self.finish_init_updates_counts(),
         }
@@ -355,7 +289,6 @@ impl App {
                 self.content.active_content = content;
                 Task::none()
             }
-            sidebar::Action::Run(sidebar_task) => sidebar_task.map(Message::SideBar),
             sidebar::Action::None => Task::none(),
         }
     }
@@ -374,6 +307,7 @@ impl App {
             content::Action::ReloadInstalledData => {
                 self.installed_info.is_loading_count = true;
                 self.installed_info.init_logs.clear();
+                self.installed_info.init_errors.clear();
                 self.start_init_installed_counts_task(self.pm_config.clone())
             }
             content::Action::None => Task::none(),
@@ -387,7 +321,6 @@ impl App {
             &self.updates_info,
             &self.finding_info,
         ) {
-            status_panel::Action::Run(panel_task) => panel_task.map(Message::StatusPanel),
             status_panel::Action::None => Task::none(),
         }
     }
@@ -403,6 +336,8 @@ impl App {
                 self.updates_info.is_loading_count = true;
                 self.installed_info.init_logs.clear();
                 self.updates_info.init_logs.clear();
+                self.installed_info.init_errors.clear();
+                self.updates_info.init_errors.clear();
 
                 let installed_task = self.start_init_installed_counts_task(self.pm_config.clone());
                 let updates_task = self.start_init_updates_counts_task(self.pm_config.clone());
@@ -416,11 +351,27 @@ impl App {
         }
     }
 
-    fn apply_init_installed_count(&mut self, manager: PackageManagerType, count: usize) {
+    fn apply_init_installed_count(
+        &mut self,
+        manager: PackageManagerType,
+        result: Result<usize, String>,
+    ) {
         self.installed_info.has_loading_count = true;
-        self.installed_info
-            .installed_packages
-            .insert(manager, (count, Vec::new()));
+        match result {
+            Ok(count) => {
+                self.installed_info.init_errors.remove(&manager);
+                self.installed_info
+                    .installed_packages
+                    .insert(manager, (count, Vec::new()));
+            }
+            Err(error) => {
+                self.installed_info
+                    .installed_packages
+                    .entry(manager)
+                    .or_insert_with(|| (0, Vec::new()));
+                self.installed_info.init_errors.insert(manager, error);
+            }
+        }
     }
 
     fn finish_init_installed_counts(&mut self) {
@@ -432,13 +383,25 @@ impl App {
     fn apply_init_updates_count(
         &mut self,
         manager: PackageManagerType,
-        updates: Vec<PackageUpdate>,
+        result: Result<Vec<PackageUpdate>, String>,
     ) {
         self.updates_info.has_loading_count = true;
-        let count = updates.len();
-        self.updates_info
-            .updates_by_manager
-            .insert(manager, (count, updates));
+        match result {
+            Ok(updates) => {
+                self.updates_info.init_errors.remove(&manager);
+                let count = updates.len();
+                self.updates_info
+                    .updates_by_manager
+                    .insert(manager, (count, updates));
+            }
+            Err(error) => {
+                self.updates_info
+                    .updates_by_manager
+                    .entry(manager)
+                    .or_insert_with(|| (0, Vec::new()));
+                self.updates_info.init_errors.insert(manager, error);
+            }
+        }
     }
 
     fn finish_init_updates_counts(&mut self) {
@@ -477,6 +440,24 @@ impl App {
             manager,
             command_message,
         );
+    }
+
+    fn progress_message(progress: InitProgress) -> Message {
+        Message::InitInstalledProgress {
+            completed: progress.completed,
+            total: progress.total,
+            manager: progress.manager,
+            command_message: progress.command_message,
+        }
+    }
+
+    fn updates_progress_message(progress: InitProgress) -> Message {
+        Message::InitUpdatesProgress {
+            completed: progress.completed,
+            total: progress.total,
+            manager: progress.manager,
+            command_message: progress.command_message,
+        }
     }
 
     fn push_init_log(
@@ -529,86 +510,19 @@ impl App {
             return Task::none();
         }
 
-        let (sender, receiver) = mpsc::unbounded::<InitInstalledEvent>();
-        let finished_count = Arc::new(AtomicUsize::new(0));
-
-        // The receiver tracks progress so worker tasks stay stateless.
-        let completed_count = Arc::new(AtomicUsize::new(0));
-        let completed_count_for_progress = Arc::clone(&completed_count);
-        let progress_task = Task::run(receiver, move |event| match event {
-            InitInstalledEvent::Started {
-                total,
-                manager,
-                command_message,
-            } => Message::InitInstalledProgress {
-                completed: completed_count_for_progress.load(Ordering::Relaxed),
-                total,
-                manager,
-                command_message,
+        run_manager_init_task(
+            config,
+            managers,
+            |_| "Running count_installed".to_string(),
+            |pm, result| match result {
+                Ok(count) => format!("Done count_installed -> {}", count),
+                Err(error) => format!("count_installed failed for {} -> {}", pm.name(), error),
             },
-            InitInstalledEvent::Completed {
-                total,
-                manager,
-                command_message,
-            } => {
-                let completed = completed_count_for_progress.fetch_add(1, Ordering::Relaxed) + 1;
-                Message::InitInstalledProgress {
-                    completed,
-                    total,
-                    manager,
-                    command_message,
-                }
-            }
-            InitInstalledEvent::Item { manager, count } => {
-                Message::InitInstalledCount { manager, count }
-            }
-            InitInstalledEvent::Finished => Message::InitInstalledFinished,
-        });
-
-        // One task is spawned per package manager, and all run in parallel.
-        let mut tasks = Vec::with_capacity(total + 1);
-        for pm in managers {
-            let sender_for_task = sender.clone();
-            let config = config.clone();
-            let finished_count_for_task = Arc::clone(&finished_count);
-
-            let task = Task::future(async move {
-                let _ = sender_for_task.unbounded_send(InitInstalledEvent::Started {
-                    total,
-                    manager: pm,
-                    command_message: "Running count_installed".to_string(),
-                });
-
-                let count = match pm.count_installed(&config).await {
-                    Ok(value) => value,
-                    Err(e) => {
-                        log::warn!("count_installed failed for {}: {}", pm.name(), e);
-                        0
-                    }
-                };
-
-                let _ =
-                    sender_for_task.unbounded_send(InitInstalledEvent::Item { manager: pm, count });
-
-                let _ = sender_for_task.unbounded_send(InitInstalledEvent::Completed {
-                    total,
-                    manager: pm,
-                    command_message: format!("Done count_installed -> {}", count),
-                });
-
-                // Emit a terminal event after the last worker reports completion.
-                let finished = finished_count_for_task.fetch_add(1, Ordering::AcqRel) + 1;
-                if finished == total {
-                    let _ = sender_for_task.unbounded_send(InitInstalledEvent::Finished);
-                }
-            })
-            .discard();
-
-            tasks.push(task);
-        }
-
-        tasks.push(progress_task);
-        Task::batch(tasks)
+            |pm, config| async move { pm.count_installed(&config).await.map_err(|e| e.to_string()) },
+            |manager, result| Message::InitInstalledCount { manager, result },
+            Self::progress_message,
+            || Message::InitInstalledFinished,
+        )
     }
 
     fn start_init_updates_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
@@ -627,88 +541,18 @@ impl App {
             return Task::none();
         }
 
-        let (sender, receiver) = mpsc::unbounded::<InitUpdatesEvent>();
-        let finished_count = Arc::new(AtomicUsize::new(0));
-
-        // The receiver tracks progress so worker tasks stay stateless.
-        let completed_count = Arc::new(AtomicUsize::new(0));
-        let completed_count_for_progress = Arc::clone(&completed_count);
-        let progress_task = Task::run(receiver, move |event| match event {
-            InitUpdatesEvent::Started {
-                total,
-                manager,
-                command_message,
-            } => Message::InitUpdatesProgress {
-                completed: completed_count_for_progress.load(Ordering::Relaxed),
-                total,
-                manager,
-                command_message,
+        run_manager_init_task(
+            config,
+            managers,
+            |_| "Running list_updates".to_string(),
+            |pm, result: &Result<Vec<PackageUpdate>, String>| match result {
+                Ok(updates) => format!("Done list_updates -> {} updates", updates.len()),
+                Err(error) => format!("list_updates failed for {} -> {}", pm.name(), error),
             },
-            InitUpdatesEvent::Completed {
-                total,
-                manager,
-                command_message,
-            } => {
-                let completed = completed_count_for_progress.fetch_add(1, Ordering::Relaxed) + 1;
-                Message::InitUpdatesProgress {
-                    completed,
-                    total,
-                    manager,
-                    command_message,
-                }
-            }
-            InitUpdatesEvent::Item { manager, updates } => {
-                Message::InitUpdatesCount { manager, updates }
-            }
-            InitUpdatesEvent::Finished => Message::InitUpdatesFinished,
-        });
-
-        // One task is spawned per package manager, and all run in parallel.
-        let mut tasks = Vec::with_capacity(total + 1);
-        for pm in managers {
-            let sender_for_task = sender.clone();
-            let config = config.clone();
-            let finished_count_for_task = Arc::clone(&finished_count);
-
-            let task = Task::future(async move {
-                let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Started {
-                    total,
-                    manager: pm,
-                    command_message: "Running list_updates".to_string(),
-                });
-
-                let updates = match pm.list_updates(&config).await {
-                    Ok(value) => value,
-                    Err(e) => {
-                        log::warn!("list_updates failed for {}: {}", pm.name(), e);
-                        Vec::new()
-                    }
-                };
-                let update_count = updates.len();
-
-                let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Item {
-                    manager: pm,
-                    updates,
-                });
-
-                let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Completed {
-                    total,
-                    manager: pm,
-                    command_message: format!("Done list_updates -> {} updates", update_count),
-                });
-
-                // Emit a terminal event after the last worker reports completion.
-                let finished = finished_count_for_task.fetch_add(1, Ordering::AcqRel) + 1;
-                if finished == total {
-                    let _ = sender_for_task.unbounded_send(InitUpdatesEvent::Finished);
-                }
-            })
-            .discard();
-
-            tasks.push(task);
-        }
-
-        tasks.push(progress_task);
-        Task::batch(tasks)
+            |pm, config| async move { pm.list_updates(&config).await.map_err(|e| e.to_string()) },
+            |manager, result| Message::InitUpdatesCount { manager, result },
+            Self::updates_progress_message,
+            || Message::InitUpdatesFinished,
+        )
     }
 }

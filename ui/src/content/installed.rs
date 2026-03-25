@@ -14,13 +14,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::channel::mpsc;
 use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
+    content::errors::{ManagerErrors, apply_manager_counted_items_result, joined_manager_names},
     content::shared::{PackageSelectionKey, SharedUi},
+    content::workflows::{
+        BatchProgress, PackageBatchAction, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
+    },
 };
 
 #[derive(Debug, Clone, Default)]
@@ -62,8 +66,6 @@ pub enum Message {
     },
     /// Remove result message.
     RemovePackagesResult(Result<(), String>),
-    /// Remove-task completion message.
-    RemoveTaskFinished,
 }
 
 /// Information about installed packages passed from app state
@@ -71,6 +73,10 @@ pub enum Message {
 pub struct InstalledInfo {
     /// Installed package cache by manager `(count, packages)`.
     pub installed_packages: HashMap<PackageManagerType, (usize, Vec<PackageInfo>)>,
+    /// Initial count-loading failures grouped by manager.
+    pub init_errors: ManagerErrors,
+    /// Full installed-list loading failures grouped by manager.
+    pub load_errors: ManagerErrors,
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
     /// Managers currently loading full installed package list.
@@ -93,24 +99,6 @@ pub struct InstalledInfo {
     pub remove_progress: Option<(usize, usize, PackageManagerType, String)>,
     /// Remove command logs.
     pub remove_logs: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-enum RemoveTaskEvent {
-    Progress {
-        /// Number of finished packages.
-        completed: usize,
-        /// Total packages to remove.
-        total: usize,
-        /// Manager currently executing command.
-        manager: PackageManagerType,
-        /// Current package being processed.
-        current_package: String,
-        /// Optional command output/status line.
-        command_message: Option<String>,
-    },
-    /// Final remove result.
-    Done(Result<(), String>),
 }
 
 impl From<Message> for content::Message {
@@ -142,14 +130,6 @@ impl SortOption {
             SortOption::Name => "Name",
             SortOption::Version => "Version",
             SortOption::InstallDate => "Install Date",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            SortOption::Name => "Sort by package name",
-            SortOption::Version => "Sort by version number",
-            SortOption::InstallDate => "Sort by installation date",
         }
     }
 
@@ -196,15 +176,12 @@ impl Installed {
             }
             Message::LoadInstalledResult(pm_type, result) => {
                 info.loading_installed.remove(&pm_type);
-                match result {
-                    Ok(packages) => {
-                        let count = packages.len();
-                        info.installed_packages.insert(pm_type, (count, packages));
-                    }
-                    Err(_) => {
-                        info.installed_packages.insert(pm_type, (0, Vec::new()));
-                    }
-                }
+                apply_manager_counted_items_result(
+                    &mut info.installed_packages,
+                    &mut info.load_errors,
+                    pm_type,
+                    result,
+                );
                 Action::None
             }
             Message::RefreshInfo => {
@@ -293,6 +270,7 @@ impl Installed {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.remove_logs,
+                        PackageBatchAction::Remove,
                         manager,
                         info.remove_progress
                             .as_ref()
@@ -317,7 +295,6 @@ impl Installed {
                     }
                 }
             }
-            Message::RemoveTaskFinished => Action::None,
         }
     }
 
@@ -399,7 +376,23 @@ impl Installed {
             )
         };
 
-        SharedUi::filter_section("Filter Package Managers", filters_content)
+        let init_error_note = (!info.init_errors.is_empty()).then(|| {
+            iced::widget::text(format!(
+                "Initialization failed for: {}",
+                joined_manager_names(&info.init_errors)
+            ))
+            .size(13)
+            .color(app::colors::ERROR)
+        });
+
+        let mut section = iced::widget::column![SharedUi::section_title("Filter Package Managers")];
+        if let Some(note) = init_error_note {
+            section = section.push(note);
+        }
+        section
+            .push(SharedUi::styled_container(filters_content))
+            .spacing(12)
+            .into()
     }
 
     fn sort_order_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
@@ -462,6 +455,10 @@ impl Installed {
         }
 
         let search_query = self.search_query.trim().to_lowercase();
+        let has_visible_errors = filtered_managers
+            .iter()
+            .any(|(pm_type, _)| info.load_errors.contains_key(*pm_type));
+
         if !search_query.is_empty() {
             let has_any_match = filtered_managers.iter().any(|(_, (_, packages))| {
                 packages
@@ -469,7 +466,7 @@ impl Installed {
                     .any(|pkg| pkg.name.to_lowercase().contains(&search_query))
             });
 
-            if !has_any_match {
+            if !has_any_match && !has_visible_errors {
                 return self.centered_message("No packages match your search");
             }
         }
@@ -516,6 +513,19 @@ impl Installed {
         .align_y(iced::Alignment::Center);
 
         let filtered_packages = self.filter_and_sort_packages(packages, info.sort_by);
+
+        if let Some(error) = info.load_errors.get(&pm_type) {
+            return column![
+                header,
+                SharedUi::styled_container(
+                    text(format!("Failed to load installed packages: {}", error))
+                        .size(14)
+                        .color(app::colors::ERROR)
+                )
+            ]
+            .spacing(12)
+            .into();
+        }
 
         if filtered_packages.is_empty() {
             return column![].into();
@@ -740,126 +750,34 @@ impl Installed {
     }
 
     fn remove_packages_action(pm_config: &updater_core::Config, info: &InstalledInfo) -> Action {
-        let pm_config = pm_config.clone();
-        let selected_packages = info.selected_packages.clone();
+        let manager_groups = collect_selected_package_groups(
+            info.selected_managers.iter().filter_map(|pm_type| {
+                info.installed_packages
+                    .get(pm_type)
+                    .map(|(_, packages)| (*pm_type, packages.as_slice()))
+            }),
+            &info.selected_packages,
+            |package| package.name.as_str(),
+        );
 
-        // Group selected packages by package manager.
-        let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
-
-        for pm_type in info.selected_managers.iter() {
-            if let Some((_, packages)) = info.installed_packages.get(pm_type) {
-                for pkg in packages {
-                    if selected_packages.contains(&SharedUi::selection_key(*pm_type, &pkg.name)) {
-                        packages_by_manager
-                            .entry(*pm_type)
-                            .or_default()
-                            .push(pkg.name.clone());
-                    }
-                }
-            }
-        }
-
-        let total_packages: usize = packages_by_manager.values().map(Vec::len).sum();
-
-        if total_packages == 0 {
-            return Action::Run(Task::done(Message::RemovePackagesResult(Ok(()))));
-        }
-
-        let mut manager_groups: Vec<(PackageManagerType, Vec<String>)> =
-            packages_by_manager.into_iter().collect();
-        manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
-        for (_, package_names) in manager_groups.iter_mut() {
-            package_names.sort();
-        }
-
-        let (sender, receiver) = mpsc::unbounded::<RemoveTaskEvent>();
-        let remove_sender = sender.clone();
-
-        let remove_task =
-            Task::future(async move {
-                let mut global_offset = 0usize;
-
-                for (pm_type, package_names) in manager_groups {
-                    let offset = global_offset;
-                    let progress_sender = remove_sender.clone();
-
-                    let result = pm_type
-                        .uninstall_packages_with_progress(&pm_config, &package_names, |progress| {
-                            let _ = progress_sender.unbounded_send(RemoveTaskEvent::Progress {
-                                completed: offset + progress.completed,
-                                total: total_packages,
-                                manager: progress.manager,
-                                current_package: progress.current_package,
-                                command_message: progress.command_message,
-                            });
-                        })
-                        .await;
-
-                    match result {
-                        Ok(()) => {
-                            global_offset += package_names.len();
-                        }
-                        Err(e) => {
-                            let _ = remove_sender.unbounded_send(RemoveTaskEvent::Done(Err(
-                                format!("Failed to remove packages from {}: {}", pm_type.name(), e),
-                            )));
-                            return;
-                        }
-                    }
-                }
-
-                let _ = remove_sender.unbounded_send(RemoveTaskEvent::Done(Ok(())));
-            })
-            .map(|_| Message::RemoveTaskFinished);
-
-        let progress_task = Task::run(receiver, |event| match event {
-            RemoveTaskEvent::Progress {
-                completed,
-                total,
-                manager,
-                current_package,
-                command_message,
-            } => Message::RemoveProgress {
+        Action::Run(run_grouped_package_action(
+            pm_config,
+            PackageBatchAction::Remove,
+            manager_groups,
+            |BatchProgress {
+                 completed,
+                 total,
+                 manager,
+                 current_package,
+                 command_message,
+             }| Message::RemoveProgress {
                 completed,
                 total,
                 manager,
                 current_package,
                 command_message,
             },
-            RemoveTaskEvent::Done(result) => Message::RemovePackagesResult(result),
-        });
-
-        Action::Run(Task::batch(vec![remove_task, progress_task]))
-    }
-}
-
-fn push_command_log(
-    logs: &mut Vec<String>,
-    manager: PackageManagerType,
-    package_name: &str,
-    command_message: String,
-) {
-    let command_message = command_message.trim();
-    if command_message.is_empty() {
-        return;
-    }
-
-    let package_name = if package_name.is_empty() {
-        "batch"
-    } else {
-        package_name
-    };
-
-    logs.push(format!(
-        "[Remove][{}][{}] {}",
-        manager.name(),
-        package_name,
-        command_message
-    ));
-
-    const MAX_COMMAND_LOGS: usize = 120;
-    if logs.len() > MAX_COMMAND_LOGS {
-        let overflow = logs.len() - MAX_COMMAND_LOGS;
-        logs.drain(0..overflow);
+            Message::RemovePackagesResult,
+        ))
     }
 }

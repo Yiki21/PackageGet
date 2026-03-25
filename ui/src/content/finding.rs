@@ -2,13 +2,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::channel::mpsc;
 use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
     app, content,
+    content::errors::{ManagerErrors, apply_manager_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
+    content::workflows::{
+        BatchProgress, PackageBatchAction, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
+    },
 };
 
 #[derive(Debug, Clone, Default)]
@@ -50,14 +54,14 @@ pub enum Message {
     },
     /// Install result message.
     InstallPackagesResult(Result<(), String>),
-    /// Install-task completion message.
-    InstallTaskFinished,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct FindingInfo {
     /// Search results grouped by manager.
     pub search_results: HashMap<PackageManagerType, Vec<PackageInfo>>,
+    /// Search errors grouped by manager.
+    pub search_errors: ManagerErrors,
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<PackageManagerType>,
     /// Managers currently running search.
@@ -72,24 +76,6 @@ pub struct FindingInfo {
     pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
     /// Install command logs.
     pub install_logs: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-enum InstallTaskEvent {
-    Progress {
-        /// Number of finished packages.
-        completed: usize,
-        /// Total packages to install.
-        total: usize,
-        /// Manager currently executing command.
-        manager: PackageManagerType,
-        /// Current package being processed.
-        current_package: String,
-        /// Optional command output/status line.
-        command_message: Option<String>,
-    },
-    /// Final install result.
-    Done(Result<(), String>),
 }
 
 impl From<Message> for content::Message {
@@ -137,6 +123,7 @@ impl Finding {
                 } else {
                     info.selected_managers.remove(&pm_type);
                     info.searching_managers.remove(&pm_type);
+                    info.search_errors.remove(&pm_type);
                     info.selected_packages
                         .retain(|(manager, _)| *manager != pm_type);
                     info.search_results.remove(&pm_type);
@@ -162,6 +149,7 @@ impl Finding {
                 info.search_results.clear();
                 info.selected_packages.clear();
                 info.searching_managers.clear();
+                info.search_errors.clear();
                 self.last_search_query = query.to_string();
 
                 // Mark selected managers as searching.
@@ -173,14 +161,12 @@ impl Finding {
             }
             Message::SearchResult(pm_type, result) => {
                 info.searching_managers.remove(&pm_type);
-                match result {
-                    Ok(packages) => {
-                        info.search_results.insert(pm_type, packages);
-                    }
-                    Err(_) => {
-                        info.search_results.insert(pm_type, Vec::new());
-                    }
-                }
+                apply_manager_items_result(
+                    &mut info.search_results,
+                    &mut info.search_errors,
+                    pm_type,
+                    result,
+                );
                 Action::None
             }
             Message::SortOptionChanged(sort_option) => {
@@ -227,6 +213,7 @@ impl Finding {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.install_logs,
+                        PackageBatchAction::Install,
                         manager,
                         info.install_progress
                             .as_ref()
@@ -262,7 +249,6 @@ impl Finding {
                     }
                 }
             }
-            Message::InstallTaskFinished => Action::None,
         }
     }
 
@@ -340,6 +326,8 @@ impl Finding {
 
             let label = if is_searching {
                 format!("{} (Searching...)", pm_type.name())
+            } else if info.search_errors.contains_key(&pm_type) {
+                format!("{} (Failed)", pm_type.name())
             } else if let Some(results) = info.search_results.get(&pm_type) {
                 format!("{} ({} results)", pm_type.name(), results.len())
             } else {
@@ -415,32 +403,48 @@ impl Finding {
             return SharedUi::centered_message("Searching...");
         }
 
-        let total_results: usize = info
-            .search_results
-            .values()
-            .map(|packages| packages.len())
-            .sum();
-
-        if total_results == 0 {
-            return SharedUi::centered_message("No packages found");
-        }
-
         let results_sections: Vec<iced::Element<'_, Message>> = info
             .selected_managers
             .iter()
             .filter_map(|pm_type| {
-                info.search_results
-                    .get(pm_type)
-                    .map(|packages| (*pm_type, packages))
+                if let Some(error) = info.search_errors.get(pm_type) {
+                    Some(self.error_section(*pm_type, error))
+                } else {
+                    info.search_results
+                        .get(pm_type)
+                        .filter(|packages| !packages.is_empty())
+                        .map(|packages| self.package_manager_section(*pm_type, packages, info))
+                }
             })
-            .filter(|(_, packages)| !packages.is_empty())
-            .map(|(pm_type, packages)| self.package_manager_section(pm_type, packages, info))
             .collect();
+
+        if results_sections.is_empty() {
+            return SharedUi::centered_message("No packages found");
+        }
 
         scrollable(column(results_sections).spacing(20))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
+    }
+
+    fn error_section<'a>(
+        &self,
+        pm_type: PackageManagerType,
+        error: &'a str,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{column, text};
+
+        column![
+            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
+            SharedUi::styled_container(
+                text(format!("Search failed: {}", error))
+                    .size(14)
+                    .color(app::colors::ERROR),
+            )
+        ]
+        .spacing(12)
+        .into()
     }
 
     fn package_manager_section<'a>(
@@ -721,123 +725,32 @@ impl Finding {
     }
 
     fn install_packages_action(pm_config: &updater_core::Config, info: &FindingInfo) -> Action {
-        let pm_config = pm_config.clone();
-        let selected_packages = info.selected_packages.clone();
+        let manager_groups = collect_selected_package_groups(
+            info.search_results
+                .iter()
+                .map(|(pm_type, packages)| (*pm_type, packages.as_slice())),
+            &info.selected_packages,
+            |package| package.name.as_str(),
+        );
 
-        // Group selected packages by package manager.
-        let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
-
-        for (pm_type, packages) in info.search_results.iter() {
-            for pkg in packages {
-                if selected_packages.contains(&SharedUi::selection_key(*pm_type, &pkg.name)) {
-                    packages_by_manager
-                        .entry(*pm_type)
-                        .or_default()
-                        .push(pkg.name.clone());
-                }
-            }
-        }
-
-        let total_packages: usize = packages_by_manager.values().map(Vec::len).sum();
-
-        if total_packages == 0 {
-            return Action::Run(Task::done(Message::InstallPackagesResult(Ok(()))));
-        }
-
-        let mut manager_groups: Vec<(PackageManagerType, Vec<String>)> =
-            packages_by_manager.into_iter().collect();
-        manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
-        for (_, package_names) in manager_groups.iter_mut() {
-            package_names.sort();
-        }
-
-        let (sender, receiver) = mpsc::unbounded::<InstallTaskEvent>();
-
-        let install_sender = sender.clone();
-        let install_task = Task::future(async move {
-            let mut global_offset = 0usize;
-
-            for (pm_type, package_names) in manager_groups {
-                let offset = global_offset;
-                let progress_sender = install_sender.clone();
-
-                let result = pm_type
-                    .install_packages_with_progress(&pm_config, &package_names, |progress| {
-                        let _ = progress_sender.unbounded_send(InstallTaskEvent::Progress {
-                            completed: offset + progress.completed,
-                            total: total_packages,
-                            manager: progress.manager,
-                            current_package: progress.current_package,
-                            command_message: progress.command_message,
-                        });
-                    })
-                    .await;
-
-                match result {
-                    Ok(()) => {
-                        global_offset += package_names.len();
-                    }
-                    Err(e) => {
-                        let _ = install_sender.unbounded_send(InstallTaskEvent::Done(Err(
-                            format!("Failed to install packages from {}: {}", pm_type.name(), e),
-                        )));
-                        return;
-                    }
-                }
-            }
-
-            let _ = install_sender.unbounded_send(InstallTaskEvent::Done(Ok(())));
-        })
-        .map(|_| Message::InstallTaskFinished);
-
-        let progress_task = Task::run(receiver, |event| match event {
-            InstallTaskEvent::Progress {
-                completed,
-                total,
-                manager,
-                current_package,
-                command_message,
-            } => Message::InstallProgress {
+        Action::Run(run_grouped_package_action(
+            pm_config,
+            PackageBatchAction::Install,
+            manager_groups,
+            |BatchProgress {
+                 completed,
+                 total,
+                 manager,
+                 current_package,
+                 command_message,
+             }| Message::InstallProgress {
                 completed,
                 total,
                 manager,
                 current_package,
                 command_message,
             },
-            InstallTaskEvent::Done(result) => Message::InstallPackagesResult(result),
-        });
-
-        Action::Run(Task::batch(vec![install_task, progress_task]))
-    }
-}
-
-fn push_command_log(
-    logs: &mut Vec<String>,
-    manager: PackageManagerType,
-    package_name: &str,
-    command_message: String,
-) {
-    let command_message = command_message.trim();
-    if command_message.is_empty() {
-        return;
-    }
-
-    let package_name = if package_name.is_empty() {
-        "batch"
-    } else {
-        package_name
-    };
-
-    logs.push(format!(
-        "[Install][{}][{}] {}",
-        manager.name(),
-        package_name,
-        command_message
-    ));
-
-    const MAX_COMMAND_LOGS: usize = 120;
-    if logs.len() > MAX_COMMAND_LOGS {
-        let overflow = logs.len() - MAX_COMMAND_LOGS;
-        logs.drain(0..overflow);
+            Message::InstallPackagesResult,
+        ))
     }
 }

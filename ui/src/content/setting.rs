@@ -44,8 +44,6 @@ pub enum Message {
     SaveConfig,
     /// Config-save result message.
     SaveConfigResult(Result<(), String>),
-    /// Config-reload result message.
-    ConfigReloaded(Result<(), String>),
     /// Manager-path dialog message.
     OpenDialog(PackageManagerType),
     /// Manager-path selection message.
@@ -281,29 +279,10 @@ impl Settings {
                     Ok(_) => {
                         log::debug!("Configuration saved successfully");
                         self.save_status = Some(SaveStatus::Success);
-
-                        // Reload configuration after save.
-                        let mut config = pm_config.clone();
-                        let task = Task::perform(
-                            async move { config.reload().await.map_err(|e| e.to_string()) },
-                            Message::ConfigReloaded,
-                        );
-                        return Action::Run(task);
                     }
                     Err(e) => {
                         log::error!("Failed to save configuration: {}", e);
                         self.save_status = Some(SaveStatus::Error(e));
-                    }
-                }
-                Action::None
-            }
-            Message::ConfigReloaded(result) => {
-                match result {
-                    Ok(_) => {
-                        log::debug!("Configuration reloaded successfully");
-                    }
-                    Err(e) => {
-                        log::error!("Failed to reload configuration: {}", e);
                     }
                 }
                 Action::None

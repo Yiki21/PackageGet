@@ -37,14 +37,11 @@ pub enum Message {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Action {
     /// No-op action.
     None,
     /// Content page switch action.
     ChangeContent(ActiveContentPage),
-    /// Asynchronous task action.
-    Run(iced::Task<Message>),
 }
 
 impl From<Message> for app::Message {
