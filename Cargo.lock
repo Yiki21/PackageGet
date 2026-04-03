@@ -4184,7 +4184,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ui"
+name = "updater"
 version = "0.1.0"
 dependencies = [
  "env_logger",

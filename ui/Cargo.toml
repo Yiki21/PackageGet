@@ -1,11 +1,71 @@
 [package]
-name = "ui"
+name = "updater"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
+homepage = "https://github.com/Yiki21/PackageGet"
+repository = "https://github.com/Yiki21/PackageGet"
+readme = "../README.md"
+default-run = "updater"
+license = "MIT"
+
+
+[package.metadata.packager]
+product-name = "Updater"
+identifier = "io.github.yiki21.updater"
+formats = ["dmg"]
+out-dir = "../target/packager"
+binaries-dir = "../target/release"
+before-packaging-command = "cargo build --release --locked -p updater"
+homepage = "https://github.com/Yiki21/PackageGet"
+description = "A desktop GUI application for checking, installing, and updating packages across package managers."
+long-description = """\
+Updater is a desktop GUI application built with Rust and iced.
+
+Features:
+- Detect available package managers automatically
+- View installed packages and pending updates in one place
+- Search, install, remove, and update packages across package managers
+"""
+
+[package.metadata.generate-rpm]
+summary = "Desktop GUI updater for multiple package managers"
+vendor = "Yiki21"
+release = "1"
+auto-req = "yes"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../target/release/updater"
+dest = "/usr/bin/updater"
+mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../README.md"
+dest = "/usr/share/doc/updater/README.md"
+mode = "644"
+doc = true
+
+[package.metadata.deb]
+maintainer = "Yiki21"
+section = "utils"
+priority = "optional"
+revision = "1"
+extended-description = """\
+Updater is a desktop GUI application built with Rust and iced.
+
+Features:
+- Detect available package managers automatically
+- View installed packages and pending updates in one place
+- Search, install, remove, and update packages across package managers
+"""
+
+assets = [
+  ["../target/release/updater", "usr/bin/updater", "755"],
+  ["../README.md", "usr/share/doc/updater/README.md", "644"],
+]
 
 [[bin]]
-name = "ui"
+name = "updater"
 
 [dependencies]
 iced = { version = "0.14.0", features = [
