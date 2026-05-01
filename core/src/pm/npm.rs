@@ -17,45 +17,8 @@ pub struct NpmManager;
 #[derive(Debug, Clone, Copy)]
 pub struct PnpmManager;
 
-#[derive(Debug, Clone, Copy)]
-enum GlobalPackageAction {
-    Install,
-    Update,
-    Uninstall,
-}
-
-impl GlobalPackageAction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Update => "update",
-            Self::Uninstall => "uninstall",
-        }
-    }
-}
-
 fn command_path(config: &Config, manager_type: PackageManagerType) -> String {
     manager_command_path(config, manager_type)
-}
-
-async fn run_packages_silent(
-    config: &Config,
-    manager_type: PackageManagerType,
-    action: GlobalPackageAction,
-    package_names: &[String],
-) -> CoreResult<()> {
-    for package_name in package_names {
-        run_global_package_command_with_progress(
-            config,
-            manager_type,
-            action.as_str(),
-            package_name,
-            |_| {},
-        )
-        .await?;
-    }
-
-    Ok(())
 }
 
 macro_rules! impl_global_js_manager {
@@ -86,48 +49,6 @@ macro_rules! impl_global_js_manager {
                 package_name: &str,
             ) -> CoreResult<Vec<PackageInfo>> {
                 search_package_by_manager(config, $manager_type, package_name).await
-            }
-
-            async fn uninstall_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                run_packages_silent(
-                    config,
-                    $manager_type,
-                    GlobalPackageAction::Uninstall,
-                    package_names,
-                )
-                .await
-            }
-
-            async fn update_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                run_packages_silent(
-                    config,
-                    $manager_type,
-                    GlobalPackageAction::Update,
-                    package_names,
-                )
-                .await
-            }
-
-            async fn install_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                run_packages_silent(
-                    config,
-                    $manager_type,
-                    GlobalPackageAction::Install,
-                    package_names,
-                )
-                .await
             }
         }
     };

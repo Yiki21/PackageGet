@@ -6,10 +6,7 @@ mod shared;
 mod updates;
 mod workflows;
 
-use crate::{
-    app,
-    content::{finding::Finding, installed::Installed, setting::Settings, updates::Updates},
-};
+use crate::content::{finding::Finding, installed::Installed, setting::Settings, updates::Updates};
 
 pub use finding::FindingInfo;
 pub use installed::InstalledInfo;
@@ -61,12 +58,6 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Installed-data reload request action.
     ReloadInstalledData,
-}
-
-impl From<Message> for app::Message {
-    fn from(msg: Message) -> Self {
-        crate::app::Message::Content(msg)
-    }
 }
 
 impl Content {

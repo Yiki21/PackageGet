@@ -4,7 +4,6 @@ use updater_core::{ALL_APP_PACKAGE_MANAGERS, Config, PackageManagerConfig, Packa
 
 use crate::{
     app::{self},
-    content::{self},
     icon::{ADD_ICON, REFRESH_ICON, SAVE_ICON},
 };
 
@@ -56,12 +55,6 @@ pub enum Message {
     SelectedGoBinDir(FileHandle),
     /// Go-bin directory clear message.
     ClearGoBinDir,
-}
-
-impl From<Message> for content::Message {
-    fn from(msg: Message) -> Self {
-        content::Message::Settings(msg)
-    }
 }
 
 #[derive(Debug)]

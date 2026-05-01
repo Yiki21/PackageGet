@@ -5,7 +5,7 @@ use iced::{
 };
 
 use crate::{
-    app::{self},
+    app,
     content::ActiveContentPage,
     icon::{FIND_ICON, INSTALLED_ICON, SETTINGS_ICON, UPDATE_ICON},
 };
@@ -42,12 +42,6 @@ pub enum Action {
     None,
     /// Content page switch action.
     ChangeContent(ActiveContentPage),
-}
-
-impl From<Message> for app::Message {
-    fn from(msg: Message) -> Self {
-        app::Message::SideBar(msg)
-    }
 }
 
 impl From<Tab> for ActiveContentPage {

@@ -18,7 +18,7 @@ use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
-    app, content,
+    app,
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
@@ -101,12 +101,6 @@ pub struct InstalledInfo {
     pub remove_logs: Vec<String>,
 }
 
-impl From<Message> for content::Message {
-    fn from(msg: Message) -> Self {
-        content::Message::Installed(msg)
-    }
-}
-
 pub enum Action {
     /// No-op action.
     None,
@@ -161,11 +155,11 @@ impl Installed {
                             Action::None
                         } else {
                             info.loading_installed.insert(pm_type);
-                            Self::load_installed_packages_action(pm_config, pm_type)
+                            Action::Run(Self::create_load_task(pm_config, pm_type))
                         }
                     } else {
                         info.loading_installed.insert(pm_type);
-                        Self::load_installed_packages_action(pm_config, pm_type)
+                        Action::Run(Self::create_load_task(pm_config, pm_type))
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
@@ -417,7 +411,7 @@ impl Installed {
         use iced::widget::{column, scrollable};
 
         if !info.has_loading_count {
-            return self.centered_message(if info.is_loading_count {
+            return SharedUi::centered_message(if info.is_loading_count {
                 "Loading package information..."
             } else {
                 "Waiting to load package information"
@@ -431,7 +425,7 @@ impl Installed {
             .collect();
 
         if filtered_managers.is_empty() {
-            return self.centered_message("Please select a package manager to view");
+            return SharedUi::centered_message("Please select a package manager to view");
         }
 
         let search_query = self.search_query.trim().to_lowercase();
@@ -447,7 +441,7 @@ impl Installed {
             });
 
             if !has_any_match && !has_visible_errors {
-                return self.centered_message("No packages match your search");
+                return SharedUi::centered_message("No packages match your search");
             }
         }
 
@@ -462,10 +456,6 @@ impl Installed {
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
-    }
-
-    fn centered_message<'a>(&self, message: &'a str) -> iced::Element<'a, Message> {
-        SharedUi::centered_message(message)
     }
 
     fn package_manager_section<'a>(
@@ -699,13 +689,6 @@ impl Installed {
             })
         })
         .then(move |result| Task::done(Message::LoadInstalledResult(pm_type, result)))
-    }
-
-    fn load_installed_packages_action(
-        pm_config: &updater_core::Config,
-        pm_type: PackageManagerType,
-    ) -> Action {
-        Action::Run(Self::create_load_task(pm_config, pm_type))
     }
 
     fn remove_packages_action(pm_config: &updater_core::Config, info: &InstalledInfo) -> Action {

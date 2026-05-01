@@ -35,9 +35,27 @@ enum InitEvent<Item> {
     Finished,
 }
 
+pub struct ManagerInitTask<
+    StartLabel,
+    CompleteLabel,
+    Work,
+    ItemMessage,
+    ProgressMessage,
+    DoneMessage,
+> {
+    pub start_label: StartLabel,
+    pub complete_label: CompleteLabel,
+    pub work: Work,
+    pub item_message: ItemMessage,
+    pub progress_message: ProgressMessage,
+    pub done_message: DoneMessage,
+}
+
 pub fn run_manager_init_task<
     Message,
     Item,
+    StartLabel,
+    CompleteLabel,
     Work,
     WorkFuture,
     ItemMessage,
@@ -46,22 +64,35 @@ pub fn run_manager_init_task<
 >(
     config: Config,
     managers: Vec<PackageManagerType>,
-    start_label: impl Fn(PackageManagerType) -> String + Copy + Send + 'static,
-    complete_label: impl Fn(PackageManagerType, &Result<Item, String>) -> String + Copy + Send + 'static,
-    work: Work,
-    item_message: ItemMessage,
-    progress_message: ProgressMessage,
-    done_message: DoneMessage,
+    task: ManagerInitTask<
+        StartLabel,
+        CompleteLabel,
+        Work,
+        ItemMessage,
+        ProgressMessage,
+        DoneMessage,
+    >,
 ) -> Task<Message>
 where
     Message: Send + 'static,
     Item: Send + 'static,
+    StartLabel: Fn(PackageManagerType) -> String + Copy + Send + 'static,
+    CompleteLabel: Fn(PackageManagerType, &Result<Item, String>) -> String + Copy + Send + 'static,
     Work: Fn(PackageManagerType, Config) -> WorkFuture + Copy + Send + 'static,
     WorkFuture: Future<Output = Result<Item, String>> + Send + 'static,
     ItemMessage: Fn(PackageManagerType, Result<Item, String>) -> Message + Copy + Send + 'static,
     ProgressMessage: Fn(InitProgress) -> Message + Copy + Send + 'static,
     DoneMessage: Fn() -> Message + Copy + Send + 'static,
 {
+    let ManagerInitTask {
+        start_label,
+        complete_label,
+        work,
+        item_message,
+        progress_message,
+        done_message,
+    } = task;
+
     let total = managers.len();
     if total == 0 {
         return Task::done(done_message());

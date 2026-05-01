@@ -205,31 +205,6 @@ impl PackageManager for FlatpakManager {
 
         Ok(packages)
     }
-
-    async fn uninstall_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::uninstall_package_with_progress(config, package_name, |_| {}).await?;
-        }
-        Ok(())
-    }
-
-    async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::update_package_with_progress(config, package_name, |_| {}).await?;
-        }
-        Ok(())
-    }
-
-    async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        for package_name in package_names {
-            Self::install_package_with_progress(config, package_name, |_| {}).await?;
-        }
-        Ok(())
-    }
 }
 
 impl FlatpakManager {

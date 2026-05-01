@@ -144,13 +144,6 @@ macro_rules! define_package_managers {
                     .unwrap_or(false)
             }
 
-            pub async fn list_updates(&self, config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-                match self {
-                    $(Self::$system_variant => $system_manager::list_updates(config).await,)*
-                    $(Self::$app_variant => $app_manager::list_updates(config).await,)*
-                }
-            }
-
             pub async fn get_current_version(
                 &self,
                 config: &Config,
@@ -187,28 +180,6 @@ macro_rules! define_package_managers {
                 }
             }
 
-            pub async fn uninstall_package(
-                &self,
-                config: &Config,
-                package_name: &str,
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.uninstall_package(config, package_name).await,)*
-                    $(Self::$app_variant => $app_manager.uninstall_package(config, package_name).await,)*
-                }
-            }
-
-            pub async fn uninstall_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.uninstall_packages(config, package_names).await,)*
-                    $(Self::$app_variant => $app_manager.uninstall_packages(config, package_names).await,)*
-                }
-            }
-
             pub async fn uninstall_packages_with_progress(
                 &self,
                 config: &Config,
@@ -224,28 +195,6 @@ macro_rules! define_package_managers {
                 .await
             }
 
-            pub async fn update_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.update_packages(config, package_names).await,)*
-                    $(Self::$app_variant => $app_manager.update_packages(config, package_names).await,)*
-                }
-            }
-
-            pub async fn update_package(
-                &self,
-                config: &Config,
-                package_name: &str,
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.update_package(config, package_name).await,)*
-                    $(Self::$app_variant => $app_manager.update_package(config, package_name).await,)*
-                }
-            }
-
             pub async fn update_packages_with_progress(
                 &self,
                 config: &Config,
@@ -259,28 +208,6 @@ macro_rules! define_package_managers {
                     &mut on_progress,
                 )
                 .await
-            }
-
-            pub async fn install_packages(
-                &self,
-                config: &Config,
-                package_names: &[String],
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.install_packages(config, package_names).await,)*
-                    $(Self::$app_variant => $app_manager.install_packages(config, package_names).await,)*
-                }
-            }
-
-            pub async fn install_package(
-                &self,
-                config: &Config,
-                package_name: &str,
-            ) -> CoreResult<()> {
-                match self {
-                    $(Self::$system_variant => $system_manager.install_package(config, package_name).await,)*
-                    $(Self::$app_variant => $app_manager.install_package(config, package_name).await,)*
-                }
             }
 
             pub async fn install_packages_with_progress(
@@ -378,16 +305,16 @@ macro_rules! define_package_managers {
             ) -> CoreResult<()> {
                 match action {
                     PackageAction::Uninstall => match self {
-                        $(Self::$system_variant => $system_manager::uninstall_package_with_progress(config, package_name, report).await,)*
                         $(Self::$app_variant => $app_manager::uninstall_package_with_progress(config, package_name, report).await,)*
+                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
                     },
                     PackageAction::Update => match self {
-                        $(Self::$system_variant => $system_manager::update_package_with_progress(config, package_name, report).await,)*
                         $(Self::$app_variant => $app_manager::update_package_with_progress(config, package_name, report).await,)*
+                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
                     },
                     PackageAction::Install => match self {
-                        $(Self::$system_variant => $system_manager::install_package_with_progress(config, package_name, report).await,)*
                         $(Self::$app_variant => $app_manager::install_package_with_progress(config, package_name, report).await,)*
+                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
                     },
                 }
             }
@@ -423,7 +350,12 @@ impl PackageManagerType {
             Self::Dnf => DnfManager::list_updates_with_refresh(config, refresh).await,
             Self::Pacman => PacmanManager::list_updates_with_refresh(config, refresh).await,
             Self::Zypper => ZypperManager::list_updates_with_refresh(config, refresh).await,
-            _ => self.list_updates(config).await,
+            Self::Flatpak => FlatpakManager::list_updates(config).await,
+            Self::Homebrew => HomebrewManager::list_updates(config).await,
+            Self::Cargo => CargoManager::list_updates(config).await,
+            Self::Go => GoManager::list_updates(config).await,
+            Self::Npm => NpmManager::list_updates(config).await,
+            Self::Pnpm => PnpmManager::list_updates(config).await,
         }
     }
 
@@ -498,7 +430,11 @@ type CoreResult<T> = Result<T, CoreError>;
 
 #[async_trait]
 pub trait PackageManager: Send + Sync {
-    async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>>;
+    async fn list_updates(_config: &Config) -> CoreResult<Vec<PackageUpdate>> {
+        Err(CoreError::UnknownError(
+            "list_updates not implemented".into(),
+        ))
+    }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String>;
 
@@ -514,47 +450,6 @@ pub trait PackageManager: Send + Sync {
         Err(CoreError::UnknownError(
             "search_package not implemented".into(),
         ))
-    }
-
-    async fn uninstall_package(&self, _config: &Config, _package_name: &str) -> CoreResult<()> {
-        self.uninstall_packages(_config, &[_package_name.to_owned()])
-            .await
-    }
-
-    async fn uninstall_packages(
-        &self,
-        _config: &Config,
-        _package_names: &[String],
-    ) -> CoreResult<()> {
-        Err(CoreError::UnknownError(
-            "uninstall_packages not implemented".into(),
-        ))
-    }
-
-    async fn update_packages(&self, _config: &Config, _package_names: &[String]) -> CoreResult<()> {
-        Err(CoreError::UnknownError(
-            "update_packages not implemented".into(),
-        ))
-    }
-
-    async fn update_package(&self, _config: &Config, _package_name: &str) -> CoreResult<()> {
-        self.update_packages(_config, &[_package_name.to_owned()])
-            .await
-    }
-
-    async fn install_packages(
-        &self,
-        _config: &Config,
-        _package_names: &[String],
-    ) -> CoreResult<()> {
-        Err(CoreError::UnknownError(
-            "install_packages not implemented".into(),
-        ))
-    }
-
-    async fn install_package(&self, config: &Config, package_name: &str) -> CoreResult<()> {
-        self.install_packages(config, &[package_name.to_owned()])
-            .await
     }
 }
 

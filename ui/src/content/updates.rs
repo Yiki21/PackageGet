@@ -6,7 +6,7 @@ use iced::{Border, Task};
 use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
-    app, content,
+    app,
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
@@ -92,12 +92,6 @@ pub struct UpdatesInfo {
     pub last_update_error: Option<String>,
 }
 
-impl From<Message> for content::Message {
-    fn from(msg: Message) -> Self {
-        content::Message::Updates(msg)
-    }
-}
-
 pub enum Action {
     /// No-op action.
     None,
@@ -153,11 +147,11 @@ impl Updates {
                             Action::None
                         } else {
                             info.loading_updates.insert(pm_type);
-                            Self::load_updates_action(pm_config, pm_type, false)
+                            Action::Run(Self::create_load_task(pm_config, pm_type, false))
                         }
                     } else {
                         info.loading_updates.insert(pm_type);
-                        Self::load_updates_action(pm_config, pm_type, false)
+                        Action::Run(Self::create_load_task(pm_config, pm_type, false))
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
@@ -762,14 +756,6 @@ impl Updates {
                 .map_err(|e| format!("Failed to load updates for {}: {}", pm_type.name(), e))
         })
         .then(move |result| Task::done(Message::LoadUpdatesResult(pm_type, result)))
-    }
-
-    fn load_updates_action(
-        pm_config: &updater_core::Config,
-        pm_type: PackageManagerType,
-        force_refresh: bool,
-    ) -> Action {
-        Action::Run(Self::create_load_task(pm_config, pm_type, force_refresh))
     }
 
     fn update_packages_action(pm_config: &updater_core::Config, info: &UpdatesInfo) -> Action {

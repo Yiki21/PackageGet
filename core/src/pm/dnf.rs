@@ -21,10 +21,6 @@ fn command_path(config: &Config) -> String {
 
 #[async_trait]
 impl PackageManager for DnfManager {
-    async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        Self::list_updates_with_refresh(config, false).await
-    }
-
     async fn get_current_version(_config: &Config, package_name: &str) -> CoreResult<String> {
         let output = Command::new("rpm")
             .arg("-q")
@@ -188,22 +184,6 @@ impl PackageManager for DnfManager {
 
         Ok(packages)
     }
-
-    async fn uninstall_packages(
-        &self,
-        config: &Config,
-        package_names: &[String],
-    ) -> CoreResult<()> {
-        Self::uninstall_packages_with_progress(config, package_names, |_| {}).await
-    }
-
-    async fn update_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        Self::update_packages_with_progress(config, package_names, |_| {}).await
-    }
-
-    async fn install_packages(&self, config: &Config, package_names: &[String]) -> CoreResult<()> {
-        Self::install_packages_with_progress(config, package_names, |_| {}).await
-    }
 }
 
 impl DnfManager {
@@ -291,15 +271,6 @@ impl DnfManager {
         run_command_with_progress("pkexec", &args, on_progress).await
     }
 
-    pub async fn uninstall_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        Self::uninstall_packages_with_progress(config, &[package_name.to_owned()], on_progress)
-            .await
-    }
-
     pub async fn update_packages_with_progress(
         config: &Config,
         package_names: &[String],
@@ -322,14 +293,6 @@ impl DnfManager {
         run_command_with_progress("pkexec", &args, on_progress).await
     }
 
-    pub async fn update_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        Self::update_packages_with_progress(config, &[package_name.to_owned()], on_progress).await
-    }
-
     pub async fn install_packages_with_progress(
         config: &Config,
         package_names: &[String],
@@ -345,14 +308,6 @@ impl DnfManager {
         args.extend(package_names.iter().cloned());
 
         run_command_with_progress("pkexec", &args, on_progress).await
-    }
-
-    pub async fn install_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        Self::install_packages_with_progress(config, &[package_name.to_owned()], on_progress).await
     }
 }
 
@@ -417,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn test_dnf_list_updates() {
         let config = crate::Config::default();
-        match DnfManager::list_updates(&config).await {
+        match DnfManager::list_updates_with_refresh(&config, false).await {
             Ok(updates) => {
                 println!("Found {} updates:", updates.len());
                 for update in updates.iter().take(5) {

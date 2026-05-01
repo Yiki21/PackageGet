@@ -8,7 +8,7 @@ use updater_core::{PackageManagerType, PackageUpdate};
 
 use crate::{
     content::{self, Content, FindingInfo, InstalledInfo, UpdatesInfo},
-    init_workflows::{InitProgress, run_manager_init_task},
+    init_workflows::{InitProgress, ManagerInitTask, run_manager_init_task},
     sidebar::{self, SideBar},
     status_panel::{self, StatusPanel},
 };
@@ -173,10 +173,61 @@ impl App {
         let mut task = Task::none();
 
         match message {
-            Message::SideBar(sidebar_msg) => task = self.handle_sidebar_message(sidebar_msg),
-            Message::Content(content_msg) => task = self.handle_content_message(content_msg),
-            Message::StatusPanel(panel_msg) => task = self.handle_status_panel_message(panel_msg),
-            Message::ConfigLoaded(result) => task = self.handle_config_loaded(result),
+            Message::SideBar(sidebar_msg) => {
+                if let sidebar::Action::ChangeContent(content) = self.sidebar.update(sidebar_msg) {
+                    self.content.active_content = content;
+                }
+            }
+            Message::Content(content_msg) => {
+                let action = self.content.update(
+                    content_msg,
+                    &mut self.pm_config,
+                    &mut self.installed_info,
+                    &mut self.updates_info,
+                    &mut self.finding_info,
+                );
+
+                task = match action {
+                    content::Action::Run(content_task) => content_task.map(Message::Content),
+                    content::Action::ReloadInstalledData => {
+                        self.installed_info.is_loading_count = true;
+                        self.installed_info.init_logs.clear();
+                        self.installed_info.init_errors.clear();
+                        self.start_init_installed_counts_task(self.pm_config.clone())
+                    }
+                    content::Action::None => Task::none(),
+                };
+            }
+            Message::StatusPanel(panel_msg) => {
+                self.status_panel.update(
+                    panel_msg,
+                    &self.installed_info,
+                    &self.updates_info,
+                    &self.finding_info,
+                );
+            }
+            Message::ConfigLoaded(result) => {
+                task = match result {
+                    Ok(config) => {
+                        self.pm_config = config;
+                        self.installed_info.is_loading_count = true;
+                        self.updates_info.is_loading_count = true;
+                        self.installed_info.init_logs.clear();
+                        self.updates_info.init_logs.clear();
+                        self.installed_info.init_errors.clear();
+                        self.updates_info.init_errors.clear();
+
+                        Task::batch(vec![
+                            self.start_init_installed_counts_task(self.pm_config.clone()),
+                            self.start_init_updates_counts_task(self.pm_config.clone()),
+                        ])
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load config: {}", e);
+                        Task::none()
+                    }
+                };
+            }
             Message::InitInstalledProgress {
                 completed,
                 total,
@@ -200,7 +251,7 @@ impl App {
         }
 
         if !is_status_panel_message {
-            let _ = self.status_panel.update(
+            self.status_panel.update(
                 status_panel::Message::Sync(at),
                 &self.installed_info,
                 &self.updates_info,
@@ -281,74 +332,6 @@ impl App {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
-    }
-
-    fn handle_sidebar_message(&mut self, sidebar_msg: sidebar::Message) -> Task<Message> {
-        match self.sidebar.update(sidebar_msg) {
-            sidebar::Action::ChangeContent(content) => {
-                self.content.active_content = content;
-                Task::none()
-            }
-            sidebar::Action::None => Task::none(),
-        }
-    }
-
-    fn handle_content_message(&mut self, content_msg: content::Message) -> Task<Message> {
-        let action = self.content.update(
-            content_msg,
-            &mut self.pm_config,
-            &mut self.installed_info,
-            &mut self.updates_info,
-            &mut self.finding_info,
-        );
-
-        match action {
-            content::Action::Run(content_task) => content_task.map(Message::Content),
-            content::Action::ReloadInstalledData => {
-                self.installed_info.is_loading_count = true;
-                self.installed_info.init_logs.clear();
-                self.installed_info.init_errors.clear();
-                self.start_init_installed_counts_task(self.pm_config.clone())
-            }
-            content::Action::None => Task::none(),
-        }
-    }
-
-    fn handle_status_panel_message(&mut self, panel_msg: status_panel::Message) -> Task<Message> {
-        match self.status_panel.update(
-            panel_msg,
-            &self.installed_info,
-            &self.updates_info,
-            &self.finding_info,
-        ) {
-            status_panel::Action::None => Task::none(),
-        }
-    }
-
-    fn handle_config_loaded(
-        &mut self,
-        result: Result<updater_core::Config, updater_core::error::CoreError>,
-    ) -> Task<Message> {
-        match result {
-            Ok(config) => {
-                self.pm_config = config;
-                self.installed_info.is_loading_count = true;
-                self.updates_info.is_loading_count = true;
-                self.installed_info.init_logs.clear();
-                self.updates_info.init_logs.clear();
-                self.installed_info.init_errors.clear();
-                self.updates_info.init_errors.clear();
-
-                let installed_task = self.start_init_installed_counts_task(self.pm_config.clone());
-                let updates_task = self.start_init_updates_counts_task(self.pm_config.clone());
-
-                Task::batch(vec![installed_task, updates_task])
-            }
-            Err(e) => {
-                log::error!("Failed to load config: {}", e);
-                Task::none()
-            }
-        }
     }
 
     fn apply_init_installed_count(
@@ -442,24 +425,6 @@ impl App {
         );
     }
 
-    fn progress_message(progress: InitProgress) -> Message {
-        Message::InitInstalledProgress {
-            completed: progress.completed,
-            total: progress.total,
-            manager: progress.manager,
-            command_message: progress.command_message,
-        }
-    }
-
-    fn updates_progress_message(progress: InitProgress) -> Message {
-        Message::InitUpdatesProgress {
-            completed: progress.completed,
-            total: progress.total,
-            manager: progress.manager,
-            command_message: progress.command_message,
-        }
-    }
-
     fn push_init_log(
         logs: &mut Vec<String>,
         phase: &str,
@@ -513,15 +478,28 @@ impl App {
         run_manager_init_task(
             config,
             managers,
-            |_| "Running count_installed".to_string(),
-            |pm, result| match result {
-                Ok(count) => format!("Done count_installed -> {}", count),
-                Err(error) => format!("count_installed failed for {} -> {}", pm.name(), error),
+            ManagerInitTask {
+                start_label: |_| "Running count_installed".to_string(),
+                complete_label: |pm: PackageManagerType, result: &Result<usize, String>| {
+                    match result {
+                        Ok(count) => format!("Done count_installed -> {}", count),
+                        Err(error) => {
+                            format!("count_installed failed for {} -> {}", pm.name(), error)
+                        }
+                    }
+                },
+                work: |pm: PackageManagerType, config| async move {
+                    pm.count_installed(&config).await.map_err(|e| e.to_string())
+                },
+                item_message: |manager, result| Message::InitInstalledCount { manager, result },
+                progress_message: |progress: InitProgress| Message::InitInstalledProgress {
+                    completed: progress.completed,
+                    total: progress.total,
+                    manager: progress.manager,
+                    command_message: progress.command_message,
+                },
+                done_message: || Message::InitInstalledFinished,
             },
-            |pm, config| async move { pm.count_installed(&config).await.map_err(|e| e.to_string()) },
-            |manager, result| Message::InitInstalledCount { manager, result },
-            Self::progress_message,
-            || Message::InitInstalledFinished,
         )
     }
 
@@ -544,15 +522,33 @@ impl App {
         run_manager_init_task(
             config,
             managers,
-            |_| "Running list_updates".to_string(),
-            |pm, result: &Result<Vec<PackageUpdate>, String>| match result {
-                Ok(updates) => format!("Done list_updates -> {} updates", updates.len()),
-                Err(error) => format!("list_updates failed for {} -> {}", pm.name(), error),
+            ManagerInitTask {
+                start_label: |_| "Running list_updates".to_string(),
+                complete_label:
+                    |pm: PackageManagerType, result: &Result<Vec<PackageUpdate>, String>| {
+                        match result {
+                            Ok(updates) => {
+                                format!("Done list_updates -> {} updates", updates.len())
+                            }
+                            Err(error) => {
+                                format!("list_updates failed for {} -> {}", pm.name(), error)
+                            }
+                        }
+                    },
+                work: |pm: PackageManagerType, config| async move {
+                    pm.list_updates_with_refresh(&config, false)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                item_message: |manager, result| Message::InitUpdatesCount { manager, result },
+                progress_message: |progress: InitProgress| Message::InitUpdatesProgress {
+                    completed: progress.completed,
+                    total: progress.total,
+                    manager: progress.manager,
+                    command_message: progress.command_message,
+                },
+                done_message: || Message::InitUpdatesFinished,
             },
-            |pm, config| async move { pm.list_updates(&config).await.map_err(|e| e.to_string()) },
-            |manager, result| Message::InitUpdatesCount { manager, result },
-            Self::updates_progress_message,
-            || Message::InitUpdatesFinished,
         )
     }
 }

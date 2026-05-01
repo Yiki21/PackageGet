@@ -6,7 +6,7 @@ use iced::{Border, Task};
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
-    app, content,
+    app,
     content::errors::{ManagerErrors, apply_manager_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
@@ -76,12 +76,6 @@ pub struct FindingInfo {
     pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
     /// Install command logs.
     pub install_logs: Vec<String>,
-}
-
-impl From<Message> for content::Message {
-    fn from(msg: Message) -> Self {
-        content::Message::Finding(msg)
-    }
 }
 
 pub enum Action {

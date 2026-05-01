@@ -1,14 +1,14 @@
 //! Status panel module.
 //!
 //! This module owns both the status panel UI rendering and its local animation state.
-//! It follows the same `Message`/`Action`/`update`/`view` pattern used by other UI modules.
+//! It exposes a local `Message`/`update`/`view` flow for animation ticks and state sync.
 
 use std::time::{Duration, Instant};
 
 use iced::{Animation, Border, Length, Subscription};
 
 use crate::{
-    app::{self, colors},
+    app::colors,
     content::{FindingInfo, InstalledInfo, UpdatesInfo},
 };
 
@@ -41,19 +41,6 @@ pub enum Message {
     Tick(Instant),
     /// Sync message after non-panel state updates.
     Sync(Instant),
-}
-
-/// Side effects produced by [`StatusPanel::update`].
-#[derive(Debug)]
-pub enum Action {
-    /// No-op action.
-    None,
-}
-
-impl From<Message> for app::Message {
-    fn from(msg: Message) -> Self {
-        app::Message::StatusPanel(msg)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -116,7 +103,7 @@ impl StatusPanel {
         installed_info: &InstalledInfo,
         updates_info: &UpdatesInfo,
         finding_info: &FindingInfo,
-    ) -> Action {
+    ) {
         let at = message.at();
         let should_refresh_snapshot = matches!(message, Message::Sync(_));
 
@@ -134,8 +121,6 @@ impl StatusPanel {
                 finding_info,
             );
         }
-
-        Action::None
     }
 
     /// Renders the status panel view.
