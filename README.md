@@ -1,6 +1,6 @@
 # updater
 
-一个基于 Rust 和 `iced` 的桌面 GUI 更新工具，用来统一查看、搜索、安装和更新不同包管理器中的软件包。
+一个基于 Rust 和 `iced` 的 Wayland 桌面 GUI 更新工具，用来统一查看、搜索、安装和更新不同包管理器中的软件包。
 
 ## 这个软件是干嘛的
 
@@ -23,7 +23,7 @@
 目前支持的包管理器：
 
 - 系统包：`apt`、`dnf`、`pacman`、`zypper`
-- 应用/开发工具包：`flatpak`、`homebrew`、`cargo`、`go`、`npm`、`pnpm`
+- 应用/开发工具包：`flatpak`、`homebrew`、`cargo`、`go`、`npm`、`pnpm`、`pipx`
 
 ## 功能列表
 
@@ -45,7 +45,7 @@
 - C/C++ 构建工具链：如 `gcc` 或 `clang`
 - `pkg-config`
 - OpenSSL 开发库
-- Linux 桌面相关库：通常至少需要 `wayland` 和 `libxkbcommon`
+- 原生 Wayland 桌面会话，以及 `wayland` 和 `libxkbcommon` 开发库（当前不构建 X11 后端）
 - 如果需要对系统包执行安装、卸载、更新，还需要 `pkexec`（通常来自 `polkit`）
 
 常见发行版可直接安装：
@@ -68,6 +68,8 @@ sudo pacman -S --needed base-devel mold pkgconf openssl wayland libxkbcommon pol
 
 ## 开发运行
 
+请在原生 Wayland 会话中运行：
+
 ```bash
 cargo run -p updater
 ```
@@ -76,11 +78,7 @@ cargo run -p updater
 
 ### 方式一：下载发布包安装
 
-如果仓库已经发布了 Release，直接下载对应系统的安装包或可执行文件即可：
-
-- macOS：下载 `dmg`
-- Windows：下载 `exe`
-- Linux：下载 `deb` 或 `rpm`
+如果仓库已经发布了 Release，按发行版下载 Linux `deb` 或 `rpm` 安装包。
 
 这些产物由 GitHub Actions 自动打包生成，适合普通用户直接安装使用。
 
