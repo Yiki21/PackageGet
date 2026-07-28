@@ -76,6 +76,7 @@ jobs:
       - name: Install system dependencies
         run: |
           dnf install -y \
+            clang \
             gcc \
             git \
             mold \
