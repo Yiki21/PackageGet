@@ -2,13 +2,13 @@ use std::{fmt::Debug, path::Path, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 
 use crate::{
     error::CoreError,
     pm::{
         apt::AptManager,
         cargo::CargoManager,
+        common::{manager_command, manager_command_path},
         dnf::DnfManager,
         flatpak::FlatpakManager,
         go::GoManager,
@@ -170,6 +170,10 @@ macro_rules! define_package_managers {
                 self.metadata().description
             }
 
+            pub(crate) fn command(&self) -> &'static str {
+                self.metadata().command
+            }
+
             pub fn is_system_manager(&self) -> bool {
                 self.metadata().kind == PackageManagerKind::System
             }
@@ -182,7 +186,7 @@ macro_rules! define_package_managers {
             }
 
             pub async fn is_available(&self) -> bool {
-                self.availability_for_command(self.metadata().command, false)
+                self.availability_with_config(&Config::default())
                     .await
                     .is_available()
             }
@@ -191,20 +195,19 @@ macro_rules! define_package_managers {
                 &self,
                 config: &Config,
             ) -> PackageManagerAvailability {
-                let command = config
-                    .get_package_path(*self)
-                    .unwrap_or_else(|| self.metadata().command.to_owned());
                 let custom_path = config.get_package_path(*self).is_some();
+                let command = manager_command_path(config, *self);
+                let validate_path = custom_path || Path::new(&command).components().count() > 1;
 
-                self.availability_for_command(&command, custom_path).await
+                self.availability_for_command(&command, validate_path).await
             }
 
             async fn availability_for_command(
                 &self,
                 command: &str,
-                custom_path: bool,
+                validate_path: bool,
             ) -> PackageManagerAvailability {
-                if custom_path {
+                if validate_path {
                     let path = Path::new(command);
                     let metadata = match tokio::fs::metadata(path).await {
                         Ok(metadata) => metadata,
@@ -226,7 +229,7 @@ macro_rules! define_package_managers {
                 let version_command = version_args.join(" ");
                 let output = tokio::time::timeout(
                     Duration::from_secs(5),
-                    Command::new(command).args(version_args).output(),
+                    manager_command(command).args(version_args).output(),
                 )
                 .await;
 

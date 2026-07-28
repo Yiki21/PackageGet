@@ -3,11 +3,10 @@ use std::{collections::VecDeque, path::Path, process::Stdio};
 use regex::Regex;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
-    process::Command,
     sync::mpsc,
 };
 
-use crate::{CoreResult, error::CoreError};
+use crate::{CoreResult, error::CoreError, pm::common::manager_command};
 
 #[derive(Debug, Clone)]
 pub struct CommandProgressEvent {
@@ -109,7 +108,7 @@ pub async fn run_command_with_progress_env(
     env: &[(&str, &str)],
     mut on_progress: impl FnMut(CommandProgressEvent),
 ) -> CoreResult<()> {
-    let mut child = Command::new(command);
+    let mut child = manager_command(command);
     child.args(args).envs(env.iter().copied());
     let mut child = child
         .stdout(Stdio::piped())

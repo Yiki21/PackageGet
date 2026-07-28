@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use regex::Regex;
 use std::path::Path;
-use tokio::{fs, process::Command};
+use tokio::fs;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::manager_command_path,
+        common::{manager_command, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress_env},
     },
 };
@@ -106,7 +106,7 @@ impl PackageManager for GoManager {
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
         let path = command_path(config);
 
-        let output = Command::new(&path)
+        let output = manager_command(&path)
             .arg("list")
             .arg("-m")
             .arg("-versions")
@@ -211,7 +211,7 @@ impl GoManager {
 
     /// Get latest version using go list
     async fn get_latest_version(path: &str, package_name: &str) -> CoreResult<String> {
-        let output = Command::new(path)
+        let output = manager_command(path)
             .arg("list")
             .arg("-m")
             .arg("-versions")
@@ -266,7 +266,12 @@ impl GoManager {
 
         let path = command_path(config);
         for variable in ["GOBIN", "GOPATH"] {
-            let Ok(output) = Command::new(&path).arg("env").arg(variable).output().await else {
+            let Ok(output) = manager_command(&path)
+                .arg("env")
+                .arg(variable)
+                .output()
+                .await
+            else {
                 continue;
             };
             if !output.status.success() {
@@ -291,7 +296,7 @@ impl GoManager {
 
     /// Get build info of a binary (using go version -m)
     async fn get_binary_info(path: &str, binary_path: &str) -> CoreResult<String> {
-        let output = Command::new(path)
+        let output = manager_command(path)
             .arg("version")
             .arg("-m")
             .arg(binary_path)

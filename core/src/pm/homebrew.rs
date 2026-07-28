@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::manager_command_path,
+        common::{manager_command, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress},
     },
 };
@@ -26,7 +26,7 @@ impl PackageManager for HomebrewManager {
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
         let path = command_path(config);
 
-        let output = tokio::process::Command::new(&path)
+        let output = manager_command(&path)
             .arg("list")
             .arg("--versions")
             .arg(package_name)
@@ -65,7 +65,7 @@ impl PackageManager for HomebrewManager {
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
         let path = command_path(config);
 
-        let output = tokio::process::Command::new(&path)
+        let output = manager_command(&path)
             .arg("info")
             .arg("--json=v2")
             .arg("--installed")
@@ -73,7 +73,7 @@ impl PackageManager for HomebrewManager {
             .await?;
 
         if !output.status.success() {
-            let fallback = tokio::process::Command::new(&path)
+            let fallback = manager_command(&path)
                 .arg("list")
                 .arg("--versions")
                 .output()
@@ -172,10 +172,7 @@ impl PackageManager for HomebrewManager {
     async fn count_installed(config: &Config) -> CoreResult<usize> {
         let path = command_path(config);
 
-        let output = tokio::process::Command::new(&path)
-            .arg("list")
-            .output()
-            .await?;
+        let output = manager_command(&path).arg("list").output().await?;
 
         if !output.status.success() {
             return Ok(0);
@@ -188,7 +185,7 @@ impl PackageManager for HomebrewManager {
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
         let path = command_path(config);
 
-        let output = tokio::process::Command::new(&path)
+        let output = manager_command(&path)
             .arg("search")
             .arg(package_name)
             .output()
@@ -238,7 +235,7 @@ impl HomebrewManager {
         if refresh {
             let output = tokio::time::timeout(
                 Duration::from_secs(180),
-                tokio::process::Command::new(&path).arg("update").output(),
+                manager_command(&path).arg("update").output(),
             )
             .await
             .map_err(|_| {
@@ -256,7 +253,7 @@ impl HomebrewManager {
 
         let output = tokio::time::timeout(
             Duration::from_secs(90),
-            tokio::process::Command::new(&path)
+            manager_command(&path)
                 .arg("outdated")
                 .arg("--verbose")
                 .env("HOMEBREW_NO_AUTO_UPDATE", "1")

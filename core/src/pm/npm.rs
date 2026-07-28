@@ -1,12 +1,11 @@
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
-use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::{directory_size, manager_command_path},
+        common::{directory_size, manager_command, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress},
     },
 };
@@ -252,7 +251,7 @@ async fn list_installed_by_manager(
 ) -> CoreResult<Vec<PackageInfo>> {
     let path = command_path(config, manager_type);
 
-    let mut command = Command::new(&path);
+    let mut command = manager_command(&path);
     command.arg("ls").arg("-g").arg("--depth=0").arg("--json");
     if matches!(
         manager_type,
@@ -373,7 +372,7 @@ async fn list_updates_by_manager(
 ) -> CoreResult<Vec<PackageUpdate>> {
     let path = command_path(config, manager_type);
 
-    let mut command = Command::new(&path);
+    let mut command = manager_command(&path);
     match manager_type {
         PackageManagerType::Npm => {
             command.arg("outdated").arg("-g").arg("--json");
@@ -431,7 +430,7 @@ async fn search_package_by_manager(
     package_name: &str,
 ) -> CoreResult<Vec<PackageInfo>> {
     let path = command_path(config, manager_type);
-    let mut command = Command::new(&path);
+    let mut command = manager_command(&path);
     command
         .arg("search")
         .arg(package_name)

@@ -3,12 +3,11 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use futures::future::join_all;
 use serde::Deserialize;
-use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::{directory_size, manager_command_path},
+        common::{directory_size, manager_command, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress},
     },
 };
@@ -146,7 +145,7 @@ impl PackageManager for PipxManager {
         }
 
         let path = command_path(config);
-        let pipx_home = match Command::new(&path)
+        let pipx_home = match manager_command(&path)
             .arg("environment")
             .arg("--value")
             .arg("PIPX_HOME")
@@ -259,7 +258,7 @@ impl PipxManager {
 
     async fn installed_packages(config: &Config) -> CoreResult<Vec<PipxPackage>> {
         let path = command_path(config);
-        let output = Command::new(&path)
+        let output = manager_command(&path)
             .arg("list")
             .arg("--json")
             .output()

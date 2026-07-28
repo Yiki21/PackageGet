@@ -2,12 +2,11 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use futures::future::join_all;
-use tokio::process::Command;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::manager_command_path,
+        common::{manager_command, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress},
     },
 };
@@ -39,7 +38,7 @@ impl PackageManager for CargoManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
         let path = command_path(config);
 
-        let install_output = Command::new(&path)
+        let install_output = manager_command(&path)
             .arg("install")
             .arg("--list")
             .output()
@@ -84,7 +83,7 @@ impl PackageManager for CargoManager {
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
         let path = command_path(config);
 
-        let install_output = Command::new(&path)
+        let install_output = manager_command(&path)
             .arg("install")
             .arg("--list")
             .output()
@@ -114,7 +113,7 @@ impl PackageManager for CargoManager {
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
         let path = command_path(config);
 
-        let install_output = Command::new(&path)
+        let install_output = manager_command(&path)
             .arg("install")
             .arg("--list")
             .output()
@@ -191,7 +190,7 @@ impl PackageManager for CargoManager {
     async fn count_installed(config: &Config) -> CoreResult<usize> {
         let path = command_path(config);
 
-        let install_output = Command::new(&path)
+        let install_output = manager_command(&path)
             .arg("install")
             .arg("--list")
             .output()
@@ -311,7 +310,7 @@ impl CargoManager {
     async fn get_installed_versions(config: &Config) -> HashMap<String, String> {
         let path = command_path(config);
 
-        let output = match Command::new(&path)
+        let output = match manager_command(&path)
             .arg("install")
             .arg("--list")
             .output()
