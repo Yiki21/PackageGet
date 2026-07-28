@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -20,57 +20,7 @@ fn command_path(config: &Config) -> String {
 #[async_trait]
 impl PackageManager for HomebrewManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        /*
-         * brew outdated --verbose
-         * 输出格式：
-         * package_name (current_version) < new_version
-         * 例如：
-         * git (2.43.0) < 2.44.0
-         * node (20.11.0) < 20.11.1
-         */
-        let path = command_path(config);
-
-        let output = tokio::process::Command::new(&path)
-            .arg("outdated")
-            .arg("--verbose")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(crate::error::CoreError::UnknownError(
-                "brew outdated --verbose failed".into(),
-            ));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut updates: Vec<PackageUpdate> = Vec::new();
-
-        for line in stdout.lines() {
-            let line = line.trim();
-
-            if line.is_empty() {
-                continue;
-            }
-
-            // 解析格式：package_name (current_version) < new_version
-            if let Some((name_and_current, new_version)) = line.split_once('<') {
-                let name_and_current = name_and_current.trim();
-                let new_version = new_version.trim();
-
-                // 提取包名和当前版本
-                if let Some((name, current_version)) =
-                    Self::parse_name_and_version(name_and_current)
-                {
-                    updates.push(PackageUpdate {
-                        name: name.to_owned(),
-                        current_version: current_version.to_owned(),
-                        new_version: new_version.to_owned(),
-                    });
-                }
-            }
-        }
-
-        Ok(updates)
+        Self::list_updates_with_refresh(config, false).await
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
@@ -123,18 +73,34 @@ impl PackageManager for HomebrewManager {
             .await?;
 
         if !output.status.success() {
-            // Fallback to basic info
-            let installed_info = Self::get_all_installed_info().await?;
-            return Ok(installed_info
-                .into_iter()
-                .map(|(name, version)| PackageInfo {
-                    name,
-                    version,
-                    source: PackageManagerType::Homebrew,
-                    description: None,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
+            let fallback = tokio::process::Command::new(&path)
+                .arg("list")
+                .arg("--versions")
+                .output()
+                .await?;
+            if !fallback.status.success() {
+                return Err(crate::error::CoreError::from_command_failure(format!(
+                    "brew list --versions failed: {}",
+                    String::from_utf8_lossy(&fallback.stderr).trim()
+                )));
+            }
+
+            let stdout = String::from_utf8(fallback.stdout)?;
+            return Ok(stdout
+                .lines()
+                .filter_map(|line| {
+                    let mut parts = line.split_whitespace();
+                    let name = parts.next()?.to_owned();
+                    let version = parts.collect::<Vec<_>>().join(" ");
+                    (!version.is_empty()).then_some(PackageInfo {
+                        name,
+                        version,
+                        source: PackageManagerType::Homebrew,
+                        description: None,
+                        size: None,
+                        install_date: None,
+                        homepage: None,
+                    })
                 })
                 .collect());
         }
@@ -147,11 +113,21 @@ impl PackageManager for HomebrewManager {
         if let Some(formulae) = json["formulae"].as_array() {
             for formula in formulae {
                 let name = formula["name"].as_str().unwrap_or("").to_string();
-                let version = formula["versions"]["stable"]
-                    .as_str()
-                    .or_else(|| formula["version"].as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                let installed_versions = formula["installed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|installed| installed["version"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let version = if installed_versions.is_empty() {
+                    formula["versions"]["stable"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_owned()
+                } else {
+                    installed_versions
+                };
                 let description = formula["desc"].as_str().map(|s| s.to_string());
                 let homepage = formula["homepage"].as_str().map(|s| s.to_string());
 
@@ -170,7 +146,11 @@ impl PackageManager for HomebrewManager {
         if let Some(casks) = json["casks"].as_array() {
             for cask in casks {
                 let name = cask["token"].as_str().unwrap_or("").to_string();
-                let version = cask["version"].as_str().unwrap_or("unknown").to_string();
+                let version = cask["installed"]
+                    .as_str()
+                    .or_else(|| cask["version"].as_str())
+                    .unwrap_or("unknown")
+                    .to_owned();
                 let description = cask["desc"].as_str().map(|s| s.to_string());
                 let homepage = cask["homepage"].as_str().map(|s| s.to_string());
 
@@ -249,6 +229,83 @@ impl PackageManager for HomebrewManager {
 }
 
 impl HomebrewManager {
+    pub async fn list_updates_with_refresh(
+        config: &Config,
+        refresh: bool,
+    ) -> CoreResult<Vec<PackageUpdate>> {
+        let path = command_path(config);
+
+        if refresh {
+            let output = tokio::time::timeout(
+                Duration::from_secs(180),
+                tokio::process::Command::new(&path).arg("update").output(),
+            )
+            .await
+            .map_err(|_| {
+                crate::error::CoreError::CommandError(
+                    "brew update timed out after 180 seconds".to_owned(),
+                )
+            })??;
+            if !output.status.success() {
+                return Err(crate::error::CoreError::from_command_failure(format!(
+                    "brew update failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+        }
+
+        let output = tokio::time::timeout(
+            Duration::from_secs(90),
+            tokio::process::Command::new(&path)
+                .arg("outdated")
+                .arg("--verbose")
+                .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+                .output(),
+        )
+        .await
+        .map_err(|_| {
+            crate::error::CoreError::CommandError(
+                "brew outdated timed out after 90 seconds".to_owned(),
+            )
+        })??;
+
+        if !output.status.success() {
+            return Err(crate::error::CoreError::from_command_failure(format!(
+                "brew outdated --verbose failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut updates = Vec::new();
+
+        for line in stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let Some((name_and_current, new_version)) =
+                line.split_once(" < ").or_else(|| line.split_once(" != "))
+            else {
+                continue;
+            };
+            let Some((name, current_version)) = name_and_current.rsplit_once(" (") else {
+                continue;
+            };
+            let Some(current_version) = current_version.strip_suffix(')') else {
+                continue;
+            };
+
+            updates.push(PackageUpdate {
+                name: name.to_owned(),
+                current_version: current_version.to_owned(),
+                new_version: new_version.to_owned(),
+            });
+        }
+
+        Ok(updates)
+    }
+
     pub async fn uninstall_package_with_progress(
         config: &Config,
         package_name: &str,
@@ -284,99 +341,11 @@ impl HomebrewManager {
 
         run_command_with_progress(&path, &args, on_progress).await
     }
-
-    fn parse_name_and_version(s: &str) -> Option<(&str, &str)> {
-        let open_paren = s.rfind('(')?;
-        let close_paren = s.rfind(')')?;
-
-        if open_paren >= close_paren {
-            return None;
-        }
-
-        let name = s[..open_paren].trim();
-        let version = s[open_paren + 1..close_paren].trim();
-
-        Some((name, version))
-    }
-
-    async fn get_all_installed_info() -> CoreResult<HashMap<String, String>> {
-        let output = tokio::process::Command::new("brew")
-            .arg("list")
-            .arg("--versions")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(crate::error::CoreError::CommandError(
-                "brew list --versions failed".into(),
-            ));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut info_map = HashMap::new();
-
-        for line in stdout.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            // 格式：package_name version1 version2 ...
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let package_name = parts[0];
-                // Take the last version
-                let version = parts.last().unwrap();
-                info_map.insert(package_name.to_string(), version.to_string());
-            }
-        }
-
-        Ok(info_map)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_name_and_version() {
-        assert_eq!(
-            HomebrewManager::parse_name_and_version("git (2.43.0)"),
-            Some(("git", "2.43.0"))
-        );
-
-        assert_eq!(
-            HomebrewManager::parse_name_and_version("node (20.11.0)"),
-            Some(("node", "20.11.0"))
-        );
-
-        assert_eq!(
-            HomebrewManager::parse_name_and_version("python@3.12 (3.12.1)"),
-            Some(("python@3.12", "3.12.1"))
-        );
-
-        assert_eq!(
-            HomebrewManager::parse_name_and_version("my package (1.0.0)"),
-            Some(("my package", "1.0.0"))
-        );
-
-        assert_eq!(HomebrewManager::parse_name_and_version("invalid"), None);
-        assert_eq!(HomebrewManager::parse_name_and_version("git 2.43.0"), None);
-    }
-
-    #[tokio::test]
-    async fn test_get_all_installed_info() {
-        match HomebrewManager::get_all_installed_info().await {
-            Ok(info) => {
-                println!("Found {} installed packages:", info.len());
-                for (package, version) in info.iter().take(5) {
-                    println!("  {}: {}", package, version);
-                }
-            }
-            Err(e) => eprintln!("Error: {}", e),
-        }
-    }
 
     #[tokio::test]
     async fn test_homebrew_list_updates() {

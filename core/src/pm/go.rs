@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use regex::Regex;
+use std::path::Path;
 use tokio::{fs, process::Command};
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
         common::manager_command_path,
-        progress::{CommandProgressEvent, run_command_with_progress},
+        progress::{CommandProgressEvent, run_command_with_progress_env},
     },
 };
 
@@ -154,7 +155,7 @@ impl PackageManager for GoManager {
 
 impl GoManager {
     pub async fn uninstall_package_with_progress(
-        _config: &Config,
+        config: &Config,
         package_name: &str,
         mut on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
@@ -164,12 +165,9 @@ impl GoManager {
             command_message: Some(format!("Removing Go binary for {}", package_name)),
         });
 
-        let gobin = std::env::var("GOBIN")
-            .or_else(|_| std::env::var("GOPATH").map(|p| format!("{}/bin", p)))
-            .unwrap_or_else(|_| format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()));
-
+        let gobin = Self::resolve_bin_dir(config).await;
         let binary_name = package_name.split('/').next_back().unwrap_or(package_name);
-        let binary_path = format!("{}/{}", gobin, binary_name);
+        let binary_path = Path::new(&gobin).join(binary_name);
 
         if let Err(e) = tokio::fs::remove_file(&binary_path).await {
             return Err(crate::error::CoreError::UnknownError(format!(
@@ -192,9 +190,10 @@ impl GoManager {
     ) -> CoreResult<()> {
         let path = command_path(config);
         let install_path = Self::resolve_install_path(config, package_name).await?;
-
         let args = vec!["install".to_string(), install_path];
-        run_command_with_progress(&path, &args, on_progress).await
+        let go_bin_dir = Self::resolve_bin_dir(config).await;
+        run_command_with_progress_env(&path, &args, &[("GOBIN", go_bin_dir.as_str())], on_progress)
+            .await
     }
 
     pub async fn install_package_with_progress(
@@ -204,9 +203,10 @@ impl GoManager {
     ) -> CoreResult<()> {
         let path = command_path(config);
         let install_path = Self::resolve_install_path(config, package_name).await?;
-
         let args = vec!["install".to_string(), install_path];
-        run_command_with_progress(&path, &args, on_progress).await
+        let go_bin_dir = Self::resolve_bin_dir(config).await;
+        run_command_with_progress_env(&path, &args, &[("GOBIN", go_bin_dir.as_str())], on_progress)
+            .await
     }
 
     /// Get latest version using go list
@@ -239,7 +239,7 @@ impl GoManager {
 
     /// List all installed Go binaries
     async fn list_installed_binaries(config: &Config) -> CoreResult<Vec<InstalledBinary>> {
-        let bin_dir = config.get_go_bin_dir();
+        let bin_dir = Self::resolve_bin_dir(config).await;
         let mut bins = Vec::new();
 
         if let Ok(mut entries) = fs::read_dir(&bin_dir).await {
@@ -257,6 +257,36 @@ impl GoManager {
             }
         }
         Ok(bins)
+    }
+
+    async fn resolve_bin_dir(config: &Config) -> String {
+        if let Some(dir) = &config.go_bin_dir {
+            return dir.clone();
+        }
+
+        let path = command_path(config);
+        for variable in ["GOBIN", "GOPATH"] {
+            let Ok(output) = Command::new(&path).arg("env").arg(variable).output().await else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if value.is_empty() {
+                continue;
+            }
+
+            if variable == "GOBIN" {
+                return value;
+            }
+            if let Some(gopath) = std::env::split_paths(&value).next() {
+                return gopath.join("bin").to_string_lossy().into_owned();
+            }
+        }
+
+        config.get_go_bin_dir()
     }
 
     /// Get build info of a binary (using go version -m)

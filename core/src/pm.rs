@@ -7,5 +7,6 @@ pub(crate) mod go;
 pub(crate) mod homebrew;
 pub(crate) mod npm;
 pub(crate) mod pacman;
+pub(crate) mod pipx;
 pub(crate) mod progress;
 pub(crate) mod zypper;

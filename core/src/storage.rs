@@ -6,15 +6,33 @@ use crate::{
     error::CoreError,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
     pub system_manager: Option<PackageManagerConfig>,
     pub app_managers: Vec<PackageManagerConfig>,
     /// 自定义 Go bin 目录，如果为 None 则使用默认规则（GOBIN > GOPATH/bin > ~/go/bin）
     pub go_bin_dir: Option<String>,
+    /// Preferred desktop appearance. Values: system, light, dark, high_contrast.
+    #[serde(default)]
+    pub appearance: String,
+    /// Whether native completion/failure notifications are enabled.
+    #[serde(default)]
+    pub notifications_enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            system_manager: None,
+            app_managers: Vec::new(),
+            go_bin_dir: None,
+            appearance: "system".to_owned(),
+            notifications_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PackageManagerConfig {
     pub manager_type: PackageManagerType,
     pub custom_path: Option<String>,
@@ -67,7 +85,7 @@ impl Config {
         Config {
             system_manager,
             app_managers,
-            go_bin_dir: None,
+            ..Config::default()
         }
     }
 

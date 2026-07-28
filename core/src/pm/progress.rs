@@ -98,10 +98,20 @@ fn is_dnf_transaction_marker(line: &str) -> bool {
 pub async fn run_command_with_progress(
     command: &str,
     args: &[String],
+    on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    run_command_with_progress_env(command, args, &[], on_progress).await
+}
+
+pub async fn run_command_with_progress_env(
+    command: &str,
+    args: &[String],
+    env: &[(&str, &str)],
     mut on_progress: impl FnMut(CommandProgressEvent),
 ) -> CoreResult<()> {
-    let mut child = Command::new(command)
-        .args(args)
+    let mut child = Command::new(command);
+    child.args(args).envs(env.iter().copied());
+    let mut child = child
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -227,7 +237,7 @@ pub async fn run_command_with_progress(
         } else {
             format!("{} {:?} failed:\n{}", command, args, tail)
         };
-        return Err(CoreError::UnknownError(detail));
+        return Err(CoreError::from_command_failure(detail));
     }
 
     on_progress(CommandProgressEvent {

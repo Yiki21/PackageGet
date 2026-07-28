@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
-use regex::Regex;
+use futures::future::join_all;
 use tokio::process::Command;
 
 use crate::{
@@ -20,6 +20,14 @@ struct InstalledCrate {
     name: String,
     version: String,
     bins: Vec<String>,
+    can_update_from_registry: bool,
+}
+
+#[derive(Debug, Default)]
+struct CrateMetadata {
+    latest_version: Option<String>,
+    description: Option<String>,
+    homepage: Option<String>,
 }
 
 fn command_path(config: &Config) -> String {
@@ -46,18 +54,28 @@ impl PackageManager for CargoManager {
         let stdout = String::from_utf8(install_output.stdout)?;
 
         let installed = Self::parse_cargo_install_list(&stdout);
+        let client = Self::crates_io_client()?;
 
         let mut updates: Vec<PackageUpdate> = Vec::new();
-        for inst in installed {
-            if let Ok(latest_version) = Self::get_latest_version(&inst.name).await
-                && latest_version != inst.version
-            {
-                updates.push(PackageUpdate {
-                    name: inst.name,
-                    current_version: inst.version,
-                    new_version: latest_version,
-                });
+        for inst in installed
+            .into_iter()
+            .filter(|package| package.can_update_from_registry)
+        {
+            let Some(metadata) = Self::get_crate_metadata(&client, &inst.name).await else {
+                continue;
+            };
+            let Some(latest_version) = metadata.latest_version else {
+                continue;
+            };
+            if latest_version == inst.version {
+                continue;
             }
+
+            updates.push(PackageUpdate {
+                name: inst.name,
+                current_version: inst.version,
+                new_version: latest_version,
+            });
         }
 
         Ok(updates)
@@ -110,23 +128,60 @@ impl PackageManager for CargoManager {
 
         let stdout = String::from_utf8(install_output.stdout)?;
         let installed = Self::parse_cargo_install_list(&stdout);
+        let client = Self::crates_io_client()?;
+        let registry_names: Vec<_> = installed
+            .iter()
+            .filter(|crate_info| crate_info.can_update_from_registry)
+            .map(|crate_info| crate_info.name.clone())
+            .collect();
+        let mut metadata_by_name = HashMap::with_capacity(registry_names.len());
 
-        // Batch fetch crate info from crates.io
-        let mut packages = Vec::new();
+        for names in registry_names.chunks(6) {
+            let responses = join_all(
+                names
+                    .iter()
+                    .map(|name| Self::get_crate_metadata(&client, name)),
+            )
+            .await;
+            for (name, metadata) in names.iter().zip(responses) {
+                if let Some(metadata) = metadata {
+                    metadata_by_name.insert(name.clone(), metadata);
+                }
+            }
+        }
+
+        let cargo_root = std::env::var_os("CARGO_INSTALL_ROOT")
+            .or_else(|| std::env::var_os("CARGO_HOME"))
+            .map(PathBuf::from)
+            .or_else(|| {
+                directories_next::BaseDirs::new().map(|dirs| dirs.home_dir().join(".cargo"))
+            });
+        let bin_dir = cargo_root.map(|root| root.join("bin"));
+        let mut packages = Vec::with_capacity(installed.len());
+
         for crate_info in installed {
-            let (description, homepage) = match Self::get_crate_info(&crate_info.name).await {
-                Ok((desc, home)) => (desc, home),
-                Err(_) => (None, None),
-            };
+            let mut installed_size = 0_u64;
+            let mut found_binary = false;
+            if let Some(bin_dir) = &bin_dir {
+                for binary in &crate_info.bins {
+                    if let Ok(metadata) = tokio::fs::metadata(bin_dir.join(binary)).await {
+                        installed_size = installed_size.saturating_add(metadata.len());
+                        found_binary = true;
+                    }
+                }
+            }
 
+            let metadata = metadata_by_name
+                .remove(&crate_info.name)
+                .unwrap_or_default();
             packages.push(PackageInfo {
                 name: crate_info.name,
                 version: crate_info.version,
                 source: PackageManagerType::Cargo,
-                description,
-                size: None,
+                description: metadata.description,
+                size: found_binary.then_some(installed_size),
                 install_date: None,
-                homepage,
+                homepage: metadata.homepage,
             });
         }
 
@@ -163,9 +218,7 @@ impl PackageManager for CargoManager {
         log::debug!("Cargo search: querying URL: {}", url);
 
         // crates.io API 要求提供 User-Agent 头
-        let client = reqwest::Client::builder()
-            .user_agent("updater/0.1.0 (https://github.com/Yiki21/updater)")
-            .build()?;
+        let client = Self::crates_io_client()?;
 
         let resp = client.get(&url).send().await?;
 
@@ -219,6 +272,42 @@ impl PackageManager for CargoManager {
 }
 
 impl CargoManager {
+    fn crates_io_client() -> CoreResult<reqwest::Client> {
+        Ok(reqwest::Client::builder()
+            .user_agent("updater/0.1.0 (https://github.com/Yiki21/updater)")
+            .timeout(Duration::from_secs(20))
+            .build()?)
+    }
+
+    async fn get_crate_metadata(
+        client: &reqwest::Client,
+        crate_name: &str,
+    ) -> Option<CrateMetadata> {
+        let response = client
+            .get(format!("https://crates.io/api/v1/crates/{crate_name}"))
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let crate_info: serde_json::Value = response.json().await.ok()?;
+        let details = &crate_info["crate"];
+
+        Some(CrateMetadata {
+            latest_version: details["max_stable_version"]
+                .as_str()
+                .or_else(|| details["max_version"].as_str())
+                .map(str::to_owned),
+            description: details["description"].as_str().map(str::to_owned),
+            homepage: details["homepage"]
+                .as_str()
+                .or_else(|| details["repository"].as_str())
+                .map(str::to_owned),
+        })
+    }
+
     async fn get_installed_versions(config: &Config) -> HashMap<String, String> {
         let path = command_path(config);
 
@@ -287,98 +376,34 @@ impl CargoManager {
         run_command_with_progress(&path, &args, on_progress).await
     }
 
-    /// get crate info from crates.io API
-    async fn get_crate_info(crate_name: &str) -> CoreResult<(Option<String>, Option<String>)> {
-        let client = reqwest::Client::builder()
-            .user_agent("updater/0.1.0 (https://github.com/Yiki21/updater)")
-            .build()?;
-
-        let resp = client
-            .get(format!("https://crates.io/api/v1/crates/{}", crate_name))
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Ok((None, None));
-        }
-
-        let crate_info: serde_json::Value = resp.json().await?;
-
-        let description = crate_info["crate"]["description"]
-            .as_str()
-            .map(|s| s.to_string());
-
-        let homepage = crate_info["crate"]["homepage"]
-            .as_str()
-            .or_else(|| crate_info["crate"]["repository"].as_str())
-            .map(|s| s.to_string());
-
-        Ok((description, homepage))
-    }
-
-    /// Get latest version of a crate from crates.io
-    async fn get_latest_version(package_name: &str) -> CoreResult<String> {
-        let client = reqwest::Client::builder()
-            .user_agent("updater/0.1.0 (https://github.com/Yiki21/updater)")
-            .build()?;
-
-        let resp = client
-            .get(format!("https://crates.io/api/v1/crates/{}", package_name))
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read body".to_string());
-            return Err(crate::error::CoreError::UnknownError(format!(
-                "Failed to fetch crate info for {} (status: {}): {}",
-                package_name, status, body
-            )));
-        }
-
-        let crate_info: serde_json::Value = resp.json().await?;
-        if let Some(version) = crate_info["crate"]["max_version"].as_str() {
-            Ok(version.to_owned())
-        } else {
-            Err(crate::error::CoreError::UnknownError(format!(
-                "Version info not found for crate {}",
-                package_name
-            )))
-        }
-    }
-
     fn parse_cargo_install_list(input: &str) -> Vec<InstalledCrate> {
-        let crate_line = Regex::new(r"^(\S+)\s+v([\d\.]+):$").unwrap();
-        let bin_line = Regex::new(r"^\s+(\S+)").unwrap();
-
-        let mut result = Vec::new();
-        let mut current_crate: Option<InstalledCrate> = None;
+        let mut installed = Vec::<InstalledCrate>::new();
 
         for line in input.lines() {
-            if let Some(caps) = crate_line.captures(line) {
-                if let Some(c) = current_crate.take() {
-                    result.push(c);
-                }
-                current_crate = Some(InstalledCrate {
-                    name: caps[1].to_string(),
-                    version: caps[2].to_string(),
+            if let Some(header) = line.trim().strip_suffix(':') {
+                let mut parts = header.split_whitespace();
+                let (Some(name), Some(version)) = (
+                    parts.next(),
+                    parts.next().and_then(|value| value.strip_prefix('v')),
+                ) else {
+                    continue;
+                };
+
+                installed.push(InstalledCrate {
+                    name: name.to_owned(),
+                    version: version.to_owned(),
                     bins: Vec::new(),
+                    can_update_from_registry: parts.next().is_none(),
                 });
-            } else if let Some(caps) = bin_line.captures(line)
-                && let Some(ref mut c) = current_crate
-            {
-                c.bins.push(caps[1].to_string());
+            } else if let Some(crate_info) = installed.last_mut() {
+                let binary = line.trim();
+                if !binary.is_empty() {
+                    crate_info.bins.push(binary.to_owned());
+                }
             }
         }
 
-        if let Some(c) = current_crate.take() {
-            result.push(c);
-        }
-
-        result
+        installed
     }
 }
 
@@ -412,21 +437,24 @@ starship v1.24.2:
 "#;
 
         let crates = CargoManager::parse_cargo_install_list(input);
-        assert_eq!(crates.len(), 8);
+        assert_eq!(crates.len(), 9);
         assert_eq!(crates[0].name, "bluetui");
         assert_eq!(crates[0].version, "0.8.0");
-        assert_eq!(crates[0].bins, vec!["bluetui"]);
+        assert_eq!(crates[0].bins, ["bluetui"]);
+        assert!(crates[0].can_update_from_registry);
 
         assert_eq!(crates[4].name, "cargo-update");
         assert_eq!(crates[4].version, "18.0.0");
         assert_eq!(
             crates[4].bins,
-            vec!["cargo-install-update", "cargo-install-update-config"]
+            ["cargo-install-update", "cargo-install-update-config"]
         );
+        assert!(crates[4].can_update_from_registry);
 
-        assert_eq!(crates[6].name, "sea-orm-cli");
-        assert_eq!(crates[6].version, "1.1.19");
-        assert_eq!(crates[6].bins, vec!["sea", "sea-orm-cli"]);
+        assert_eq!(crates[6].name, "hyprshell");
+        assert!(!crates[6].can_update_from_registry);
+        assert_eq!(crates[7].name, "sea-orm-cli");
+        assert_eq!(crates[7].version, "1.1.19");
     }
 
     #[test]
@@ -445,37 +473,18 @@ starship v1.24.2:
         assert_eq!(crates.len(), 1);
         assert_eq!(crates[0].name, "cargo-watch");
         assert_eq!(crates[0].version, "8.5.2");
-        assert_eq!(crates[0].bins, vec!["cargo-watch"]);
+        assert_eq!(crates[0].bins, ["cargo-watch"]);
     }
 
     #[test]
-    fn test_parse_crate_with_multiple_bins() {
-        let input = r#"tokio-console v0.1.12:
-    tokio-console
-    tokio-console-subscriber
-    tokio-console-recorder
-"#;
-        let crates = CargoManager::parse_cargo_install_list(input);
-        assert_eq!(crates.len(), 1);
-        assert_eq!(crates[0].name, "tokio-console");
-        assert_eq!(crates[0].version, "0.1.12");
-        assert_eq!(
-            crates[0].bins,
-            vec![
-                "tokio-console",
-                "tokio-console-subscriber",
-                "tokio-console-recorder"
-            ]
-        );
-    }
-
-    #[test]
-    fn test_parse_local_path_crate_ignored() {
+    fn test_parse_local_path_crate() {
         let input = r#"my-tool v1.0.0 (/home/user/projects/my-tool):
     my-tool
 "#;
         let crates = CargoManager::parse_cargo_install_list(input);
-        assert_eq!(crates.len(), 0, "本地路径安装的包应该被忽略");
+        assert_eq!(crates.len(), 1);
+        assert_eq!(crates[0].name, "my-tool");
+        assert!(!crates[0].can_update_from_registry);
     }
 
     #[test]
@@ -484,13 +493,15 @@ starship v1.24.2:
     cargo-watch
 local-tool v1.0.0 (/home/user/local-tool):
     local-tool
-ripgrep v14.1.0:
+        ripgrep v14.1.0:
     rg
 "#;
         let crates = CargoManager::parse_cargo_install_list(input);
-        assert_eq!(crates.len(), 2, "只应该解析非本地路径的包");
+        assert_eq!(crates.len(), 3);
         assert_eq!(crates[0].name, "cargo-watch");
-        assert_eq!(crates[1].name, "ripgrep");
+        assert_eq!(crates[1].name, "local-tool");
+        assert!(!crates[1].can_update_from_registry);
+        assert_eq!(crates[2].name, "ripgrep");
     }
 
     #[tokio::test]
@@ -615,121 +626,4 @@ ripgrep v14.1.0:
             }
         }
     }
-
-    //     #[tokio::test]
-    //     async fn test_detect_cargo_binstall_update() {
-    //         // Test that we can detect when cargo-binstall has an update available
-    //         // Simulating installed version 1.17.4 and checking if 1.17.5 is detected
-    //         let input = r#"
-    // cargo-binstall v1.17.4:
-    //     cargo-binstall
-    // "#;
-
-    //         let crates = CargoManager::parse_cargo_install_list(input);
-    //         assert_eq!(crates.len(), 1);
-    //         assert_eq!(crates[0].name, "cargo-binstall");
-    //         assert_eq!(crates[0].version, "1.17.4");
-
-    //         // Fetch the actual latest version from crates.io with detailed error info
-    //         let client = reqwest::Client::builder()
-    //             .user_agent("updater-cargo-manager/0.1.0")
-    //             .build()
-    //             .expect("Failed to build HTTP client");
-    //         let resp = client.get("https://crates.io/api/v1/crates/cargo-binstall").send().await;
-    //         match resp {
-    //             Ok(response) => {
-    //                 let status = response.status();
-    //                 println!("HTTP Status: {}", status);
-    //                 if !status.is_success() {
-    //                     let body = response.text().await.unwrap_or_else(|_| "Unable to read body".to_string());
-    //                     println!("API returned non-success status: {}", status);
-    //                     println!("Response body: {:?}", body);
-    //                     panic!("API call failed with status: {}", status);
-    //                 }
-
-    //                 let crate_info: serde_json::Value = response.json().await.expect("Failed to parse JSON");
-    //                 if let Some(version) = crate_info["crate"]["max_version"].as_str() {
-    //                     println!("cargo-binstall: installed=1.17.4, latest={}", version);
-
-    //                     // Version comparison - the installed version should be different from latest
-    //                     if version != "1.17.4" {
-    //                         println!("✓ Update available: 1.17.4 -> {}", version);
-    //                         assert_ne!(version, "1.17.4", "Latest version should be different from 1.17.4");
-    //                     } else {
-    //                         println!("⚠ No update detected - latest is still 1.17.4");
-    //                     }
-    //                 } else {
-    //                     panic!("Version info not found in API response");
-    //                 }
-    //             }
-    //             Err(e) => {
-    //                 println!("Network error: {}", e);
-    //                 panic!("Failed to fetch from crates.io: {}", e);
-    //             }
-    //         }
-    //     }
-
-    //     #[tokio::test]
-    //     async fn test_list_updates_with_cargo_binstall() {
-    //         // Test the full list_updates flow with cargo-binstall
-    //         // This test will use actual crates.io API to verify update detection
-    //         let input = r#"
-    // cargo-binstall v1.17.4:
-    //     cargo-binstall
-    // bluetui v0.8.0:
-    //     bluetui
-    // "#;
-
-    //         let crates = CargoManager::parse_cargo_install_list(input);
-    //         assert_eq!(crates.len(), 2);
-
-    //         // Manually check each crate for updates like list_updates does
-    //         let mut updates: Vec<PackageUpdate> = Vec::new();
-    //         for inst in crates {
-    //             match CargoManager::get_latest_version(&inst.name).await {
-    //                 Ok(latest_version) => {
-    //                     println!("Checking {}: installed={}, latest={}", inst.name, inst.version, latest_version);
-    //                     if latest_version != inst.version {
-    //                         println!("  ✓ Update detected: {} -> {}", inst.version, latest_version);
-    //                         updates.push(PackageUpdate {
-    //                             name: inst.name.clone(),
-    //                             current_version: inst.version.clone(),
-    //                             new_version: latest_version,
-    //                         });
-    //                     } else {
-    //                         println!("  No update needed");
-    //                     }
-    //                 }
-    //                 Err(e) => {
-    //                     println!("  ✗ Failed to fetch version for {}: {}", inst.name, e);
-    //                 }
-    //             }
-    //         }
-
-    //         println!("\nTotal updates found: {}", updates.len());
-    //         for update in &updates {
-    //             println!("  {}: {} -> {}", update.name, update.current_version, update.new_version);
-    //         }
-
-    //         // We expect at least cargo-binstall to have an update (1.17.4 -> 1.17.5)
-    //         // unless the test data becomes outdated
-    //         if !updates.is_empty() {
-    //             println!("✓ Update detection is working correctly");
-    //         } else {
-    //             println!("⚠ No updates detected - this might indicate an issue or outdated test data");
-    //         }
-    //     }
-
-    //     #[test]
-    //     fn test_version_string_comparison() {
-    //         // Test that string comparison works correctly for version detection
-    //         let installed = "1.17.4";
-    //         let latest = "1.17.5";
-
-    //         assert_ne!(installed, latest, "String comparison should detect version difference");
-
-    //         // Also test that same versions are detected as equal
-    //         assert_eq!(installed, "1.17.4");
-    //         assert_eq!(latest, "1.17.5");
-    //     }
 }

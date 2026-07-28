@@ -168,7 +168,7 @@ impl AptManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::CommandError(format!(
+            return Err(CoreError::from_command_failure(format!(
                 "apt list --upgradable failed: {}",
                 stderr.trim()
             )));

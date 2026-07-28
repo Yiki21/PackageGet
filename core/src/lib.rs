@@ -1,7 +1,8 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, path::Path, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::process::Command;
 
 use crate::{
     error::CoreError,
@@ -14,6 +15,7 @@ use crate::{
         homebrew::HomebrewManager,
         npm::{NpmManager, PnpmManager},
         pacman::PacmanManager,
+        pipx::PipxManager,
         progress::CommandProgressEvent,
         zypper::ZypperManager,
     },
@@ -50,6 +52,43 @@ pub struct InstallProgress {
     pub completed: usize,
     pub total: usize,
     pub command_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageManagerAvailability {
+    Available,
+    NotFound { command: String },
+    NotExecutable { path: String },
+    VersionCheckFailed { command: String, detail: String },
+}
+
+impl PackageManagerAvailability {
+    pub fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::Available => "Available".to_owned(),
+            Self::NotFound { command } => format!("Not found: {}", command),
+            Self::NotExecutable { path } => format!("Not executable: {}", path),
+            Self::VersionCheckFailed { command, detail } => {
+                format!("Version check failed for {}: {}", command, detail)
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,13 +174,89 @@ macro_rules! define_package_managers {
                 self.metadata().kind == PackageManagerKind::System
             }
 
+            fn version_args(&self) -> &'static [&'static str] {
+                match self {
+                    Self::Go => &["version"],
+                    _ => &["--version"],
+                }
+            }
+
             pub async fn is_available(&self) -> bool {
-                tokio::process::Command::new("which")
-                    .arg(self.metadata().command)
-                    .output()
+                self.availability_for_command(self.metadata().command, false)
                     .await
-                    .map(|output| output.status.success())
-                    .unwrap_or(false)
+                    .is_available()
+            }
+
+            pub async fn availability_with_config(
+                &self,
+                config: &Config,
+            ) -> PackageManagerAvailability {
+                let command = config
+                    .get_package_path(*self)
+                    .unwrap_or_else(|| self.metadata().command.to_owned());
+                let custom_path = config.get_package_path(*self).is_some();
+
+                self.availability_for_command(&command, custom_path).await
+            }
+
+            async fn availability_for_command(
+                &self,
+                command: &str,
+                custom_path: bool,
+            ) -> PackageManagerAvailability {
+                if custom_path {
+                    let path = Path::new(command);
+                    let metadata = match tokio::fs::metadata(path).await {
+                        Ok(metadata) => metadata,
+                        Err(_) => {
+                            return PackageManagerAvailability::NotFound {
+                                command: command.to_owned(),
+                            };
+                        }
+                    };
+
+                    if !metadata.is_file() || !is_executable(&metadata) {
+                        return PackageManagerAvailability::NotExecutable {
+                            path: command.to_owned(),
+                        };
+                    }
+                }
+
+                let version_args = self.version_args();
+                let version_command = version_args.join(" ");
+                let output = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    Command::new(command).args(version_args).output(),
+                )
+                .await;
+
+                match output {
+                    Ok(Ok(output)) if output.status.success() => PackageManagerAvailability::Available,
+                    Ok(Ok(output)) => {
+                        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                        PackageManagerAvailability::VersionCheckFailed {
+                            command: command.to_owned(),
+                            detail: if detail.is_empty() {
+                                format!("exited with {}", output.status)
+                            } else {
+                                detail
+                            },
+                        }
+                    }
+                    Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                        PackageManagerAvailability::NotFound {
+                            command: command.to_owned(),
+                        }
+                    }
+                    Ok(Err(error)) => PackageManagerAvailability::VersionCheckFailed {
+                        command: command.to_owned(),
+                        detail: error.to_string(),
+                    },
+                    Err(_) => PackageManagerAvailability::VersionCheckFailed {
+                        command: command.to_owned(),
+                        detail: format!("timed out while running {}", version_command),
+                    },
+                }
             }
 
             pub async fn get_current_version(
@@ -336,6 +451,7 @@ define_package_managers! {
         Go: GoManager => ("Go", "Go 编程语言的包管理器", "go"),
         Npm: NpmManager => ("NPM", "Node.js 默认包管理器", "npm"),
         Pnpm: PnpmManager => ("pnpm", "Node.js 高性能包管理器", "pnpm"),
+        Pipx: PipxManager => ("pipx", "Python CLI 应用隔离安装管理器", "pipx"),
     }
 }
 
@@ -351,11 +467,12 @@ impl PackageManagerType {
             Self::Pacman => PacmanManager::list_updates_with_refresh(config, refresh).await,
             Self::Zypper => ZypperManager::list_updates_with_refresh(config, refresh).await,
             Self::Flatpak => FlatpakManager::list_updates(config).await,
-            Self::Homebrew => HomebrewManager::list_updates(config).await,
+            Self::Homebrew => HomebrewManager::list_updates_with_refresh(config, refresh).await,
             Self::Cargo => CargoManager::list_updates(config).await,
             Self::Go => GoManager::list_updates(config).await,
             Self::Npm => NpmManager::list_updates(config).await,
             Self::Pnpm => PnpmManager::list_updates(config).await,
+            Self::Pipx => PipxManager::list_updates(config).await,
         }
     }
 
@@ -485,5 +602,19 @@ mod tests {
 
         let all: HashSet<PackageManagerType> = ALL_PACKAGE_MANAGERS.iter().copied().collect();
         assert_eq!(union, all);
+    }
+
+    #[test]
+    fn go_uses_go_version_for_availability_check() {
+        assert_eq!(PackageManagerType::Go.version_args(), &["version"]);
+    }
+
+    #[test]
+    fn other_managers_use_dash_dash_version_for_availability_check() {
+        for manager in ALL_PACKAGE_MANAGERS {
+            if *manager != PackageManagerType::Go {
+                assert_eq!(manager.version_args(), &["--version"]);
+            }
+        }
     }
 }

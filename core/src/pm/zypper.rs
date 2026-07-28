@@ -191,7 +191,7 @@ impl ZypperManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::CommandError(format!(
+            return Err(CoreError::from_command_failure(format!(
                 "zypper list-updates failed: {}",
                 stderr.trim()
             )));

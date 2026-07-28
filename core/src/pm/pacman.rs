@@ -150,7 +150,7 @@ impl PacmanManager {
                 return Ok(Vec::new());
             }
 
-            return Err(CoreError::CommandError(format!(
+            return Err(CoreError::from_command_failure(format!(
                 "pacman -Qu failed: {}",
                 stderr.trim()
             )));

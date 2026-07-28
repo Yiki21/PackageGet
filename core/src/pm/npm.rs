@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use tokio::process::Command;
@@ -6,7 +6,7 @@ use tokio::process::Command;
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
     pm::{
-        common::manager_command_path,
+        common::{directory_size, manager_command_path},
         progress::{CommandProgressEvent, run_command_with_progress},
     },
 };
@@ -16,6 +16,12 @@ pub struct NpmManager;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PnpmManager;
+
+#[derive(Debug)]
+struct InstalledJsPackage {
+    info: PackageInfo,
+    path: Option<PathBuf>,
+}
 
 fn command_path(config: &Config, manager_type: PackageManagerType) -> String {
     manager_command_path(config, manager_type)
@@ -151,31 +157,67 @@ impl PnpmManager {
     }
 }
 
-fn parse_global_dependencies(value: &serde_json::Value) -> Vec<(String, String)> {
+fn parse_global_dependencies(
+    manager_type: PackageManagerType,
+    value: &serde_json::Value,
+) -> Vec<InstalledJsPackage> {
     let mut items = Vec::new();
+    let mut add_package = |name: &str, detail: &serde_json::Value| {
+        let version = detail
+            .get("version")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_owned();
+        let description = detail
+            .get("description")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned);
+        let homepage = detail
+            .get("homepage")
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                detail
+                    .get("repository")
+                    .and_then(|repository| repository.as_str())
+            })
+            .or_else(|| {
+                detail
+                    .get("repository")
+                    .and_then(|repository| repository.get("url"))
+                    .and_then(|value| value.as_str())
+            })
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.strip_prefix("git+").unwrap_or(value).to_owned());
+
+        items.push(InstalledJsPackage {
+            info: PackageInfo {
+                name: name.to_owned(),
+                version,
+                source: manager_type,
+                description,
+                size: None,
+                install_date: None,
+                homepage,
+            },
+            path: detail
+                .get("path")
+                .and_then(|value| value.as_str())
+                .map(PathBuf::from),
+        });
+    };
 
     if let Some(dependencies) = value.get("dependencies") {
         if let Some(map) = dependencies.as_object() {
             for (name, detail) in map {
-                let version = detail
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_owned();
-                items.push((name.clone(), version));
+                add_package(name, detail);
             }
         } else if let Some(array) = dependencies.as_array() {
             for detail in array {
                 let Some(name) = detail.get("name").and_then(|v| v.as_str()) else {
                     continue;
                 };
-
-                let version = detail
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_owned();
-                items.push((name.to_owned(), version));
+                add_package(name, detail);
             }
         }
     }
@@ -186,40 +228,20 @@ fn parse_global_dependencies(value: &serde_json::Value) -> Vec<(String, String)>
 fn parse_installed_from_json(
     manager_type: PackageManagerType,
     stdout: &str,
-) -> CoreResult<Vec<PackageInfo>> {
+) -> CoreResult<Vec<InstalledJsPackage>> {
     let json: serde_json::Value = serde_json::from_str(stdout)?;
     let mut installed = Vec::new();
 
     if let Some(nodes) = json.as_array() {
         for node in nodes {
-            for (name, version) in parse_global_dependencies(node) {
-                installed.push(PackageInfo {
-                    name,
-                    version,
-                    source: manager_type,
-                    description: None,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
-                });
-            }
+            installed.extend(parse_global_dependencies(manager_type, node));
         }
     } else {
-        for (name, version) in parse_global_dependencies(&json) {
-            installed.push(PackageInfo {
-                name,
-                version,
-                source: manager_type,
-                description: None,
-                size: None,
-                install_date: None,
-                homepage: None,
-            });
-        }
+        installed.extend(parse_global_dependencies(manager_type, &json));
     }
 
-    installed.sort_by(|a, b| a.name.cmp(&b.name));
-    installed.dedup_by(|a, b| a.name == b.name);
+    installed.sort_by(|a, b| a.info.name.cmp(&b.info.name));
+    installed.dedup_by(|a, b| a.info.name == b.info.name);
 
     Ok(installed)
 }
@@ -230,13 +252,15 @@ async fn list_installed_by_manager(
 ) -> CoreResult<Vec<PackageInfo>> {
     let path = command_path(config, manager_type);
 
-    let output = Command::new(&path)
-        .arg("ls")
-        .arg("-g")
-        .arg("--depth=0")
-        .arg("--json")
-        .output()
-        .await?;
+    let mut command = Command::new(&path);
+    command.arg("ls").arg("-g").arg("--depth=0").arg("--json");
+    if matches!(
+        manager_type,
+        PackageManagerType::Npm | PackageManagerType::Pnpm
+    ) {
+        command.arg("--long");
+    }
+    let output = command.output().await?;
 
     if !output.status.success() {
         return Err(crate::error::CoreError::UnknownError(format!(
@@ -246,7 +270,19 @@ async fn list_installed_by_manager(
     }
 
     let stdout = String::from_utf8(output.stdout)?;
-    parse_installed_from_json(manager_type, &stdout)
+    let mut installed = parse_installed_from_json(manager_type, &stdout)?;
+    if matches!(
+        manager_type,
+        PackageManagerType::Npm | PackageManagerType::Pnpm
+    ) {
+        for package in &mut installed {
+            if let Some(path) = package.path.as_deref() {
+                package.info.size = directory_size(path).await;
+            }
+        }
+    }
+
+    Ok(installed.into_iter().map(|package| package.info).collect())
 }
 
 async fn count_installed_by_manager(
@@ -351,12 +387,27 @@ async fn list_updates_by_manager(
         }
         _ => {}
     }
+    command.kill_on_drop(true);
 
-    let output = command.output().await?;
+    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| {
+            crate::error::CoreError::CommandError(format!(
+                "{} outdated timed out after 30 seconds",
+                manager_type.name()
+            ))
+        })??;
     let stdout = String::from_utf8(output.stdout)?;
 
     if stdout.trim().is_empty() {
-        return Ok(Vec::new());
+        if output.status.success() {
+            return Ok(Vec::new());
+        }
+        return Err(crate::error::CoreError::from_command_failure(format!(
+            "{} outdated failed: {}",
+            manager_type.name(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
 
     let parsed = parse_updates_from_json(&stdout);
@@ -380,15 +431,27 @@ async fn search_package_by_manager(
     package_name: &str,
 ) -> CoreResult<Vec<PackageInfo>> {
     let path = command_path(config, manager_type);
-    let output = Command::new(&path)
+    let mut command = Command::new(&path);
+    command
         .arg("search")
         .arg(package_name)
         .arg("--json")
-        .output()
-        .await?;
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(60), command.output())
+        .await
+        .map_err(|_| {
+            crate::error::CoreError::CommandError(format!(
+                "{} search timed out after 60 seconds",
+                manager_type.name()
+            ))
+        })??;
 
     if !output.status.success() {
-        return Ok(Vec::new());
+        return Err(crate::error::CoreError::from_command_failure(format!(
+            "{} search failed: {}",
+            manager_type.name(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -539,10 +602,10 @@ mod tests {
         let installed = parse_installed_from_json(PackageManagerType::Npm, stdout).unwrap();
 
         assert_eq!(installed.len(), 3);
-        assert_eq!(installed[0].name, "eslint");
-        assert_eq!(installed[0].version, "8.57.0");
-        assert_eq!(installed[1].name, "pnpm");
-        assert_eq!(installed[2].name, "typescript");
+        assert_eq!(installed[0].info.name, "eslint");
+        assert_eq!(installed[0].info.version, "8.57.0");
+        assert_eq!(installed[1].info.name, "pnpm");
+        assert_eq!(installed[2].info.name, "typescript");
     }
 
     #[test]
@@ -555,8 +618,39 @@ mod tests {
 
         let installed = parse_installed_from_json(PackageManagerType::Npm, stdout).unwrap();
         assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].name, "corepack");
-        assert_eq!(installed[0].version, "unknown");
+        assert_eq!(installed[0].info.name, "corepack");
+        assert_eq!(installed[0].info.version, "unknown");
+    }
+
+    #[test]
+    fn test_parse_pnpm_long_metadata() {
+        let stdout = r#"[{
+          "dependencies": {
+            "@playwright/cli": {
+              "version": "0.1.17",
+              "description": "Playwright CLI",
+              "homepage": "https://playwright.dev",
+              "path": "/pnpm/global/node_modules/@playwright/cli"
+            }
+          }
+        }]"#;
+
+        let installed = parse_installed_from_json(PackageManagerType::Pnpm, stdout).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(
+            installed[0].info.description.as_deref(),
+            Some("Playwright CLI")
+        );
+        assert_eq!(
+            installed[0].info.homepage.as_deref(),
+            Some("https://playwright.dev")
+        );
+        assert_eq!(
+            installed[0].path.as_deref(),
+            Some(std::path::Path::new(
+                "/pnpm/global/node_modules/@playwright/cli"
+            ))
+        );
     }
 
     #[test]

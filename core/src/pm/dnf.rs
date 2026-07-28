@@ -205,7 +205,7 @@ impl DnfManager {
             } else {
                 stderr.to_string()
             };
-            return Err(CoreError::CommandError(format!(
+            return Err(CoreError::from_command_failure(format!(
                 "dnf check-upgrade failed with status {:?}: {}",
                 output.status.code(),
                 detail
