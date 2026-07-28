@@ -44,9 +44,3 @@ pub fn apply_manager_counted_items_result<T>(
         }
     }
 }
-
-pub fn joined_manager_names(errors: &ManagerErrors) -> String {
-    let mut names: Vec<_> = errors.keys().map(PackageManagerType::name).collect();
-    names.sort_unstable();
-    names.join(", ")
-}

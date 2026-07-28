@@ -1,14 +1,26 @@
+use std::collections::HashMap;
+
 use iced::Task;
 use rfd::FileHandle;
-use updater_core::{ALL_APP_PACKAGE_MANAGERS, Config, PackageManagerConfig, PackageManagerType};
+use updater_core::{
+    ALL_APP_PACKAGE_MANAGERS, ALL_PACKAGE_MANAGERS, PackageManagerAvailability,
+    PackageManagerConfig, PackageManagerType,
+};
 
 use crate::{
-    app::{self},
+    content::shared::SharedUi,
     icon::{ADD_ICON, REFRESH_ICON, SAVE_ICON},
+    theme,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
+    /// Editable configuration shown on the Settings page.
+    draft: updater_core::Config,
+    /// Last configuration synchronized from or saved to persistent storage.
+    baseline: updater_core::Config,
+    /// Whether the draft has been initialized from application state.
+    is_initialized: bool,
     /// Whether config save is in progress.
     pub is_saving: bool,
     /// Whether package-manager auto detection is in progress.
@@ -17,6 +29,8 @@ pub struct Settings {
     pub selecting_manager: Option<PackageManagerType>,
     /// Managers detected from PATH scan.
     pub detected_in_path: Vec<PackageManagerType>,
+    /// Last availability result for each manager.
+    pub availability: HashMap<PackageManagerType, PackageManagerAvailability>,
     /// Last save result shown in UI.
     pub save_status: Option<SaveStatus>,
 }
@@ -34,7 +48,7 @@ pub enum Message {
     /// Package-manager detection message.
     DetectPackageManagers,
     /// Detection result message.
-    FinishDetect(Vec<PackageManagerType>),
+    FinishDetect(Vec<(PackageManagerType, PackageManagerAvailability)>),
     /// Manager-add message.
     AddDetectedManager(PackageManagerType),
     /// Manager-remove message.
@@ -55,6 +69,12 @@ pub enum Message {
     SelectedGoBinDir(FileHandle),
     /// Go-bin directory clear message.
     ClearGoBinDir,
+    /// Revert all unsaved settings changes.
+    RevertChanges,
+    /// Change the preferred application appearance.
+    AppearanceChanged(theme::Appearance),
+    /// Enable or disable native completion notifications.
+    NotificationsChanged(bool),
 }
 
 #[derive(Debug)]
@@ -63,34 +83,38 @@ pub enum Action {
     None,
     /// Asynchronous task action.
     Run(iced::Task<Message>),
+    /// Apply the successfully saved draft and reload package data.
+    ApplySavedConfig(updater_core::Config),
 }
 
 impl Settings {
-    fn section_title(text: &'static str) -> iced::widget::Text<'static> {
-        iced::widget::text(text)
-            .size(18)
-            .color(app::colors::ON_SURFACE)
+    pub fn sync_from_config(&mut self, config: &updater_core::Config) {
+        if !self.is_initialized || !self.is_dirty() {
+            self.draft = config.clone();
+            self.baseline = config.clone();
+            self.is_initialized = true;
+        }
     }
 
-    fn styled_container<'a>(
-        content: impl Into<iced::Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message> {
-        use iced::{Border, widget::container};
+    pub fn is_dirty(&self) -> bool {
+        self.is_initialized && self.draft != self.baseline
+    }
 
-        container(content)
-            .padding(16)
-            .width(iced::Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(app::colors::SURFACE.into()),
-                border: Border {
-                    color: app::colors::DIVIDER,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                text_color: None,
-                shadow: Default::default(),
-                snap: false,
-            })
+    pub fn appearance_value(&self) -> String {
+        self.draft.appearance.clone()
+    }
+
+    pub fn discard_changes(&mut self) {
+        self.draft.clone_from(&self.baseline);
+        self.save_status = None;
+        self.selecting_manager = None;
+    }
+
+    fn section_title(text: &'static str) -> iced::widget::Text<'static> {
+        iced::widget::text(text)
+            .size(16)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface)
     }
 
     fn icon_button(
@@ -104,52 +128,19 @@ impl Settings {
             widget::{button, row, text},
         };
 
+        let enabled = message.is_some();
         let btn = button(
-            row![icon, text(label).size(size)]
+            row![icon, text(label).size(size).font(theme::FONT_SEMIBOLD)]
                 .spacing(if size > 14.0 { 8 } else { 6 })
                 .align_y(Alignment::Center),
         )
-        .padding(if size > 14.0 { [12, 24] } else { [8, 16] })
-        .style(|_theme, status| {
-            use iced::widget::button::{Status, Style};
-            use iced::{Background, Border, Shadow, Vector};
-
-            let is_disabled = matches!(status, Status::Disabled);
-
-            if is_disabled {
-                Style {
-                    background: Some(Background::Color(app::colors::SURFACE)),
-                    text_color: app::colors::ON_SURFACE_MUTED,
-                    border: Border {
-                        radius: 8.0.into(),
-                        ..Default::default()
-                    },
-                    shadow: Shadow::default(),
-                    snap: false,
-                }
-            } else {
-                let (bg_color, shadow_offset) = match status {
-                    Status::Hovered => (app::colors::PRIMARY_HOVER, 3.0),
-                    Status::Pressed => (app::colors::PRIMARY_ACTIVE, 1.0),
-                    _ => (app::colors::PRIMARY, 2.0),
-                };
-
-                Style {
-                    background: Some(Background::Color(bg_color)),
-                    text_color: app::colors::ON_PRIMARY,
-                    border: Border {
-                        radius: 8.0.into(),
-                        ..Default::default()
-                    },
-                    shadow: Shadow {
-                        color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.15),
-                        offset: Vector::new(0.0, shadow_offset),
-                        blur_radius: 8.0,
-                    },
-                    snap: false,
-                }
-            }
-        });
+        .padding(if size > 14.0 { [10, 16] } else { [8, 12] })
+        .style(theme::action_button(
+            enabled,
+            theme::colors::ACCENT,
+            theme::colors::ACCENT_HOVER,
+            theme::colors::ACCENT_ACTIVE,
+        ));
 
         if let Some(msg) = message {
             btn.on_press(msg)
@@ -165,53 +156,10 @@ impl Settings {
     ) -> iced::widget::Button<'static, Message> {
         use iced::widget::{button, text};
 
+        let enabled = message.is_some();
         let btn = button(text(label).size(size))
-            .padding(if size > 14.0 { [12, 24] } else { [8, 16] })
-            .style(|_theme, status| {
-                use iced::widget::button::{Status, Style};
-                use iced::{Background, Border, Shadow, Vector};
-
-                let is_disabled = matches!(status, Status::Disabled);
-
-                if is_disabled {
-                    Style {
-                        background: Some(Background::Color(app::colors::SURFACE)),
-                        text_color: app::colors::ON_SURFACE_MUTED,
-                        border: Border {
-                            radius: 8.0.into(),
-                            ..Default::default()
-                        },
-                        shadow: Shadow::default(),
-                        snap: false,
-                    }
-                } else {
-                    let (bg_color, text_color, shadow_offset) = match status {
-                        Status::Hovered => {
-                            (app::colors::SURFACE_HOVER, app::colors::ON_SURFACE, 2.0)
-                        }
-                        Status::Pressed => {
-                            (app::colors::SURFACE_PRESSED, app::colors::ON_SURFACE, 0.5)
-                        }
-                        _ => (app::colors::SURFACE, app::colors::ON_SURFACE, 1.0),
-                    };
-
-                    Style {
-                        background: Some(Background::Color(bg_color)),
-                        text_color,
-                        border: Border {
-                            color: app::colors::DIVIDER,
-                            width: 1.0,
-                            radius: 8.0.into(),
-                        },
-                        shadow: Shadow {
-                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.08),
-                            offset: Vector::new(0.0, shadow_offset),
-                            blur_radius: 4.0,
-                        },
-                        snap: false,
-                    }
-                }
-            });
+            .padding(if size > 14.0 { [10, 16] } else { [8, 12] })
+            .style(theme::secondary_button(enabled));
 
         if let Some(msg) = message {
             btn.on_press(msg)
@@ -220,27 +168,44 @@ impl Settings {
         }
     }
 
-    pub fn update(&mut self, message: Message, pm_config: &mut updater_core::Config) -> Action {
+    pub fn update(&mut self, message: Message, active_config: &updater_core::Config) -> Action {
+        self.sync_from_config(active_config);
+
         match message {
             Message::DetectPackageManagers => {
                 self.is_detecting = true;
-                let task = Task::future(Config::detect_available_app_managers())
-                    .then(|detected_managers| Task::done(Message::FinishDetect(detected_managers)));
+                let config = self.draft.clone();
+                let task = Task::future(async move {
+                    let mut results = Vec::with_capacity(ALL_PACKAGE_MANAGERS.len());
+                    for manager_type in ALL_PACKAGE_MANAGERS {
+                        let availability = manager_type.availability_with_config(&config).await;
+                        results.push((*manager_type, availability));
+                    }
+                    results
+                })
+                .then(|detected_managers| Task::done(Message::FinishDetect(detected_managers)));
                 Action::Run(task)
             }
-            Message::FinishDetect(detected_managers) => {
+            Message::FinishDetect(results) => {
                 self.is_detecting = false;
-                self.detected_in_path = detected_managers;
+                self.detected_in_path = results
+                    .iter()
+                    .filter_map(|(manager_type, availability)| {
+                        availability.is_available().then_some(*manager_type)
+                    })
+                    .collect();
+                self.availability = results.into_iter().collect();
                 Action::None
             }
             Message::AddDetectedManager(manager_type) => {
-                let exists = pm_config
+                let exists = self
+                    .draft
                     .app_managers
                     .iter()
                     .any(|manager| manager.manager_type == manager_type);
 
                 if !exists {
-                    pm_config.app_managers.push(PackageManagerConfig {
+                    self.draft.app_managers.push(PackageManagerConfig {
                         manager_type,
                         custom_path: None,
                     });
@@ -248,37 +213,38 @@ impl Settings {
                 Action::None
             }
             Message::UnloadManager(manager_type) => {
-                pm_config
+                self.draft
                     .app_managers
                     .retain(|manager| manager.manager_type != manager_type);
 
                 if manager_type == PackageManagerType::Go {
-                    pm_config.go_bin_dir = None;
+                    self.draft.go_bin_dir = None;
                 }
                 Action::None
             }
             Message::SaveConfig => {
+                if !self.is_dirty() || self.is_saving {
+                    return Action::None;
+                }
                 self.is_saving = true;
                 self.save_status = None;
-                self.save_config(
-                    pm_config.system_manager.as_ref(),
-                    pm_config.app_managers.as_ref(),
-                    pm_config.go_bin_dir.as_ref(),
-                )
+                Self::save_config(self.draft.clone())
             }
             Message::SaveConfigResult(result) => {
                 self.is_saving = false;
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         log::debug!("Configuration saved successfully");
+                        self.baseline.clone_from(&self.draft);
                         self.save_status = Some(SaveStatus::Success);
+                        Action::ApplySavedConfig(self.draft.clone())
                     }
                     Err(e) => {
                         log::error!("Failed to save configuration: {}", e);
                         self.save_status = Some(SaveStatus::Error(e));
+                        Action::None
                     }
                 }
-                Action::None
             }
             Message::OpenDialog(manager_type) => {
                 self.selecting_manager = Some(manager_type);
@@ -298,15 +264,17 @@ impl Settings {
             Message::SelectedPath(file_handle) => {
                 if let Some(manager_type) = self.selecting_manager {
                     let path = file_handle.path().to_string_lossy().to_string();
+                    self.availability.remove(&manager_type);
 
-                    if let Some(existing) = pm_config
+                    if let Some(existing) = self
+                        .draft
                         .app_managers
                         .iter_mut()
                         .find(|manager| manager.manager_type == manager_type)
                     {
                         existing.custom_path = Some(path);
                     } else {
-                        pm_config.app_managers.push(PackageManagerConfig {
+                        self.draft.app_managers.push(PackageManagerConfig {
                             manager_type,
                             custom_path: Some(path),
                         });
@@ -337,42 +305,79 @@ impl Settings {
             }
             Message::SelectedGoBinDir(file_handle) => {
                 let path = file_handle.path().to_string_lossy().to_string();
-                pm_config.go_bin_dir = Some(path);
+                self.draft.go_bin_dir = Some(path);
                 Action::None
             }
             Message::ClearGoBinDir => {
-                pm_config.go_bin_dir = None;
+                self.draft.go_bin_dir = None;
+                Action::None
+            }
+            Message::RevertChanges => {
+                self.discard_changes();
+                Action::None
+            }
+            Message::AppearanceChanged(appearance) => {
+                self.draft.appearance = appearance.config_value().to_owned();
+                self.save_status = None;
+                Action::None
+            }
+            Message::NotificationsChanged(enabled) => {
+                self.draft.notifications_enabled = enabled;
+                self.save_status = None;
                 Action::None
             }
         }
     }
 
-    pub fn view(&self, pm_config: &updater_core::Config) -> iced::Element<'static, Message> {
+    pub fn view(&self, _active_config: &updater_core::Config) -> iced::Element<'static, Message> {
         use iced::Length;
         use iced::widget::{column, container, scrollable};
 
+        let pm_config = &self.draft;
+
         let content = column![
-            self.view_header(),
+            SharedUi::page_header(
+                "Settings",
+                format!(
+                    "{} application package managers configured",
+                    pm_config.app_managers.len()
+                ),
+                theme::colors::SETTINGS,
+            ),
             self.view_system_manager_section(pm_config.system_manager.as_ref()),
+            self.view_appearance_section(pm_config),
             self.view_app_manager_section(pm_config),
             self.view_selection_list(pm_config),
             self.view_buttons(),
             self.view_status(),
         ]
-        .spacing(24)
-        .padding(20)
+        .spacing(theme::spacing::LG)
         .width(Length::Fill);
 
-        container(scrollable(content).width(Length::Fill).height(Length::Fill))
+        let scrollable_content = scrollable(
+            container(content)
+                .padding(iced::Padding {
+                    top: 0.0,
+                    right: theme::spacing::LG,
+                    bottom: theme::spacing::LG,
+                    left: 0.0,
+                })
+                .width(Length::Fill),
+        )
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(4)
+                .margin(2),
+        ))
+        .style(theme::scrollable_style)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        container(scrollable_content)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-    }
-
-    fn view_header(&self) -> iced::Element<'static, Message> {
-        use iced::widget::text;
-
-        text("Package Manager Settings").size(24).into()
     }
 
     fn view_system_manager_section(
@@ -391,28 +396,66 @@ impl Settings {
             column![
                 row![
                     text(manager.manager_type.name()).size(16),
-                    text("✓").size(16).color(app::colors::SUCCESS),
+                    text("✓").size(16).style(theme::text_success),
                 ]
                 .spacing(10),
                 text(path_info)
-                    .size(14)
-                    .color(app::colors::ON_SURFACE_MUTED),
+                    .size(13)
+                    .font(theme::FONT_MONO)
+                    .style(theme::text_on_surface_muted),
+                self.availability_text(manager.manager_type),
             ]
             .spacing(8)
         } else {
             column![
                 text("Not detected")
                     .size(16)
-                    .color(app::colors::ON_SURFACE_MUTED)
+                    .style(theme::text_on_surface_muted)
             ]
             .spacing(8)
         };
 
         column![
             Self::section_title("System Package Manager"),
-            Self::styled_container(content)
+            SharedUi::styled_container(content)
         ]
         .spacing(12)
+        .into()
+    }
+
+    fn view_appearance_section(
+        &self,
+        pm_config: &updater_core::Config,
+    ) -> iced::Element<'static, Message> {
+        use iced::widget::{checkbox, column, row};
+
+        let selected = theme::Appearance::from_config(&pm_config.appearance);
+        let options = row(theme::Appearance::ALL.into_iter().map(|appearance| {
+            SharedUi::segmented_button(
+                appearance.name(),
+                appearance == selected,
+                Message::AppearanceChanged(appearance),
+            )
+            .into()
+        }))
+        .spacing(2)
+        .width(iced::Length::Fill);
+
+        let notifications = checkbox(pm_config.notifications_enabled)
+            .label("Native completion and failure notifications")
+            .on_toggle(Message::NotificationsChanged)
+            .size(18)
+            .spacing(8)
+            .text_size(14)
+            .style(SharedUi::checkbox_style(false));
+
+        column![
+            Self::section_title("Appearance & Notifications"),
+            SharedUi::segmented_group(options),
+            notifications,
+        ]
+        .spacing(12)
+        .width(iced::Length::Fill)
         .into()
     }
 
@@ -428,7 +471,7 @@ impl Settings {
             column![
                 text("No application package managers in UI management")
                     .size(16)
-                    .color(app::colors::ON_SURFACE_MUTED)
+                    .style(theme::text_on_surface_muted)
             ]
         } else {
             column(
@@ -499,7 +542,7 @@ impl Settings {
             column![
                 text("All available package managers have been added")
                     .size(16)
-                    .color(app::colors::ON_SURFACE_MUTED)
+                    .style(theme::text_on_surface_muted)
             ]
             .into()
         } else {
@@ -554,7 +597,7 @@ impl Settings {
             Self::section_title("Add Other Package Manager"),
             text(detect_tip)
                 .size(14)
-                .color(app::colors::ON_SURFACE_MUTED),
+                .style(theme::text_on_surface_muted),
             managers_list
         ]
         .spacing(12)
@@ -574,7 +617,7 @@ impl Settings {
         let name_row = if is_configured {
             row![
                 text(manager.manager_type.name()).size(16),
-                text("✓").size(16).color(app::colors::SUCCESS)
+                text("✓").size(16).style(theme::text_success)
             ]
             .spacing(10)
         } else {
@@ -596,17 +639,52 @@ impl Settings {
         let mut content_items = vec![
             name_row.into(),
             text(info_text)
-                .size(14)
-                .color(app::colors::ON_SURFACE_MUTED)
+                .size(13)
+                .font(if is_configured {
+                    theme::FONT_MONO
+                } else {
+                    theme::FONT_REGULAR
+                })
+                .style(theme::text_on_surface_muted)
                 .into(),
         ];
+
+        if is_configured
+            || detected_in_path
+            || self.availability.contains_key(&manager.manager_type)
+        {
+            content_items.push(self.availability_text(manager.manager_type));
+        }
 
         // Go binary configuration.
         if is_configured && manager.manager_type == PackageManagerType::Go {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
 
-        Self::styled_container(column(content_items).spacing(8)).into()
+        SharedUi::styled_container(column(content_items).spacing(8)).into()
+    }
+
+    fn availability_text(
+        &self,
+        manager_type: PackageManagerType,
+    ) -> iced::Element<'static, Message> {
+        use iced::widget::text;
+
+        let Some(availability) = self.availability.get(&manager_type) else {
+            return text("Status: not scanned")
+                .size(13)
+                .style(theme::text_on_surface_alt)
+                .into();
+        };
+
+        text(format!("Status: {}", availability.message()))
+            .size(13)
+            .style(if availability.is_available() {
+                theme::text_success
+            } else {
+                theme::text_warning
+            })
+            .into()
     }
 
     /// Go binary configuration rows.
@@ -622,12 +700,13 @@ impl Settings {
             .as_ref()
             .map(|dir| format!("Binary Dir: {}", dir))
             .unwrap_or_else(|| {
-                "Binary Dir: Auto Detect (GOBIN > GOPATH/bin > ~/go/bin)".to_string()
+                "Binary Dir: Auto Detect (go env GOBIN > go env GOPATH/bin)".to_string()
             });
 
         let info_elem = text(go_bin_info)
-            .size(13)
-            .color(app::colors::ON_SURFACE_ALT)
+            .size(12)
+            .font(theme::FONT_MONO)
+            .style(theme::text_on_surface_alt)
             .into();
 
         let change_btn =
@@ -649,7 +728,7 @@ impl Settings {
 
     /// Action buttons row.
     fn view_buttons(&self) -> iced::Element<'static, Message> {
-        use iced::widget::{container, row, svg};
+        use iced::widget::{container, row, svg, text};
 
         let detect_msg = if self.is_detecting {
             None
@@ -670,11 +749,8 @@ impl Settings {
             detect_msg,
         );
 
-        let save_msg = if self.is_saving {
-            None
-        } else {
-            Some(Message::SaveConfig)
-        };
+        let is_dirty = self.is_dirty();
+        let save_msg = (is_dirty && !self.is_saving).then_some(Message::SaveConfig);
         let save_label = if self.is_saving {
             "Saving..."
         } else {
@@ -688,9 +764,26 @@ impl Settings {
             save_msg,
         );
 
-        container(row![detect_btn, save_btn].spacing(16))
-            .padding([0, 20])
-            .into()
+        let mut actions = row![detect_btn]
+            .spacing(12)
+            .align_y(iced::Alignment::Center);
+        if is_dirty {
+            actions = actions
+                .push(
+                    text("● Unsaved changes")
+                        .size(13)
+                        .font(theme::FONT_SEMIBOLD)
+                        .color(theme::colors::SETTINGS),
+                )
+                .push(Self::secondary_button(
+                    "Revert",
+                    14.0,
+                    Some(Message::RevertChanges),
+                ));
+        }
+        actions = actions.push(save_btn);
+
+        container(actions).into()
     }
 
     /// Save status view.
@@ -701,62 +794,114 @@ impl Settings {
         };
 
         if let Some(status) = &self.save_status {
-            let (message, color, border_color) = match status {
-                SaveStatus::Success => (
-                    "✓ Successfully Saved".to_string(),
-                    app::colors::SUCCESS,
-                    app::colors::SUCCESS,
-                ),
-                SaveStatus::Error(e) => (
-                    format!("✗ Failed To Save: {}", e),
-                    app::colors::ERROR,
-                    app::colors::ERROR,
-                ),
+            let (message, is_success) = match status {
+                SaveStatus::Success => ("✓ Successfully Saved".to_string(), true),
+                SaveStatus::Error(e) => (format!("✗ Failed To Save: {e}"), false),
             };
 
-            container(text(message).size(14).color(color))
-                .padding(12)
-                .width(iced::Length::Fill)
-                .style(move |_theme: &iced::Theme| container::Style {
+            container(text(message).size(14).style(move |iced_theme| {
+                let semantic = theme::semantic_colors(iced_theme);
+                iced::widget::text::Style {
+                    color: Some(if is_success {
+                        semantic.success
+                    } else {
+                        semantic.error
+                    }),
+                }
+            }))
+            .padding(12)
+            .width(iced::Length::Fill)
+            .style(move |iced_theme: &iced::Theme| {
+                let semantic = theme::semantic_colors(iced_theme);
+                let color = if is_success {
+                    semantic.success
+                } else {
+                    semantic.error
+                };
+                container::Style {
                     background: Some(iced::Color::from_rgba(color.r, color.g, color.b, 0.1).into()),
                     border: Border {
-                        color: border_color,
+                        color,
                         width: 1.0,
                         radius: 6.0.into(),
                     },
                     text_color: None,
                     shadow: Default::default(),
                     snap: false,
-                })
-                .into()
+                }
+            })
+            .into()
         } else {
             container(text("")).into()
         }
     }
 
-    fn save_config(
-        &self,
-        system_manager: Option<&PackageManagerConfig>,
-        app_managers: &[PackageManagerConfig],
-        go_bin_dir: Option<&String>,
-    ) -> Action {
-        let system_manager = system_manager.cloned();
-        let app_managers = app_managers.to_vec();
-        let go_bin_dir = go_bin_dir.cloned();
-
+    fn save_config(config: updater_core::Config) -> Action {
         let task = iced::Task::perform(
-            async move {
-                let config = updater_core::Config {
-                    system_manager,
-                    app_managers,
-                    go_bin_dir,
-                };
-
-                config.save().await.map_err(|e| e.to_string())
-            },
+            async move { config.save().await.map_err(|e| e.to_string()) },
             Message::SaveConfigResult,
         );
 
         Action::Run(task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_manager(manager_type: PackageManagerType) -> updater_core::Config {
+        updater_core::Config {
+            system_manager: None,
+            app_managers: vec![PackageManagerConfig {
+                manager_type,
+                custom_path: None,
+            }],
+            ..updater_core::Config::default()
+        }
+    }
+
+    #[test]
+    fn draft_changes_do_not_mutate_active_config() {
+        let active = config_with_manager(PackageManagerType::Cargo);
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+
+        settings.draft.app_managers.push(PackageManagerConfig {
+            manager_type: PackageManagerType::Flatpak,
+            custom_path: None,
+        });
+
+        assert!(settings.is_dirty());
+        assert_eq!(active.app_managers.len(), 1);
+        assert_eq!(settings.draft.app_managers.len(), 2);
+    }
+
+    #[test]
+    fn discard_restores_last_baseline() {
+        let active = config_with_manager(PackageManagerType::Cargo);
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+        settings.draft.go_bin_dir = Some("/tmp/bin".to_owned());
+
+        settings.discard_changes();
+
+        assert!(!settings.is_dirty());
+        assert_eq!(settings.draft, active);
+    }
+
+    #[test]
+    fn external_sync_does_not_overwrite_dirty_draft() {
+        let active = config_with_manager(PackageManagerType::Cargo);
+        let replacement = config_with_manager(PackageManagerType::Flatpak);
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+        settings.draft.go_bin_dir = Some("/tmp/bin".to_owned());
+
+        settings.sync_from_config(&replacement);
+
+        assert!(settings.is_dirty());
+        assert_eq!(settings.baseline, active);
+        assert_eq!(settings.draft.go_bin_dir.as_deref(), Some("/tmp/bin"));
     }
 }

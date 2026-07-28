@@ -1,22 +1,178 @@
 use std::collections::HashSet;
 
-use iced::widget::{column, container, text, text_input};
+use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
-use updater_core::{Config, PackageManagerType};
+use updater_core::{Config, PackageInfo, PackageManagerType};
 
-use crate::{
-    app,
-    content::errors::{ManagerErrors, joined_manager_names},
-};
+use crate::theme;
+
+fn validate_http_url(value: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(value).map_err(|error| format!("Invalid URL: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Only http and https URLs can be opened".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Homepage URLs containing credentials cannot be opened".to_owned());
+    }
+    Ok(url)
+}
+
+pub async fn open_http_url(value: String) -> Result<(), String> {
+    let url = validate_http_url(&value)?;
+
+    let attempts = [
+        ("gio", vec!["open", url.as_str()]),
+        ("xdg-open", vec![url.as_str()]),
+    ];
+    let mut last_error = None;
+    for (program, args) in attempts {
+        match tokio::process::Command::new(program)
+            .args(args)
+            .status()
+            .await
+        {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => last_error = Some(format!("{program} exited with status {status}")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => last_error = Some(format!("{program} failed: {error}")),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| "No desktop URL opener was found (tried gio and xdg-open)".to_owned()))
+}
 
 pub type PackageSelectionKey = (PackageManagerType, String);
 
-/// Shared UI helpers for Installed/Updates pages.
+pub fn next_keyboard_package(
+    packages: &[(PackageManagerType, String)],
+    current: Option<&PackageSelectionKey>,
+    direction: crate::shortcut::SelectionDirection,
+) -> Option<PackageSelectionKey> {
+    if packages.is_empty() {
+        return None;
+    }
+
+    let current_index =
+        current.and_then(|current| packages.iter().position(|package| package == current));
+    let next_index = match (current_index, direction) {
+        (Some(index), crate::shortcut::SelectionDirection::Previous) => index.saturating_sub(1),
+        (Some(index), crate::shortcut::SelectionDirection::Next) => {
+            (index + 1).min(packages.len() - 1)
+        }
+        (None, crate::shortcut::SelectionDirection::Previous) => packages.len() - 1,
+        (None, crate::shortcut::SelectionDirection::Next) => 0,
+    };
+
+    packages.get(next_index).cloned()
+}
+
+pub fn search_input_id(page: crate::content::ActiveContentPage) -> iced::widget::Id {
+    match page {
+        crate::content::ActiveContentPage::Finding => iced::widget::Id::new("finding-search"),
+        crate::content::ActiveContentPage::Updates => iced::widget::Id::new("updates-search"),
+        crate::content::ActiveContentPage::Installed => iced::widget::Id::new("installed-search"),
+        crate::content::ActiveContentPage::Settings => iced::widget::Id::new("settings-search"),
+    }
+}
+
+pub struct PackageInspector<'a> {
+    pub manager: PackageManagerType,
+    pub name: &'a str,
+    pub version: &'a str,
+    pub available_version: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub size: Option<u64>,
+    pub install_date: Option<&'a str>,
+    pub homepage: Option<&'a str>,
+}
+
+/// Shared content-page UI helpers.
 pub struct SharedUi;
 
 impl SharedUi {
     pub fn selection_key(pm_type: PackageManagerType, package_name: &str) -> PackageSelectionKey {
         (pm_type, package_name.to_owned())
+    }
+
+    pub fn package_summary<'a, Message>(
+        package: &'a PackageInfo,
+    ) -> iced::widget::Column<'a, Message>
+    where
+        Message: 'a,
+    {
+        let mut summary = column![
+            text(&package.name)
+                .size(14)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph)
+        ]
+        .spacing(theme::spacing::XS)
+        .width(iced::Length::Fill);
+
+        if let Some(description) = package
+            .description
+            .as_deref()
+            .filter(|description| !description.trim().is_empty())
+        {
+            summary = summary.push(
+                text(description)
+                    .size(13)
+                    .style(theme::text_on_surface_muted)
+                    .width(iced::Length::Fill)
+                    .height(iced::Length::Fixed(36.0))
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+
+        let mut metadata = Vec::with_capacity(2);
+        if let Some(bytes) = package.size {
+            metadata.push(format!("Size: {}", Self::format_size(bytes)));
+        }
+        if let Some(install_date) = package
+            .install_date
+            .as_deref()
+            .filter(|date| !date.trim().is_empty())
+        {
+            metadata.push(format!("Installed: {install_date}"));
+        }
+        if !metadata.is_empty() {
+            summary = summary.push(
+                text(metadata.join("  |  "))
+                    .size(12)
+                    .style(theme::text_on_surface_alt)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+
+        summary
+    }
+
+    pub fn format_size(bytes: u64) -> String {
+        let (value, unit) = if bytes >= 1024 * 1024 * 1024 {
+            (bytes as f64 / (1024_u64.pow(3)) as f64, "GiB")
+        } else if bytes >= 1024 * 1024 {
+            (bytes as f64 / (1024_u64.pow(2)) as f64, "MiB")
+        } else if bytes >= 1024 {
+            (bytes as f64 / 1024.0, "KiB")
+        } else {
+            return format!("{bytes} B");
+        };
+
+        format!("{value:.1} {unit}")
+    }
+
+    pub fn muted_badge<'a, Message>(label: &'a str) -> iced::widget::Container<'a, Message> {
+        container(
+            text(label)
+                .size(12)
+                .font(theme::FONT_MONO)
+                .style(theme::text_on_surface_muted),
+        )
+        .padding([2, 0])
     }
 
     pub fn configured_managers(pm_config: &Config) -> Vec<PackageManagerType> {
@@ -30,49 +186,181 @@ impl SharedUi {
 
     pub fn section_title(text: &'static str) -> iced::widget::Text<'static> {
         iced::widget::text(text)
-            .size(16)
-            .color(app::colors::ON_SURFACE)
+            .size(12)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface_muted)
+    }
+
+    pub fn page_header<'a, Message>(
+        title: &'a str,
+        subtitle: impl Into<String>,
+        accent: iced::Color,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        let marker = container("")
+            .width(iced::Length::Fixed(10.0))
+            .height(iced::Length::Fixed(10.0))
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(accent.into()),
+                border: Border {
+                    radius: 999.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+        column![
+            row![
+                marker,
+                text(title)
+                    .size(30)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+            ]
+            .spacing(theme::spacing::SM)
+            .align_y(iced::Alignment::Center),
+            text(subtitle.into())
+                .size(13)
+                .style(theme::text_on_surface_muted),
+        ]
+        .spacing(theme::spacing::XS)
+        .into()
+    }
+
+    pub fn summary_item<'a, Message>(
+        label: impl Into<String>,
+        accent: iced::Color,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        row![
+            container("")
+                .width(6)
+                .height(6)
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(accent.into()),
+                    border: Border {
+                        radius: 999.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            text(label.into())
+                .size(12)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface_muted),
+        ]
+        .spacing(theme::spacing::XS)
+        .align_y(iced::Alignment::Center)
+        .into()
+    }
+
+    pub fn summary_row<'a, Message>(
+        items: impl IntoIterator<Item = (String, iced::Color)>,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a,
+    {
+        row(items
+            .into_iter()
+            .map(|(label, accent)| Self::summary_item(label, accent)))
+        .spacing(theme::spacing::LG)
+        .wrap()
+        .vertical_spacing(theme::spacing::SM)
+        .into()
+    }
+
+    pub fn toolbar<'a, Message>(
+        content: impl Into<Element<'a, Message>>,
+    ) -> iced::widget::Container<'a, Message>
+    where
+        Message: 'a,
+    {
+        container(content)
+            .width(iced::Length::Fill)
+            .style(theme::toolbar_container)
+    }
+
+    pub fn segmented_button<'a, Message>(
+        label: &'a str,
+        selected: bool,
+        message: Message,
+    ) -> iced::widget::Button<'a, Message>
+    where
+        Message: 'a + Clone,
+    {
+        button(
+            text(label)
+                .size(12)
+                .font(if selected {
+                    theme::FONT_SEMIBOLD
+                } else {
+                    theme::FONT_REGULAR
+                })
+                .align_x(iced::Alignment::Center),
+        )
+        .padding([7, 10])
+        .width(iced::Length::Fill)
+        .style(theme::segmented_button(selected))
+        .on_press(message)
+    }
+
+    pub fn segmented_group<'a, Message>(
+        content: impl Into<Element<'a, Message>>,
+    ) -> iced::widget::Container<'a, Message>
+    where
+        Message: 'a,
+    {
+        container(content)
+            .padding(3)
+            .width(iced::Length::Fill)
+            .style(|iced_theme: &iced::Theme| {
+                let semantic = theme::semantic_colors(iced_theme);
+                container::Style {
+                    background: Some(semantic.surface_muted.into()),
+                    border: Border {
+                        color: semantic.divider_light,
+                        width: 1.0,
+                        radius: theme::radius::SURFACE.into(),
+                    },
+                    ..Default::default()
+                }
+            })
     }
 
     pub fn styled_container<'a, Message>(
         content: impl Into<Element<'a, Message>>,
     ) -> iced::widget::Container<'a, Message> {
         container(content)
-            .padding(16)
+            .padding(theme::spacing::LG)
             .width(iced::Length::Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(app::colors::SURFACE.into()),
-                border: Border {
-                    color: app::colors::DIVIDER,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                text_color: None,
-                shadow: Default::default(),
-                snap: false,
-            })
+            .style(theme::surface_container)
     }
 
     pub fn checkbox_style(
         is_loading: bool,
     ) -> impl Fn(&iced::Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style
     {
-        move |_theme, status| {
+        move |iced_theme, status| {
             use iced::widget::checkbox::Style;
+            let semantic = theme::semantic_colors(iced_theme);
 
             match status {
                 iced::widget::checkbox::Status::Active { is_checked } => {
                     let (icon_color, border_color) = if is_checked {
-                        (app::colors::ON_PRIMARY, app::colors::SECONDARY)
+                        (semantic.on_primary, semantic.accent)
                     } else {
-                        (app::colors::ON_SURFACE_MUTED, app::colors::DIVIDER)
+                        (semantic.on_surface_muted, semantic.divider)
                     };
 
                     Style {
                         background: if is_checked {
-                            app::colors::SECONDARY.into()
+                            semantic.accent.into()
                         } else {
-                            app::colors::SURFACE.into()
+                            semantic.surface.into()
                         },
                         icon_color,
                         border: Border {
@@ -81,37 +369,33 @@ impl SharedUi {
                             radius: 4.0.into(),
                         },
                         text_color: if is_loading {
-                            Some(app::colors::ON_SURFACE_MUTED)
+                            Some(semantic.on_surface_muted)
                         } else {
-                            Some(app::colors::ON_SURFACE)
+                            Some(semantic.on_surface)
                         },
                     }
                 }
                 iced::widget::checkbox::Status::Hovered { is_checked } => {
                     if is_loading {
                         Style {
-                            background: app::colors::SURFACE.into(),
-                            icon_color: app::colors::ON_SURFACE_MUTED,
+                            background: semantic.surface.into(),
+                            icon_color: semantic.on_surface_muted,
                             border: Border {
-                                color: app::colors::DIVIDER,
+                                color: semantic.divider,
                                 width: 2.0,
                                 radius: 4.0.into(),
                             },
-                            text_color: Some(app::colors::ON_SURFACE_MUTED),
+                            text_color: Some(semantic.on_surface_muted),
                         }
                     } else {
                         let (icon_color, border_color, bg_color) = if is_checked {
                             (
-                                app::colors::ON_PRIMARY,
-                                app::colors::SECONDARY_HOVER,
-                                app::colors::SECONDARY_HOVER,
+                                semantic.on_primary,
+                                semantic.accent_hover,
+                                semantic.accent_hover,
                             )
                         } else {
-                            (
-                                app::colors::ON_SURFACE_MUTED,
-                                app::colors::SECONDARY,
-                                app::colors::SURFACE,
-                            )
+                            (semantic.on_surface_muted, semantic.accent, semantic.surface)
                         };
 
                         Style {
@@ -122,69 +406,170 @@ impl SharedUi {
                                 width: 2.0,
                                 radius: 4.0.into(),
                             },
-                            text_color: Some(app::colors::ON_SURFACE),
+                            text_color: Some(semantic.on_surface),
                         }
                     }
                 }
                 iced::widget::checkbox::Status::Disabled { .. } => Style {
-                    background: app::colors::SURFACE.into(),
-                    icon_color: app::colors::ON_SURFACE_MUTED,
+                    background: semantic.surface.into(),
+                    icon_color: semantic.on_surface_muted,
                     border: Border {
-                        color: app::colors::DIVIDER,
+                        color: semantic.divider,
                         width: 2.0,
                         radius: 4.0.into(),
                     },
-                    text_color: Some(app::colors::ON_SURFACE_MUTED),
+                    text_color: Some(semantic.on_surface_muted),
                 },
             }
         }
     }
 
-    pub fn radio_style(
-        _theme: &iced::Theme,
-        status: iced::widget::radio::Status,
-    ) -> iced::widget::radio::Style {
-        use iced::widget::radio::Style;
+    pub fn package_inspector<'a, Message>(
+        package: Option<PackageInspector<'a>>,
+        on_copy_name: impl FnOnce(String) -> Message,
+        on_copy_homepage: impl FnOnce(String) -> Message,
+        on_open_homepage: impl Fn(String) -> Message + Copy + 'a,
+    ) -> Element<'a, Message>
+    where
+        Message: 'a + Clone,
+    {
+        let Some(package) = package else {
+            return column![
+                text("Package details")
+                    .size(18)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+                text("No package selected")
+                    .size(13)
+                    .style(theme::text_on_surface_muted),
+            ]
+            .spacing(theme::spacing::SM)
+            .into();
+        };
 
-        match status {
-            iced::widget::radio::Status::Active { is_selected } => {
-                let (dot_color, border_color) = if is_selected {
-                    (app::colors::SECONDARY, app::colors::SECONDARY)
-                } else {
-                    (app::colors::ON_SURFACE_MUTED, app::colors::DIVIDER)
-                };
+        let mut details = column![
+            text(format!("Source · {}", package.manager.name()))
+                .size(12)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface_muted),
+            text(package.name)
+                .size(22)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
+            button(text("Copy Package Name").size(12))
+                .padding([6, 10])
+                .style(theme::secondary_button(true))
+                .on_press(on_copy_name(package.name.to_owned())),
+        ]
+        .spacing(theme::spacing::MD);
 
-                Style {
-                    background: app::colors::SURFACE.into(),
-                    dot_color,
-                    border_width: 2.0,
-                    border_color,
-                    text_color: Some(app::colors::ON_SURFACE),
-                }
-            }
-            iced::widget::radio::Status::Hovered { is_selected } => {
-                let (dot_color, border_color) = if is_selected {
-                    (app::colors::SECONDARY_HOVER, app::colors::SECONDARY_HOVER)
-                } else {
-                    (app::colors::ON_SURFACE_MUTED, app::colors::SECONDARY)
-                };
-
-                Style {
-                    background: app::colors::SURFACE.into(),
-                    dot_color,
-                    border_width: 2.0,
-                    border_color,
-                    text_color: Some(app::colors::ON_SURFACE),
-                }
-            }
+        if let Some(description) = package.description.filter(|value| !value.trim().is_empty()) {
+            details = details.push(
+                text(description)
+                    .size(13)
+                    .style(theme::text_on_surface_muted)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
         }
+
+        details = details.push(Self::divider()).push(Self::inspector_field(
+            "Version",
+            package.version,
+            true,
+        ));
+        if let Some(available) = package.available_version {
+            details = details.push(Self::inspector_field("Available", available, true));
+        }
+        if let Some(size) = package.size {
+            details = details.push(Self::inspector_field(
+                "Installed size",
+                Self::format_size(size),
+                false,
+            ));
+        }
+        if let Some(date) = package
+            .install_date
+            .filter(|value| !value.trim().is_empty())
+        {
+            details = details.push(Self::inspector_field("Installed", date, false));
+        }
+        if let Some(homepage) = package.homepage.filter(|value| !value.trim().is_empty()) {
+            details = details.push(
+                column![
+                    Self::section_title("Homepage"),
+                    button(
+                        text(homepage)
+                            .size(12)
+                            .font(theme::FONT_MONO)
+                            .style(theme::text_accent)
+                            .width(iced::Length::Fill)
+                            .wrapping(text::Wrapping::WordOrGlyph)
+                    )
+                    .padding(0)
+                    .width(iced::Length::Fill)
+                    .style(theme::link_button)
+                    .on_press(on_open_homepage(homepage.to_owned())),
+                    row![
+                        button(text("Open Homepage").size(12).font(theme::FONT_SEMIBOLD))
+                            .padding([6, 10])
+                            .style(theme::secondary_button(true))
+                            .on_press(on_open_homepage(homepage.to_owned())),
+                        button(text("Copy URL").size(12))
+                            .padding([6, 10])
+                            .style(theme::secondary_button(true))
+                            .on_press(on_copy_homepage(homepage.to_owned())),
+                    ]
+                    .spacing(theme::spacing::SM),
+                ]
+                .spacing(theme::spacing::XS),
+            );
+        }
+
+        iced::widget::scrollable(details)
+            .height(iced::Length::Fill)
+            .style(theme::scrollable_style)
+            .into()
+    }
+
+    fn divider<'a, Message>() -> iced::widget::Container<'a, Message> {
+        container("")
+            .height(iced::Length::Fixed(1.0))
+            .width(iced::Length::Fill)
+            .style(|iced_theme: &iced::Theme| container::Style {
+                background: Some(theme::semantic_colors(iced_theme).divider_light.into()),
+                ..Default::default()
+            })
+    }
+
+    fn inspector_field<'a, Message>(
+        label: &'static str,
+        value: impl Into<String>,
+        mono: bool,
+    ) -> iced::widget::Column<'a, Message> {
+        column![
+            Self::section_title(label),
+            text(value.into())
+                .size(13)
+                .font(if mono {
+                    theme::FONT_MONO
+                } else {
+                    theme::FONT_REGULAR
+                })
+                .style(theme::text_on_surface)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
+        ]
+        .spacing(theme::spacing::XS)
     }
 
     pub fn centered_message<'a, Message>(message: &'a str) -> Element<'a, Message>
     where
         Message: 'a,
     {
-        container(text(message).size(16).color(app::colors::ON_SURFACE_MUTED))
+        container(text(message).size(16).style(theme::text_on_surface_muted))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .center_x(iced::Length::Fill)
@@ -192,93 +577,87 @@ impl SharedUi {
             .into()
     }
 
-    pub fn filter_section<'a, Message>(
-        title: &'static str,
-        content: impl Into<Element<'a, Message>>,
+    pub fn error_card<'a, Message>(
+        title: impl Into<String>,
+        detail: &'a str,
+        retry: Message,
     ) -> Element<'a, Message>
     where
-        Message: 'a,
+        Message: 'a + Clone,
     {
-        column![
-            SharedUi::section_title(title),
-            SharedUi::styled_container(content)
+        let content = row![
+            container(
+                text("!")
+                    .size(14)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_primary)
+            )
+            .width(24)
+            .height(24)
+            .center_x(24)
+            .center_y(24)
+            .style(|iced_theme: &iced::Theme| container::Style {
+                background: Some(theme::semantic_colors(iced_theme).error.into()),
+                border: Border {
+                    radius: 999.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            column![
+                text(title.into())
+                    .size(14)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+                text(detail)
+                    .size(13)
+                    .style(theme::text_on_surface_muted)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            ]
+            .spacing(theme::spacing::XS)
+            .width(iced::Length::Fill),
+            button(text("Retry").size(13).font(theme::FONT_SEMIBOLD))
+                .padding([7, 12])
+                .style(theme::secondary_button(true))
+                .on_press(retry),
         ]
-        .spacing(12)
-        .into()
-    }
+        .spacing(theme::spacing::MD)
+        .align_y(iced::Alignment::Center);
 
-    pub fn section_with_note<'a, Message>(
-        title: &'static str,
-        note: Option<Element<'a, Message>>,
-        content: impl Into<Element<'a, Message>>,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        let mut section = column![Self::section_title(title)];
-        if let Some(note) = note {
-            section = section.push(note);
-        }
-
-        section
-            .push(Self::styled_container(content))
-            .spacing(12)
+        container(content)
+            .padding(theme::spacing::MD)
+            .width(iced::Length::Fill)
+            .style(|iced_theme: &iced::Theme| container::Style {
+                background: Some(theme::semantic_colors(iced_theme).error_soft.into()),
+                border: Border {
+                    radius: theme::radius::SURFACE.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
             .into()
-    }
-
-    pub fn manager_filter_section<'a, Message>(
-        title: &'static str,
-        filters_content: impl Into<Element<'a, Message>>,
-        init_errors: &ManagerErrors,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        let note = (!init_errors.is_empty()).then(|| {
-            text(format!(
-                "Initialization failed for: {}",
-                joined_manager_names(init_errors)
-            ))
-            .size(13)
-            .color(app::colors::ERROR)
-            .into()
-        });
-
-        Self::section_with_note(title, note, filters_content)
-    }
-
-    pub fn content_page_layout<'a, Message>(
-        sidebar: impl Into<Element<'a, Message>>,
-        main: impl Into<Element<'a, Message>>,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        use iced::widget::{container, row};
-
-        row![
-            container(sidebar).width(iced::Length::FillPortion(1)),
-            container(main).width(iced::Length::FillPortion(3))
-        ]
-        .spacing(24)
-        .into()
     }
 
     pub fn manager_section<'a, Message>(
         pm_type: PackageManagerType,
         subtitle: String,
+        accent: iced::Color,
         error_prefix: &'static str,
-        error: Option<&str>,
+        error: Option<&'a str>,
+        retry: impl FnOnce() -> Message,
         body: Option<Element<'a, Message>>,
     ) -> Element<'a, Message>
     where
-        Message: 'a,
+        Message: 'a + Clone,
     {
         use iced::widget::{column, row};
 
         let header = row![
-            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
-            text(subtitle).size(16).color(app::colors::ON_SURFACE_MUTED)
+            text(pm_type.name())
+                .size(15)
+                .font(theme::FONT_SEMIBOLD)
+                .color(accent),
+            text(subtitle).size(13).style(theme::text_on_surface_muted)
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
@@ -286,11 +665,11 @@ impl SharedUi {
         if let Some(error) = error {
             return column![
                 header,
-                Self::styled_container(
-                    text(format!("{}: {}", error_prefix, error))
-                        .size(14)
-                        .color(app::colors::ERROR)
-                )
+                Self::error_card(
+                    format!("{}: {}", error_prefix, pm_type.name()),
+                    error,
+                    retry()
+                ),
             ]
             .spacing(12)
             .into();
@@ -308,7 +687,7 @@ impl SharedUi {
     pub fn loading_manager_filter_view<'a, Message>(
         pm_config: &Config,
         loading_text: &'static str,
-    ) -> iced::widget::Column<'a, Message>
+    ) -> Element<'a, Message>
     where
         Message: 'a,
     {
@@ -321,7 +700,7 @@ impl SharedUi {
         let mut col_items: Vec<iced::Element<'a, Message>> = vec![
             text(loading_text)
                 .size(13)
-                .color(app::colors::ON_SURFACE_MUTED)
+                .style(theme::text_on_surface_muted)
                 .into(),
         ];
 
@@ -329,34 +708,35 @@ impl SharedUi {
             iced::widget::checkbox(false)
                 .label(pm_type.name())
                 .spacing(10)
-                .text_size(15)
-                .style(move |_theme, _status| {
+                .text_size(13)
+                .style(move |iced_theme, _status| {
                     use iced::widget::checkbox::Style;
+                    let semantic = theme::semantic_colors(iced_theme);
                     Style {
-                        background: app::colors::SURFACE.into(),
-                        icon_color: app::colors::ON_SURFACE_MUTED,
+                        background: semantic.surface.into(),
+                        icon_color: semantic.on_surface_muted,
                         border: Border {
-                            color: app::colors::DIVIDER,
+                            color: semantic.divider,
                             width: 2.0,
                             radius: 4.0.into(),
                         },
-                        text_color: Some(app::colors::ON_SURFACE_MUTED),
+                        text_color: Some(semantic.on_surface_muted),
                     }
                 })
                 .into()
         });
 
         col_items.extend(checkboxes);
-        column(col_items).spacing(8)
+        column(col_items).spacing(8).into()
     }
 
-    pub fn empty_filter_view<'a, Message>(
-        message: &'static str,
-    ) -> iced::widget::Column<'a, Message>
+    pub fn empty_filter_view<'a, Message>(message: &'static str) -> Element<'a, Message>
     where
         Message: 'a,
     {
-        column![text(message).size(14).color(app::colors::ON_SURFACE_MUTED)].spacing(8)
+        column![text(message).size(14).style(theme::text_on_surface_muted)]
+            .spacing(8)
+            .into()
     }
 
     pub fn active_manager_filter_view<'a, Message>(
@@ -365,11 +745,11 @@ impl SharedUi {
         loading_managers: &'a HashSet<PackageManagerType>,
         is_initializing: impl Fn(PackageManagerType) -> bool + Copy + 'a,
         on_toggle: impl Fn(PackageManagerType, bool) -> Message + Copy + 'a,
-    ) -> iced::widget::Column<'a, Message>
+    ) -> Element<'a, Message>
     where
         Message: 'a,
     {
-        column(entries.into_iter().map(move |(pm_type, count)| {
+        row(entries.into_iter().map(move |(pm_type, count)| {
             let is_selected = selected_managers.contains(&pm_type);
             let is_loading = loading_managers.contains(&pm_type);
             let is_initializing = is_initializing(pm_type);
@@ -385,8 +765,8 @@ impl SharedUi {
 
             let checkbox = iced::widget::checkbox(is_selected)
                 .label(label)
-                .spacing(10)
-                .text_size(15)
+                .spacing(8)
+                .text_size(13)
                 .style(SharedUi::checkbox_style(is_disabled));
 
             if is_disabled {
@@ -397,7 +777,11 @@ impl SharedUi {
                     .into()
             }
         }))
-        .spacing(12)
+        .spacing(18)
+        .width(iced::Length::Fill)
+        .wrap()
+        .vertical_spacing(10)
+        .into()
     }
 
     pub fn refresh_button_with_label<'a, Message>(
@@ -409,34 +793,9 @@ impl SharedUi {
     {
         use iced::widget::button;
 
-        button(text(label).size(14).color(iced::Color::WHITE))
-            .padding([8, 16])
-            .style(|_theme, status| {
-                use iced::widget::button::Style;
-                let base_color = app::colors::SECONDARY;
-                match status {
-                    button::Status::Hovered => Style {
-                        background: Some(iced::Background::Color(app::colors::SECONDARY_HOVER)),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                    _ => Style {
-                        background: Some(iced::Background::Color(base_color)),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                }
-            })
+        button(text(label).size(13).font(theme::FONT_SEMIBOLD))
+            .padding([8, 12])
+            .style(theme::secondary_button(true))
             .on_press(message)
             .into()
     }
@@ -449,6 +808,7 @@ impl SharedUi {
     }
 
     pub fn search_input_view<'a, Message>(
+        id: iced::widget::Id,
         label: &'static str,
         placeholder: &'static str,
         value: &str,
@@ -458,16 +818,19 @@ impl SharedUi {
         Message: 'a + Clone,
     {
         let input = text_input(placeholder, value)
+            .id(id)
             .on_input(on_input)
-            .padding(10)
-            .size(15);
+            .padding([9, 11])
+            .size(14)
+            .style(theme::text_input_style);
 
-        column![Self::section_title(label), Self::styled_container(input)]
-            .spacing(12)
+        column![Self::section_title(label), input]
+            .spacing(theme::spacing::SM)
             .into()
     }
 
     pub fn search_input_view_with_submit<'a, Message>(
+        id: iced::widget::Id,
         label: &'static str,
         placeholder: &'static str,
         value: &str,
@@ -478,13 +841,71 @@ impl SharedUi {
         Message: 'a + Clone,
     {
         let input = text_input(placeholder, value)
+            .id(id)
             .on_input(on_input)
             .on_submit(on_submit)
-            .padding(10)
-            .size(15);
+            .padding([9, 11])
+            .size(14)
+            .style(theme::text_input_style);
 
-        column![Self::section_title(label), Self::styled_container(input)]
-            .spacing(12)
+        column![Self::section_title(label), input]
+            .spacing(theme::spacing::SM)
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_http_url;
+    use updater_core::PackageManagerType;
+
+    #[test]
+    fn keyboard_package_navigation_is_bounded() {
+        let packages = vec![
+            (PackageManagerType::Dnf, "alpha".to_owned()),
+            (PackageManagerType::Flatpak, "beta".to_owned()),
+        ];
+
+        assert_eq!(
+            super::next_keyboard_package(
+                &packages,
+                None,
+                crate::shortcut::SelectionDirection::Next,
+            ),
+            Some(packages[0].clone())
+        );
+        assert_eq!(
+            super::next_keyboard_package(
+                &packages,
+                None,
+                crate::shortcut::SelectionDirection::Previous,
+            ),
+            Some(packages[1].clone())
+        );
+        assert_eq!(
+            super::next_keyboard_package(
+                &packages,
+                Some(&packages[1]),
+                crate::shortcut::SelectionDirection::Next,
+            ),
+            Some(packages[1].clone())
+        );
+        assert_eq!(
+            super::next_keyboard_package(
+                &packages,
+                Some(&packages[0]),
+                crate::shortcut::SelectionDirection::Previous,
+            ),
+            Some(packages[0].clone())
+        );
+    }
+
+    #[test]
+    fn inspector_rejects_unsafe_url_schemes() {
+        assert!(validate_http_url("https://example.com/package").is_ok());
+        assert!(validate_http_url("http://example.com/package").is_ok());
+        assert!(validate_http_url("file:///etc/passwd").is_err());
+        assert!(validate_http_url("javascript:alert(1)").is_err());
+        assert!(validate_http_url("https://user:secret@example.com/").is_err());
     }
 }

@@ -1,4 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use futures::channel::mpsc;
 use iced::Task;
@@ -6,7 +10,20 @@ use updater_core::{Config, InstallProgress, PackageManagerType};
 
 use crate::content::shared::PackageSelectionKey;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageBatchAction {
     Install,
     Remove,
@@ -14,12 +31,23 @@ pub enum PackageBatchAction {
 }
 
 impl PackageBatchAction {
-    fn log_label(self) -> &'static str {
+    pub fn completed_verb(self) -> &'static str {
+        match self {
+            Self::Install => "installed",
+            Self::Remove => "removed",
+            Self::Update => "updated",
+        }
+    }
+    pub fn label(self) -> &'static str {
         match self {
             Self::Install => "Install",
             Self::Remove => "Remove",
             Self::Update => "Update",
         }
+    }
+
+    fn log_label(self) -> &'static str {
+        self.label()
     }
 
     fn error_verb(self) -> &'static str {
@@ -78,10 +106,47 @@ pub struct BatchProgress {
     pub command_message: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationOutcome {
+    pub action: PackageBatchAction,
+    pub completed_packages: usize,
+    pub total_packages: usize,
+    pub completed_managers: usize,
+    pub total_managers: usize,
+    pub failed_manager: Option<PackageManagerType>,
+    pub error: Option<String>,
+}
+
+impl OperationOutcome {
+    pub fn is_success(&self) -> bool {
+        self.error.is_none() && self.completed_packages == self.total_packages
+    }
+
+    pub fn summary(&self) -> String {
+        if self.is_success() {
+            return format!(
+                "{} package{} {} across {} source{}",
+                self.total_packages,
+                if self.total_packages == 1 { "" } else { "s" },
+                self.action.completed_verb(),
+                self.total_managers,
+                if self.total_managers == 1 { "" } else { "s" },
+            );
+        }
+
+        format!(
+            "{} of {} packages {} before the operation stopped",
+            self.completed_packages,
+            self.total_packages,
+            self.action.completed_verb(),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 enum BatchActionEvent {
     Progress(BatchProgress),
-    Done(Result<(), String>),
+    Done(OperationOutcome),
 }
 
 pub fn collect_selected_package_groups<'a, T: 'a, I, N>(
@@ -120,21 +185,31 @@ pub fn run_grouped_package_action<Message, ProgressMessage, DoneMessage>(
     pm_config: &Config,
     action: PackageBatchAction,
     manager_groups: Vec<(PackageManagerType, Vec<String>)>,
+    cancellation: CancellationToken,
     progress_message: ProgressMessage,
     done_message: DoneMessage,
 ) -> Task<Message>
 where
     Message: Send + 'static,
     ProgressMessage: Fn(BatchProgress) -> Message + Copy + Send + 'static,
-    DoneMessage: Fn(Result<(), String>) -> Message + Copy + Send + 'static,
+    DoneMessage: Fn(OperationOutcome) -> Message + Copy + Send + 'static,
 {
     let total_packages: usize = manager_groups
         .iter()
         .map(|(_, packages)| packages.len())
         .sum();
+    let total_managers = manager_groups.len();
 
     if total_packages == 0 {
-        return Task::done(done_message(Ok(())));
+        return Task::done(done_message(OperationOutcome {
+            action,
+            completed_packages: 0,
+            total_packages: 0,
+            completed_managers: 0,
+            total_managers,
+            failed_manager: None,
+            error: None,
+        }));
     }
 
     let (sender, receiver) = mpsc::unbounded::<BatchActionEvent>();
@@ -143,13 +218,28 @@ where
 
     let runner_task = Task::future(async move {
         let mut global_offset = 0usize;
+        let mut completed_managers = 0usize;
 
         for (pm_type, package_names) in manager_groups {
+            if cancellation.is_cancelled() {
+                let _ = runner_sender.unbounded_send(BatchActionEvent::Done(OperationOutcome {
+                    action,
+                    completed_packages: global_offset,
+                    total_packages,
+                    completed_managers,
+                    total_managers,
+                    failed_manager: None,
+                    error: Some("Cancelled by user".to_owned()),
+                }));
+                return;
+            }
             let offset = global_offset;
             let progress_sender = runner_sender.clone();
+            let mut manager_completed = 0usize;
 
             let result = action
                 .run_with_progress(pm_type, &pm_config, &package_names, |progress| {
+                    manager_completed = manager_completed.max(progress.completed);
                     let _ =
                         progress_sender.unbounded_send(BatchActionEvent::Progress(BatchProgress {
                             completed: offset + progress.completed,
@@ -164,15 +254,34 @@ where
             match result {
                 Ok(()) => {
                     global_offset += package_names.len();
+                    completed_managers += 1;
                 }
                 Err(error) => {
-                    let _ = runner_sender.unbounded_send(BatchActionEvent::Done(Err(error)));
+                    let _ =
+                        runner_sender.unbounded_send(BatchActionEvent::Done(OperationOutcome {
+                            action,
+                            completed_packages: global_offset
+                                + manager_completed.min(package_names.len()),
+                            total_packages,
+                            completed_managers,
+                            total_managers,
+                            failed_manager: Some(pm_type),
+                            error: Some(error),
+                        }));
                     return;
                 }
             }
         }
 
-        let _ = runner_sender.unbounded_send(BatchActionEvent::Done(Ok(())));
+        let _ = runner_sender.unbounded_send(BatchActionEvent::Done(OperationOutcome {
+            action,
+            completed_packages: total_packages,
+            total_packages,
+            completed_managers,
+            total_managers,
+            failed_manager: None,
+            error: None,
+        }));
     })
     .discard();
 
@@ -214,5 +323,45 @@ pub fn push_command_log(
     if logs.len() > MAX_COMMAND_LOGS {
         let overflow = logs.len() - MAX_COMMAND_LOGS;
         logs.drain(0..overflow);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_outcome_has_natural_summary() {
+        let outcome = OperationOutcome {
+            action: PackageBatchAction::Update,
+            completed_packages: 12,
+            total_packages: 12,
+            completed_managers: 3,
+            total_managers: 3,
+            failed_manager: None,
+            error: None,
+        };
+
+        assert!(outcome.is_success());
+        assert_eq!(outcome.summary(), "12 packages updated across 3 sources");
+    }
+
+    #[test]
+    fn failed_outcome_reports_partial_progress() {
+        let outcome = OperationOutcome {
+            action: PackageBatchAction::Install,
+            completed_packages: 2,
+            total_packages: 5,
+            completed_managers: 1,
+            total_managers: 2,
+            failed_manager: Some(PackageManagerType::Flatpak),
+            error: Some("network error".to_owned()),
+        };
+
+        assert!(!outcome.is_success());
+        assert_eq!(
+            outcome.summary(),
+            "2 of 5 packages installed before the operation stopped"
+        );
     }
 }

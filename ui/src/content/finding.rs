@@ -2,17 +2,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use iced::{Border, Task};
+use iced::Task;
 use updater_core::{PackageInfo, PackageManagerType};
 
 use crate::{
-    app,
     content::errors::{ManagerErrors, apply_manager_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
-        BatchProgress, PackageBatchAction, collect_selected_package_groups, push_command_log,
-        run_grouped_package_action,
+        BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
+        collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
+    theme,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -21,6 +21,10 @@ pub struct Finding {
     search_query: String,
     /// Last executed query used for post-install refresh.
     last_search_query: String,
+    /// Package currently shown in the details inspector.
+    inspected_package: Option<PackageSelectionKey>,
+    /// Last inspector action error shown in UI.
+    inspector_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,10 +37,22 @@ pub enum Message {
     ExecuteSearch,
     /// Search result message.
     SearchResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
+    /// Retry search for one package manager.
+    RetrySearch(PackageManagerType),
+    /// Show a search result in the package inspector.
+    InspectPackage(PackageManagerType, String),
+    /// Copy text from the inspector.
+    CopyInspectorText(String),
+    /// Open a validated homepage URL.
+    OpenHomepage(String),
+    /// Homepage opener result.
+    HomepageOpened(Result<(), String>),
     /// Sort-option change message.
     SortOptionChanged(SortOption),
     /// Package-selection toggle message.
     TogglePackageSelection(PackageManagerType, String, bool),
+    /// Select-all visible packages toggle message.
+    ToggleSelectAll(bool),
     /// Install-selected message.
     InstallSelectedPackages,
     /// Install progress message.
@@ -53,7 +69,7 @@ pub enum Message {
         command_message: Option<String>,
     },
     /// Install result message.
-    InstallPackagesResult(Result<(), String>),
+    InstallPackagesResult(OperationOutcome),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -76,6 +92,8 @@ pub struct FindingInfo {
     pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
     /// Install command logs.
     pub install_logs: Vec<String>,
+    /// Last install error shown in UI.
+    pub last_install_error: Option<String>,
 }
 
 pub enum Action {
@@ -83,6 +101,14 @@ pub enum Action {
     None,
     /// Asynchronous task action.
     Run(iced::Task<Message>),
+    /// Cooperative package operation task.
+    CancellableRun(iced::Task<Message>, CancellationToken),
+    /// Complete a package operation and optionally reload package data.
+    PackageOperationFinished {
+        outcome: OperationOutcome,
+        reload: bool,
+        follow_up: iced::Task<Message>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -130,7 +156,7 @@ impl Finding {
             }
             Message::ExecuteSearch => {
                 let query = self.search_query.trim();
-                if query.is_empty() {
+                if query.is_empty() || info.is_installing || !info.searching_managers.is_empty() {
                     return Action::None;
                 }
 
@@ -151,7 +177,11 @@ impl Finding {
                     info.searching_managers.insert(*pm_type);
                 }
 
-                Self::execute_search_action(pm_config, &info.selected_managers, query)
+                Action::Run(Self::execute_search_task(
+                    pm_config,
+                    &info.selected_managers,
+                    query,
+                ))
             }
             Message::SearchResult(pm_type, result) => {
                 info.searching_managers.remove(&pm_type);
@@ -163,11 +193,49 @@ impl Finding {
                 );
                 Action::None
             }
+            Message::RetrySearch(pm_type) => {
+                if self.last_search_query.is_empty()
+                    || info.searching_managers.contains(&pm_type)
+                    || !info.selected_managers.contains(&pm_type)
+                {
+                    return Action::None;
+                }
+                info.search_errors.remove(&pm_type);
+                info.searching_managers.insert(pm_type);
+                Action::Run(Self::execute_search_task(
+                    pm_config,
+                    &HashSet::from([pm_type]),
+                    &self.last_search_query,
+                ))
+            }
+            Message::InspectPackage(pm_type, package_name) => {
+                self.inspected_package = Some(SharedUi::selection_key(pm_type, &package_name));
+                self.inspector_error = None;
+                Action::None
+            }
+            Message::CopyInspectorText(value) => {
+                self.inspector_error = None;
+                Action::Run(iced::clipboard::write(value))
+            }
+            Message::OpenHomepage(homepage) => {
+                self.inspector_error = None;
+                Action::Run(
+                    Task::future(crate::content::shared::open_http_url(homepage))
+                        .then(|result| Task::done(Message::HomepageOpened(result))),
+                )
+            }
+            Message::HomepageOpened(result) => {
+                self.inspector_error = result.err();
+                Action::None
+            }
             Message::SortOptionChanged(sort_option) => {
                 info.sort_by = sort_option;
                 Action::None
             }
             Message::TogglePackageSelection(pm_type, package_name, selected) => {
+                if info.is_installing {
+                    return Action::None;
+                }
                 let key = SharedUi::selection_key(pm_type, &package_name);
                 if selected {
                     info.selected_packages.insert(key);
@@ -176,11 +244,38 @@ impl Finding {
                 }
                 Action::None
             }
+            Message::ToggleSelectAll(select_all) => {
+                if info.is_installing {
+                    return Action::None;
+                }
+
+                for (pm_type, packages) in &info.search_results {
+                    if !info.selected_managers.contains(pm_type) {
+                        continue;
+                    }
+                    for package in packages
+                        .iter()
+                        .filter(|package| package.version.trim() == "Not Installed")
+                    {
+                        let key = SharedUi::selection_key(*pm_type, &package.name);
+                        if select_all {
+                            info.selected_packages.insert(key);
+                        } else {
+                            info.selected_packages.remove(&key);
+                        }
+                    }
+                }
+                Action::None
+            }
             Message::InstallSelectedPackages => {
-                if info.selected_packages.is_empty() {
+                if info.selected_packages.is_empty()
+                    || info.is_installing
+                    || !info.searching_managers.is_empty()
+                {
                     return Action::None;
                 }
                 info.is_installing = true;
+                info.last_install_error = None;
                 info.install_logs.clear();
                 let initial_manager = info
                     .selected_packages
@@ -217,62 +312,213 @@ impl Finding {
                 }
                 Action::None
             }
-            Message::InstallPackagesResult(result) => {
+            Message::InstallPackagesResult(outcome) => {
                 info.is_installing = false;
                 info.install_progress = None;
-                match result {
-                    Ok(_) => {
-                        info.selected_packages.clear();
-                        // Re-run search to refresh package status.
-                        if !self.last_search_query.is_empty() {
-                            // Mark selected managers as searching.
-                            for pm_type in info.selected_managers.iter() {
-                                info.searching_managers.insert(*pm_type);
-                            }
-                            return Self::execute_search_action(
-                                pm_config,
-                                &info.selected_managers,
-                                &self.last_search_query,
-                            );
+                if outcome.is_success() {
+                    info.selected_packages.clear();
+                    info.last_install_error = None;
+                    let follow_up = if self.last_search_query.is_empty() {
+                        Task::none()
+                    } else {
+                        for pm_type in &info.selected_managers {
+                            info.searching_managers.insert(*pm_type);
                         }
-                        Action::None
+                        Self::execute_search_task(
+                            pm_config,
+                            &info.selected_managers,
+                            &self.last_search_query,
+                        )
+                    };
+                    Action::PackageOperationFinished {
+                        outcome,
+                        reload: true,
+                        follow_up,
                     }
-                    Err(e) => {
-                        log::error!("Failed to install packages: {}", e);
-                        Action::None
+                } else {
+                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
+                    log::error!("Failed to install packages: {}", error);
+                    info.last_install_error = Some(error);
+                    Action::PackageOperationFinished {
+                        outcome,
+                        reload: false,
+                        follow_up: Task::none(),
                     }
                 }
             }
         }
     }
 
-    pub fn view<'a>(
+    pub fn has_inspector_selection(&self) -> bool {
+        self.inspected_package.is_some()
+    }
+
+    pub fn dismiss_transient(&mut self) -> bool {
+        if self.inspected_package.take().is_some() {
+            self.inspector_error = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn refresh(&self, info: &FindingInfo) -> Option<Message> {
+        (!self.last_search_query.is_empty()
+            && !info.is_installing
+            && info.searching_managers.is_empty())
+        .then_some(Message::ExecuteSearch)
+    }
+
+    pub fn primary_action(&self, info: &FindingInfo) -> Option<Message> {
+        (!info.selected_packages.is_empty()
+            && !info.is_installing
+            && info.searching_managers.is_empty())
+        .then_some(Message::InstallSelectedPackages)
+    }
+
+    pub fn can_select_packages(&self, info: &FindingInfo) -> bool {
+        !info.is_installing && !info.search_results.is_empty()
+    }
+
+    pub fn move_keyboard_selection(
         &self,
+        info: &FindingInfo,
+        direction: crate::shortcut::SelectionDirection,
+    ) -> Option<Message> {
+        let packages = self.keyboard_packages(info);
+        crate::content::shared::next_keyboard_package(
+            &packages,
+            self.inspected_package.as_ref(),
+            direction,
+        )
+        .map(|(manager, name)| Message::InspectPackage(manager, name))
+    }
+
+    pub fn toggle_keyboard_selection(&self, info: &FindingInfo) -> Option<Message> {
+        let (manager, name) = self.inspected_package.as_ref()?;
+        let package = info
+            .search_results
+            .get(manager)?
+            .iter()
+            .find(|package| package.name == *name)?;
+        if info.is_installing || package.version.trim() != "Not Installed" {
+            return None;
+        }
+        let selected = !info
+            .selected_packages
+            .contains(&SharedUi::selection_key(*manager, name));
+        Some(Message::TogglePackageSelection(
+            *manager,
+            name.clone(),
+            selected,
+        ))
+    }
+
+    fn keyboard_packages(&self, info: &FindingInfo) -> Vec<(PackageManagerType, String)> {
+        let mut managers: Vec<_> = info.selected_managers.iter().copied().collect();
+        managers.sort_by_key(|manager| manager.name());
+        managers
+            .into_iter()
+            .flat_map(|manager| {
+                let mut packages = info
+                    .search_results
+                    .get(&manager)
+                    .into_iter()
+                    .flatten()
+                    .map(|package| package.name.clone())
+                    .collect::<Vec<_>>();
+                if info.sort_by == SortOption::Name {
+                    packages.sort();
+                }
+                packages.into_iter().map(move |name| (manager, name))
+            })
+            .collect()
+    }
+
+    pub fn view<'a>(
+        &'a self,
         info: &'a FindingInfo,
         pm_config: &updater_core::Config,
+        show_inspector: bool,
+        inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{column, container, row};
+        use iced::widget::{button, column, container, row, text};
 
-        row![
-            container(
-                column![
-                    self.manager_filter_view(info, pm_config),
-                    self.sort_order_view(info),
+        let result_count: usize = info.search_results.values().map(Vec::len).sum();
+        let selected_sources = info.selected_managers.len();
+        let can_search = !self.search_query.trim().is_empty()
+            && selected_sources > 0
+            && info.searching_managers.is_empty();
+        let search_button = button(
+            text(if info.searching_managers.is_empty() {
+                "Search"
+            } else {
+                "Searching..."
+            })
+            .size(13)
+            .font(theme::FONT_SEMIBOLD)
+            .style(if can_search {
+                theme::text_on_primary
+            } else {
+                theme::text_on_surface_alt
+            }),
+        )
+        .padding([9, 16])
+        .style(theme::action_button(
+            can_search,
+            theme::colors::ACCENT,
+            theme::colors::ACCENT_HOVER,
+            theme::colors::ACCENT_ACTIVE,
+        ));
+        let search_button = if can_search {
+            search_button.on_press(Message::ExecuteSearch)
+        } else {
+            search_button
+        };
+
+        let toolbar = SharedUi::toolbar(
+            column![
+                row![
+                    container(self.search_input_view()).width(iced::Length::Fill),
+                    column![SharedUi::section_title("Actions"), search_button]
+                        .spacing(theme::spacing::SM),
                 ]
-                .spacing(24)
-            )
-            .width(iced::Length::FillPortion(1)),
-            container(
-                column![
-                    self.search_input_view(),
-                    self.batch_actions_view(info),
-                    self.search_results_view(info)
+                .spacing(theme::spacing::MD)
+                .align_y(iced::Alignment::End),
+                row![
+                    container(self.manager_filter_view(info, pm_config))
+                        .width(iced::Length::FillPortion(2)),
+                    container(self.sort_order_view(info)).width(iced::Length::FillPortion(1)),
                 ]
-                .spacing(20)
-            )
-            .width(iced::Length::FillPortion(3))
+                .spacing(theme::spacing::LG)
+                .align_y(iced::Alignment::Start),
+            ]
+            .spacing(theme::spacing::MD),
+        );
+
+        column![
+            SharedUi::page_header(
+                "Find Packages",
+                format!("{result_count} results from {selected_sources} selected sources"),
+                theme::colors::DISCOVER,
+            ),
+            SharedUi::summary_row([
+                (format!("{result_count} results"), theme::colors::DISCOVER),
+                (
+                    format!("{selected_sources} sources selected"),
+                    theme::colors::ON_SURFACE_MUTED,
+                ),
+                (
+                    format!("{} packages selected", info.selected_packages.len()),
+                    theme::colors::INSTALLED,
+                ),
+            ]),
+            toolbar,
+            self.batch_actions_view(info),
+            self.search_results_view(info, show_inspector, inspector_drawer),
         ]
-        .spacing(24)
+        .spacing(theme::spacing::LG)
+        .height(iced::Length::Fill)
         .into()
     }
 
@@ -287,33 +533,28 @@ impl Finding {
 
         let filters_content = self.active_filter_view(info, pm_config);
 
-        column![
-            SharedUi::section_title("Search Sources"),
-            SharedUi::styled_container(filters_content)
-        ]
-        .spacing(12)
-        .into()
+        column![SharedUi::section_title("Sources"), filters_content]
+            .spacing(theme::spacing::SM)
+            .into()
     }
 
     fn active_filter_view<'a>(
         &self,
         info: &'a FindingInfo,
         pm_config: &updater_core::Config,
-    ) -> iced::widget::Column<'a, Message> {
-        use iced::widget::{column, text};
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{row, text};
 
         let all_managers = SharedUi::configured_managers(pm_config);
 
         if all_managers.is_empty() {
-            return column![
-                text("No package managers detected")
-                    .size(14)
-                    .color(app::colors::ON_SURFACE_MUTED)
-            ]
-            .spacing(8);
+            return text("No package managers detected")
+                .size(13)
+                .style(theme::text_on_surface_muted)
+                .into();
         }
 
-        column(all_managers.iter().map(|pm_type| {
+        row(all_managers.iter().map(|pm_type| {
             let pm_type = *pm_type;
             let is_selected = info.selected_managers.contains(&pm_type);
             let is_searching = info.searching_managers.contains(&pm_type);
@@ -330,8 +571,8 @@ impl Finding {
 
             let checkbox = iced::widget::checkbox(is_selected)
                 .label(label)
-                .spacing(10)
-                .text_size(15)
+                .spacing(8)
+                .text_size(13)
                 .style(SharedUi::checkbox_style(is_searching));
 
             if is_searching {
@@ -342,38 +583,39 @@ impl Finding {
                     .into()
             }
         }))
-        .spacing(12)
+        .spacing(18)
+        .width(iced::Length::Fill)
+        .wrap()
+        .vertical_spacing(10)
+        .into()
     }
 
     fn sort_order_view<'a>(&self, info: &'a FindingInfo) -> iced::Element<'a, Message> {
-        use iced::widget::column;
+        use iced::widget::{column, row};
 
-        let sort_options = column(SortOption::ALL.iter().map(|option| {
+        let sort_options = row(SortOption::ALL.iter().map(|option| {
             let option = *option;
-            iced::widget::radio(
+            SharedUi::segmented_button(
                 option.name(),
-                option,
-                Some(info.sort_by),
-                Message::SortOptionChanged,
+                option == info.sort_by,
+                Message::SortOptionChanged(option),
             )
-            .size(15)
-            .spacing(10)
-            .text_size(15)
-            .style(SharedUi::radio_style)
             .into()
         }))
-        .spacing(12);
+        .spacing(2)
+        .width(iced::Length::Fill);
 
         column![
-            SharedUi::section_title("Sort By"),
-            SharedUi::styled_container(sort_options)
+            SharedUi::section_title("Sort"),
+            SharedUi::segmented_group(sort_options)
         ]
-        .spacing(12)
+        .spacing(theme::spacing::SM)
         .into()
     }
 
     fn search_input_view(&self) -> iced::Element<'static, Message> {
         SharedUi::search_input_view_with_submit(
+            crate::content::shared::search_input_id(crate::content::ActiveContentPage::Finding),
             "Search",
             "Enter package name to search...",
             &self.search_query,
@@ -382,8 +624,13 @@ impl Finding {
         )
     }
 
-    fn search_results_view<'a>(&self, info: &'a FindingInfo) -> iced::Element<'a, Message> {
-        use iced::widget::{column, scrollable};
+    fn search_results_view<'a>(
+        &'a self,
+        info: &'a FindingInfo,
+        show_inspector: bool,
+        inspector_drawer: bool,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{column, container, row, scrollable};
 
         if info.selected_managers.is_empty() {
             return SharedUi::centered_message("Please select package managers to search from");
@@ -416,10 +663,66 @@ impl Finding {
             return SharedUi::centered_message("No packages found");
         }
 
-        scrollable(column(results_sections).spacing(20))
+        let result_list = scrollable(column(results_sections).spacing(20))
             .width(iced::Length::Fill)
+            .height(iced::Length::Fill);
+        let inspected = self.inspected_package.as_ref().and_then(|(manager, name)| {
+            info.search_results
+                .get(manager)
+                .and_then(|packages| packages.iter().find(|package| package.name == *name))
+                .map(|package| crate::content::shared::PackageInspector {
+                    manager: *manager,
+                    name: &package.name,
+                    version: &package.version,
+                    available_version: None,
+                    description: package.description.as_deref(),
+                    size: package.size,
+                    install_date: package.install_date.as_deref(),
+                    homepage: package.homepage.as_deref(),
+                })
+        });
+        let mut inspector = column![SharedUi::package_inspector(
+            inspected,
+            Message::CopyInspectorText,
+            Message::CopyInspectorText,
+            Message::OpenHomepage,
+        )]
+        .height(iced::Length::Fill);
+        if let Some(error) = &self.inspector_error {
+            inspector = inspector.push(iced::widget::text(error).size(12).style(theme::text_error));
+        }
+
+        if !show_inspector {
+            return container(result_list)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .into();
+        }
+
+        let inspector = container(inspector)
+            .padding(theme::spacing::LG)
+            .width(if inspector_drawer {
+                iced::Length::Fill
+            } else {
+                iced::Length::Fixed(268.0)
+            })
             .height(iced::Length::Fill)
-            .into()
+            .style(theme::surface_container);
+        if inspector_drawer {
+            return column![container(result_list).width(iced::Length::Fill), inspector]
+                .spacing(theme::spacing::LG)
+                .into();
+        }
+
+        row![
+            container(result_list)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill),
+            inspector,
+        ]
+        .spacing(theme::spacing::LG)
+        .height(iced::Length::Fill)
+        .into()
     }
 
     fn error_section<'a>(
@@ -430,11 +733,11 @@ impl Finding {
         use iced::widget::{column, text};
 
         column![
-            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
-            SharedUi::styled_container(
-                text(format!("Search failed: {}", error))
-                    .size(14)
-                    .color(app::colors::ERROR),
+            text(pm_type.name()).size(18).color(theme::colors::DISCOVER),
+            SharedUi::error_card(
+                format!("Search failed in {}", pm_type.name()),
+                error,
+                Message::RetrySearch(pm_type),
             )
         ]
         .spacing(12)
@@ -450,10 +753,10 @@ impl Finding {
         use iced::widget::{column, row, text};
 
         let header = row![
-            text(pm_type.name()).size(18).color(app::colors::SECONDARY),
+            text(pm_type.name()).size(18).color(theme::colors::DISCOVER),
             text(format!("({} results)", packages.len()))
                 .size(16)
-                .color(app::colors::ON_SURFACE_MUTED)
+                .style(theme::text_on_surface_muted)
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
@@ -497,26 +800,13 @@ impl Finding {
         package: &'a PackageInfo,
         info: &'a FindingInfo,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{checkbox, column, container, row, text};
+        use iced::widget::{button, checkbox, row};
 
         let package_name = package.name.clone();
         let is_selected = info
             .selected_packages
             .contains(&SharedUi::selection_key(pm_type, &package.name));
         let is_not_installed = package.version.trim() == "Not Installed";
-
-        let mut name_with_desc =
-            column![text(&package.name).size(15).color(app::colors::ON_SURFACE),]
-                .spacing(4)
-                .width(iced::Length::Fill);
-
-        if let Some(description) = &package.description {
-            name_with_desc = name_with_desc.push(
-                text(description)
-                    .size(13)
-                    .color(app::colors::ON_SURFACE_MUTED),
-            );
-        };
 
         let enable_install = !info.is_installing && is_not_installed;
 
@@ -537,73 +827,40 @@ impl Finding {
 
         let version_text = package.version.trim();
 
-        let main_row = if is_not_installed {
-            // Render a dedicated badge for not-installed packages.
-            row![
-                checkbox,
-                name_with_desc,
-                container(
-                    text("Not Installed")
-                        .size(12)
-                        .color(app::colors::ON_SURFACE_MUTED)
-                )
-                .padding([4, 8])
-                .style(|_theme: &iced::Theme| {
-                    use iced::widget::container::Style;
-                    Style {
-                        background: Some(iced::Background::Color(app::colors::SURFACE_MUTED)),
-                        border: Border {
-                            color: app::colors::DIVIDER,
-                            width: 1.0,
-                            radius: 4.0.into(),
-                        },
-                        text_color: None,
-                        shadow: Default::default(),
-                        snap: Default::default(),
-                    }
-                })
-            ]
+        let is_inspected = self
+            .inspected_package
+            .as_ref()
+            .is_some_and(|(manager, name)| *manager == pm_type && name == &package.name);
+        let mut summary = row![SharedUi::package_summary(package)];
+        if is_not_installed {
+            summary = summary.push(SharedUi::muted_badge("Not Installed"));
         } else if !version_text.is_empty() && version_text != "unknown" {
-            // Render result version (not necessarily installed version).
-            row![
-                checkbox,
-                name_with_desc,
-                container(
-                    text(version_text)
-                        .size(12)
-                        .color(app::colors::ON_SURFACE_MUTED)
-                )
-                .padding([4, 8])
-                .style(|_theme: &iced::Theme| {
-                    use iced::widget::container::Style;
-                    Style {
-                        background: Some(iced::Background::Color(app::colors::SURFACE_MUTED)),
-                        border: Border {
-                            color: app::colors::DIVIDER,
-                            width: 1.0,
-                            radius: 4.0.into(),
-                        },
-                        text_color: None,
-                        shadow: Default::default(),
-                        snap: Default::default(),
-                    }
-                })
-            ]
-        } else {
-            row![checkbox, name_with_desc, text("")]
-        };
+            summary = summary.push(SharedUi::muted_badge(version_text));
+        }
+        let details = button(summary.spacing(16).align_y(iced::Alignment::Center))
+            .padding([8, 10])
+            .width(iced::Length::Fill)
+            .style(theme::list_row(is_inspected))
+            .on_press(Message::InspectPackage(pm_type, package_name));
 
-        main_row
-            .spacing(16)
+        row![checkbox, details]
+            .spacing(theme::spacing::SM)
             .align_y(iced::Alignment::Center)
-            .padding([8, 0])
             .into()
     }
 
     fn batch_actions_view<'a>(&self, info: &'a FindingInfo) -> iced::Element<'a, Message> {
-        use iced::widget::{button, row, text};
+        use iced::widget::{button, checkbox, column, row, text};
 
         let selected_count = info.selected_packages.len();
+        let selectable_count: usize = info
+            .selected_managers
+            .iter()
+            .filter_map(|manager| info.search_results.get(manager))
+            .flatten()
+            .filter(|package| package.version.trim() == "Not Installed")
+            .count();
+        let all_selected = selectable_count > 0 && selected_count == selectable_count;
         let is_enabled = selected_count > 0 && !info.is_installing;
 
         let button_text = if info.is_installing {
@@ -628,53 +885,20 @@ impl Finding {
             "Install Selected".to_string()
         };
 
-        let install_button = button(text(button_text).size(14).color(if is_enabled {
-            iced::Color::WHITE
-        } else {
-            app::colors::ON_SURFACE_MUTED
-        }))
-        .padding([8, 16])
-        .style(move |_theme, status| {
-            use iced::widget::button::Style;
-            if !is_enabled {
-                Style {
-                    background: Some(iced::Background::Color(app::colors::SURFACE_MUTED)),
-                    text_color: app::colors::ON_SURFACE_MUTED,
-                    border: Border {
-                        color: app::colors::DIVIDER,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                }
+        let install_button = button(text(button_text).size(14).font(theme::FONT_SEMIBOLD).style(
+            if is_enabled {
+                theme::text_on_primary
             } else {
-                let base_color = iced::Color::from_rgb8(13, 110, 253);
-                match status {
-                    iced::widget::button::Status::Hovered => Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb8(
-                            11, 94, 215,
-                        ))),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                    _ => Style {
-                        background: Some(iced::Background::Color(base_color)),
-                        text_color: iced::Color::WHITE,
-                        border: Border {
-                            color: iced::Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    },
-                }
-            }
-        });
+                theme::text_on_surface_muted
+            },
+        ))
+        .padding([8, 16])
+        .style(theme::action_button(
+            is_enabled,
+            theme::colors::INSTALL_ACTION,
+            theme::colors::INSTALL_ACTION_HOVER,
+            theme::colors::INSTALL_ACTION_ACTIVE,
+        ));
 
         let install_button = if is_enabled {
             install_button.on_press(Message::InstallSelectedPackages)
@@ -682,19 +906,39 @@ impl Finding {
             install_button
         };
 
-        row![install_button]
+        let select_all_checkbox = checkbox(all_selected)
+            .label("Select All")
+            .on_toggle_maybe((!info.is_installing).then_some(Message::ToggleSelectAll))
+            .size(18)
+            .spacing(8)
+            .text_size(14)
+            .style(SharedUi::checkbox_style(false));
+
+        let actions_row = row![select_all_checkbox, install_button]
             .spacing(12)
-            .align_y(iced::Alignment::Center)
+            .align_y(iced::Alignment::Center);
+
+        if let Some(error) = &info.last_install_error {
+            column![
+                actions_row,
+                text(format!("Install failed: {error}"))
+                    .size(13)
+                    .style(theme::text_error)
+            ]
+            .spacing(8)
             .into()
+        } else {
+            actions_row.into()
+        }
     }
 
     // Action creators.
 
-    fn execute_search_action(
+    fn execute_search_task(
         pm_config: &updater_core::Config,
         selected_managers: &HashSet<PackageManagerType>,
         query: &str,
-    ) -> Action {
+    ) -> Task<Message> {
         let pm_config = pm_config.clone();
         let query = query.to_string();
         let managers: Vec<_> = selected_managers.iter().copied().collect();
@@ -715,7 +959,7 @@ impl Finding {
             })
             .collect();
 
-        Action::Run(Task::batch(tasks))
+        Task::batch(tasks)
     }
 
     fn install_packages_action(pm_config: &updater_core::Config, info: &FindingInfo) -> Action {
@@ -727,10 +971,12 @@ impl Finding {
             |package| package.name.as_str(),
         );
 
-        Action::Run(run_grouped_package_action(
+        let cancellation = CancellationToken::default();
+        let task = run_grouped_package_action(
             pm_config,
             PackageBatchAction::Install,
             manager_groups,
+            cancellation.clone(),
             |BatchProgress {
                  completed,
                  total,
@@ -745,6 +991,7 @@ impl Finding {
                 command_message,
             },
             Message::InstallPackagesResult,
-        ))
+        );
+        Action::CancellableRun(task, cancellation)
     }
 }
