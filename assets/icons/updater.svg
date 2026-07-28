@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img">
+  <title>Updater app icon</title>
+  <defs>
+    <linearGradient id="background" x1="88" y1="64" x2="424" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00A7C4"/>
+      <stop offset="1" stop-color="#1769E0"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#background)"/>
+  <rect x="27" y="27" width="458" height="458" rx="101" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="6"/>
+  <path d="M180 202v-18c0-42 34-76 76-76s76 34 76 76v18" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
+  <path d="M128 202c0-16 13-29 29-29h198c16 0 29 13 29 29l21 191c2 19-13 36-32 36H139c-19 0-34-17-32-36l21-191Z" fill="#FFFFFF" fill-opacity="0.16" stroke="#FFFFFF" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M256 216v111m-47-40 47 47 47-47M191 369h130" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

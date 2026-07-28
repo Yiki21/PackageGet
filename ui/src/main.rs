@@ -23,6 +23,7 @@ fn main() -> iced::Result {
     }
 
     iced::application(app::App::new, app::App::update, app::App::view)
+        .title("Updater")
         .font(theme::GEIST_REGULAR_BYTES)
         .font(theme::GEIST_SEMIBOLD_BYTES)
         .font(theme::GEIST_MONO_REGULAR_BYTES)
@@ -33,6 +34,10 @@ fn main() -> iced::Result {
             size: iced::Size::new(1200.0, 800.0),
             min_size: Some(iced::Size::new(640.0, 520.0)),
             exit_on_close_request: false,
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "updater".to_owned(),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .run()
