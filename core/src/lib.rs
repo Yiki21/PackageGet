@@ -25,15 +25,13 @@ use crate::{
     },
 };
 
+mod builtin_managers;
 pub mod error;
-mod legacy_adapter;
 mod pm;
 mod registry;
 mod storage;
 
-pub use legacy_adapter::{
-    LegacyPackageManagerAdapter, register_builtin_managers, register_legacy_managers,
-};
+pub use builtin_managers::register_builtin_managers;
 pub use registry::{ManagerRegistry, RegistryError};
 pub use storage::{Config, PackageManagerConfig};
 

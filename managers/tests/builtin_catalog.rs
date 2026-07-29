@@ -1,0 +1,171 @@
+use std::{collections::BTreeSet, sync::Arc};
+
+use updater_manager_api::{
+    AuthorizationHint, ManagerCapability, ManagerCategory, PackageManager, Platform,
+};
+use updater_managers::builtin_managers;
+
+const EXPECTED_IDS: [&str; 11] = [
+    "builtin:apt",
+    "builtin:dnf",
+    "builtin:pacman",
+    "builtin:zypper",
+    "builtin:flatpak",
+    "builtin:homebrew",
+    "builtin:cargo",
+    "builtin:go",
+    "builtin:npm",
+    "builtin:pnpm",
+    "builtin:pipx",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthorizationClass {
+    None,
+    MayRequireElevation,
+    RequiresElevation,
+}
+
+#[test]
+fn catalog_contains_every_direct_builtin_in_stable_product_order() {
+    let managers = builtin_managers();
+    let ids = managers
+        .iter()
+        .map(|manager| manager.descriptor().id().as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, EXPECTED_IDS);
+    assert_eq!(
+        ids.iter().copied().collect::<BTreeSet<_>>().len(),
+        ids.len()
+    );
+}
+
+#[test]
+fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
+    let managers: Vec<Arc<dyn PackageManager>> = builtin_managers();
+
+    for manager in managers {
+        let descriptor = manager.descriptor();
+        assert!(descriptor.id().as_str().starts_with("builtin:"));
+        for capability in [
+            ManagerCapability::Installed,
+            ManagerCapability::Updates,
+            ManagerCapability::Search,
+            ManagerCapability::Install,
+            ManagerCapability::Update,
+            ManagerCapability::Uninstall,
+        ] {
+            assert!(
+                descriptor.capabilities().contains(capability),
+                "{} is missing {capability}",
+                descriptor.id()
+            );
+        }
+    }
+}
+
+#[test]
+fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
+    let expected = [
+        (
+            "APT",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "DNF",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "Pacman",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "Zypper",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "Flatpak",
+            ManagerCategory::Application,
+            vec![Platform::Linux],
+            AuthorizationClass::MayRequireElevation,
+        ),
+        (
+            "Homebrew",
+            ManagerCategory::Application,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::MayRequireElevation,
+        ),
+        (
+            "Cargo",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+        (
+            "Go",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+        (
+            "npm",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+        (
+            "pnpm",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+        (
+            "pipx",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+    ];
+
+    for (manager, (display_name, category, platforms, authorization)) in
+        builtin_managers().iter().zip(expected)
+    {
+        let descriptor = manager.descriptor();
+        assert_eq!(descriptor.display_name(), display_name);
+        assert_eq!(descriptor.category(), category);
+        assert_eq!(
+            descriptor.platforms().iter().copied().collect::<Vec<_>>(),
+            platforms
+        );
+        let actual_authorization = match descriptor.authorization() {
+            AuthorizationHint::None => AuthorizationClass::None,
+            AuthorizationHint::MayRequireElevation { .. } => {
+                AuthorizationClass::MayRequireElevation
+            }
+            AuthorizationHint::RequiresElevation { .. } => AuthorizationClass::RequiresElevation,
+            _ => panic!("unexpected authorization hint for {}", descriptor.id()),
+        };
+        assert_eq!(actual_authorization, authorization);
+    }
+}
+
+#[test]
+fn each_catalog_call_returns_independent_arc_instances() {
+    let first = builtin_managers();
+    let second = builtin_managers();
+
+    assert_eq!(first.len(), second.len());
+    for (left, right) in first.iter().zip(&second) {
+        assert_eq!(left.descriptor().id(), right.descriptor().id());
+        assert!(!Arc::ptr_eq(left, right));
+    }
+}

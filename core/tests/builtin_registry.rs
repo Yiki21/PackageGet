@@ -1,18 +1,13 @@
-use std::sync::Arc;
-
 use updater_core::{
     ALL_PACKAGE_MANAGERS, ManagerRegistry, PackageManagerType, RegistryError,
     register_builtin_managers,
 };
-use updater_managers::{
-    AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager, NpmManager,
-    PacmanManager, PipxManager, PnpmManager, ZypperManager,
-};
+use updater_managers::builtin_managers;
 
 #[test]
-fn mixed_builtin_registration_preserves_all_stable_ids() {
+fn direct_builtin_registration_preserves_all_stable_ids() {
     let mut registry = ManagerRegistry::new();
-    register_builtin_managers(&mut registry).expect("register mixed built-in managers");
+    register_builtin_managers(&mut registry).expect("register direct built-in managers");
 
     assert_eq!(registry.len(), ALL_PACKAGE_MANAGERS.len());
     for manager_type in ALL_PACKAGE_MANAGERS {
@@ -24,155 +19,31 @@ fn mixed_builtin_registration_preserves_all_stable_ids() {
 }
 
 #[test]
-fn mixed_registration_rejects_a_preexisting_direct_apt_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(AptManager::new()))
-        .expect("register direct APT manager");
+fn direct_registration_rejects_each_preexisting_builtin_id() {
+    for manager in builtin_managers() {
+        let id = manager.descriptor().id().clone();
+        let mut registry = ManagerRegistry::new();
+        registry
+            .register(manager)
+            .expect("register one direct built-in manager");
 
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Apt.manager_id()
-    ));
+        assert!(matches!(
+            register_builtin_managers(&mut registry),
+            Err(RegistryError::DuplicateManager { id: duplicate }) if duplicate == id
+        ));
+    }
 }
 
 #[test]
-fn mixed_registration_rejects_a_preexisting_direct_dnf_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(DnfManager::new()))
-        .expect("register direct DNF manager");
+fn direct_catalog_ids_match_the_config_v1_compatibility_set() {
+    let catalog_ids = builtin_managers()
+        .into_iter()
+        .map(|manager| manager.descriptor().id().clone())
+        .collect::<Vec<_>>();
+    let compatibility_ids = ALL_PACKAGE_MANAGERS
+        .iter()
+        .map(|manager_type| PackageManagerType::manager_id(*manager_type))
+        .collect::<Vec<_>>();
 
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Dnf.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_pacman_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(PacmanManager::new()))
-        .expect("register direct Pacman manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Pacman.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_zypper_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(ZypperManager::new()))
-        .expect("register direct Zypper manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Zypper.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_flatpak_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(FlatpakManager::new()))
-        .expect("register direct Flatpak manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Flatpak.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_homebrew_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(HomebrewManager::new()))
-        .expect("register direct Homebrew manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Homebrew.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_cargo_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(CargoManager::new()))
-        .expect("register direct Cargo manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Cargo.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_go_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(GoManager::new()))
-        .expect("register direct Go manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Go.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_npm_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(NpmManager::new()))
-        .expect("register direct npm manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Npm.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_pnpm_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(PnpmManager::new()))
-        .expect("register direct pnpm manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Pnpm.manager_id()
-    ));
-}
-
-#[test]
-fn mixed_registration_rejects_a_preexisting_direct_pipx_manager() {
-    let mut registry = ManagerRegistry::new();
-    registry
-        .register(Arc::new(PipxManager::new()))
-        .expect("register direct pipx manager");
-
-    assert!(matches!(
-        register_builtin_managers(&mut registry),
-        Err(RegistryError::DuplicateManager { id })
-            if id == PackageManagerType::Pipx.manager_id()
-    ));
+    assert_eq!(catalog_ids, compatibility_ids);
 }

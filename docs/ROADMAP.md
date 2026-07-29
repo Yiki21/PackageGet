@@ -66,8 +66,8 @@
     stop-on-first-failure、partial success 和“只在下一组之前响应协作取消”的现有语义。
 4.  在 updater_core 实现确定性 ManagerRegistry：显式注册 Arc<dyn PackageManager>、拒绝重复/非法 ID、按 descriptor 稳定排序、按 capability
     在调用前拒绝不支持的操作。
-5.  updater-managers::register_builtin_managers 负责注册内置实现，并使用 cfg(target_os) 只编译/注册适用平台的 manager；引擎不再硬编码 pkexec，提权由具体
-    manager 自己负责。
+5.  updater-managers::builtin_managers 提供对象安全的内置实现catalog，updater_core::register_builtin_managers负责注册与duplicate检查；后续使用
+    cfg(target_os)只编译/提供适用平台的manager。引擎不再硬编码pkexec，提权由具体manager自己负责。
 6.  提供 docs/manager-authoring.md 和一个独立 fake/sample manager 集成测试，演示第三方 crate 如何声明 ID、capability、实现 trait、注册并被 engine
     调用。首轮不提供 Iced 专用“插件设置页面”接口。
 
