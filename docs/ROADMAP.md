@@ -32,7 +32,7 @@
 - 为 Cargo 和 GitHub Actions 增加 Dependabot 分组更新，防止版本再次长期滞后。
 
 3.  将工具链迁移到验证过的 stable Rust：删除 .cargo/config.toml 的全局 -Zthreads 和 Linux 目标中的 -Zshare-generics；保留仅作用于 Linux GNU 目标的 clang/mold
-    设置。rust-toolchain.toml 与 CI 使用同一已验证 stable 版本，并包含 rustfmt、clippy。
+    设置。rust-toolchain.toml 与 CI 使用同一 stable channel，不写死 patch 版本；本地工具链包含 rustfmt、clippy、rust-analyzer。
 4.  单独迁移最新稳定 Iced：重点适配 ui/src/shortcut.rs 的自定义 Widget 实现、ui/src/main.rs 的 application/window API、ui/src/app.rs 的 Task/订阅 API以及
     ui/src/theme.rs 的样式 API。
 5.  新增独立质量 CI（format、check、确定性单元测试、clippy），把需要真实网络或本机包管理器的测试标为显式 integration/ignored；修复现有 RPM 命令使用目录名 ui

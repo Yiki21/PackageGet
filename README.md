@@ -39,7 +39,7 @@
 
 ## 构建依赖
 
-- Rust 工具链：项目当前使用 [`nightly`](./rust-toolchain.toml)
+- Rust 工具链：项目使用 [`stable`](./rust-toolchain.toml)，并声明 `rustfmt`、`clippy` 与 `rust-analyzer` 组件
 - `cargo`
 - `mold`（Linux 构建默认使用）
 - C/C++ 构建工具链：如 `gcc` 或 `clang`
