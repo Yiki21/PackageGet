@@ -4373,6 +4373,8 @@ dependencies = [
  "chrono",
  "directories-next",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "updater-manager-api",

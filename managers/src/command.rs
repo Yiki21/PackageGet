@@ -175,6 +175,7 @@ pub(crate) fn decode_stdout(output: Output, message: &str) -> ManagerResult<Stri
 
 pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
+    command.kill_on_drop(true);
     command.args(spec.arguments());
     command.envs(spec.environment().iter().cloned());
     if let Ok(path) = env::join_paths(manager_search_directories()) {
@@ -266,6 +267,7 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "must be root",
             "requires root",
             "not allowed for user",
+            "operation not permitted",
             "access is denied",
             "eacces",
         ],
@@ -289,6 +291,8 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "could not lock database",
             "another system helper transaction is already active",
             "transaction is already in progress",
+            "another active homebrew process",
+            "has already locked",
         ],
     ) {
         ManagerErrorKind::Busy
@@ -392,6 +396,7 @@ fn manager_search_directories() -> Vec<PathBuf> {
     for directory in [
         PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
         PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
     ] {
         push_search_directory(&mut directories, directory);
     }
@@ -482,6 +487,7 @@ mod tests {
             ("failed to download object", ManagerErrorKind::Network),
             ("pkexec: not authorized", ManagerErrorKind::Permission),
             ("not allowed for user", ManagerErrorKind::Permission),
+            ("operation not permitted", ManagerErrorKind::Permission),
             ("could not get lock", ManagerErrorKind::Busy),
             (
                 "another app is currently holding the dnf lock",
@@ -491,6 +497,10 @@ mod tests {
             ("unable to lock database", ManagerErrorKind::Busy),
             (
                 "another system helper transaction is already active",
+                ManagerErrorKind::Busy,
+            ),
+            (
+                "another active Homebrew process is already using this directory",
                 ManagerErrorKind::Busy,
             ),
             ("operation timed out", ManagerErrorKind::Timeout),
@@ -529,5 +539,17 @@ mod tests {
             spec.environment(),
             [(OsString::from("LC_ALL"), OsString::from("C"))]
         );
+    }
+
+    #[test]
+    fn manager_search_paths_include_all_homebrew_prefixes() {
+        let directories = manager_search_directories();
+        for expected in [
+            Path::new("/home/linuxbrew/.linuxbrew/bin"),
+            Path::new("/opt/homebrew/bin"),
+            Path::new("/usr/local/bin"),
+        ] {
+            assert!(directories.iter().any(|directory| directory == expected));
+        }
     }
 }
