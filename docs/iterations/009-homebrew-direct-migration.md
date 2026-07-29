@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 审计当前 Homebrew stable CLI 的 availability、installed、outdated、search、formula/cask info、refresh 与写命令，优先选择稳定 JSON 输出并固定离线 fixtures。
+- [x] 审计当前 Homebrew stable CLI 的 availability、installed、outdated、search、formula/cask info、refresh 与写命令，优先选择稳定 JSON 输出并固定离线 fixtures。
 - [ ] 直接实现 Homebrew descriptor、availability、current version、installed/count、updates、search 与统一 execute。
 - [ ] 为 formula 与 cask 建立明确的 private identity，并映射到 `PackageScope`、`PackageOrigin` 与完整 write target；同名 formula/cask 不得静默去重。
 - [ ] installed 解析保留 formula/cask 的版本、description、homepage、tap 与安装状态；失败时不得以不完整文本结果伪装成功。
@@ -63,6 +63,12 @@
 - Iteration 008 已完成 direct Flatpak、scope/ref/origin parity、宿主只读 smoke、本地完整门禁与 GitHub Actions 复验。
 - 初步代码审阅确认旧 Homebrew installed 已使用部分 JSON，但 outdated/search/current-version 仍依赖文本输出，formula/cask identity 未贯穿 read/write target。
 - 本轮先完成真实 CLI/JSON 审计，再冻结 direct contract；不会先写死 Homebrew minor 版本或未经验证的字段假设。
+- 本机 `/home/linuxbrew/.linuxbrew/bin/brew` 只读审计确认 `info --json=v2 --installed` 返回独立 `formulae`/`casks` 数组；formula 包含 `full_name`、`tap`、多条 `installed.version/time`，cask 包含 `full_token`、`tap`、`version` 与 `installed`。
+- `outdated --json=v2` 的本机命令实现为 formula/cask 统一输出 `name`、`installed_versions`、`current_version`、`pinned` 与 `pinned_version`，不再需要解析 `NAME (OLD) < NEW`/`!=` 文本。
+- 非 TTY 的无类型 `brew search QUERY` 只输出名称和空行，无法可靠判断 formula/cask；direct search 将分别执行 `brew search --formula QUERY` 与 `brew search --cask QUERY`，再分类型批量调用 `info --json=v2` 补齐 metadata。
+- direct reference 冻结为 `formula:FULL_NAME` 或 `cask:FULL_TOKEN`，`PackageScope::User` 表示当前 Homebrew prefix 的用户安装，tap 保存在 `PackageOrigin.name`；同名跨类型结果不能去重。
+- scoped write 使用 `brew install|upgrade|uninstall --formula|--cask` 和冻结的 full identity；Unknown compatibility target 保留旧的 `brew COMMAND NAME` argv。
+- read/write command-local 环境设置 `HOMEBREW_NO_AUTO_UPDATE=1` 与 `HOMEBREW_NO_ANALYTICS=1`；显式 refresh 的 `brew update` 不设置 no-auto-update，并延续 180 秒 update/90 秒 outdated timeout。
 
 ## Git 提交
 
@@ -70,7 +76,10 @@
 
 ## 验证记录
 
-本轮实施后逐项记录。
+- `brew --version`：本机 Homebrew 可用；版本仅作为本次审计证据，不写入最低版本约束。
+- `brew info --json=v2 --installed`：只读成功，76 个 formula、2 个 cask；观察到 formula 同时保留两个 installed versions。
+- `brew outdated --json=v2`：只读成功，本机当前 formula/cask outdated 数组均为空。
+- `brew search --formula ripgrep` 与 `brew search --cask ripgrep`：只读成功，确认必须分类型查询。
 
 ## 遗留项 / 下一轮
 
