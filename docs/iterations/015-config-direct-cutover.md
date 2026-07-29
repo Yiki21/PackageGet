@@ -62,17 +62,24 @@
 - `core/src/storage.rs`已切换为`managers: Vec<ManagerConfig>`，并提供可测试的path API及原子替换。
 - Settings draft/baseline、内置manager executable和Go settings已直接接入新Config；磁盘不再序列化`PackageManagerType`。
 - 初次定向验证通过：`updater_core` 53项单元测试、`updater` 19项binary单元测试全部通过；删除版本字段后将重新执行。
+- 本机`~/.config/updater/config.json`已按当前schema手工转换并通过结构校验；人工回退副本为`config.json.manual-backup-20260729`，两者权限均为`0600`。
+- 完整本地门禁已通过，等待GitHub Actions复验最终HEAD。
 
 ## Git 提交
 
 - Iteration 015初始计划检查点：`fa4db48`。
 - Config直接切换实现：`7015df6`。
+- 现行Config测试命名与Clippy清理：`51f778e`。
 
 ## 验证记录
 
 - `cargo check --workspace --all-targets --jobs 1`：删除版本字段后复验通过。
 - `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：删除版本字段后复验53 passed。
 - `cargo test -p updater --bin updater --jobs 1 -- --test-threads=1`：删除版本字段后复验19 passed。
+- `cargo fmt --all -- --check`：通过。
+- `cargo test --workspace --all-targets --jobs 1 -- --test-threads=1`：通过；宿主与网络smoke按设计保持ignored。
+- `cargo clippy --workspace --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
