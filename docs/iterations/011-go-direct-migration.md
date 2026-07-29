@@ -1,0 +1,70 @@
+# Iteration 011：Go 直接迁移与 Module/Binary Identity
+
+- 日期：2026-07-29
+- 状态：已计划
+- ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
+- 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
+
+## 本轮目标
+
+将 Go 迁移为 `updater-managers` 中第八个直接实现，明确区分 executable binary name、Go module/package install path 与 version query identity。旧实现中遍历 GOBIN、解析 `go version -m`、查询 module versions 时的逐项吞错必须收敛为稳定、typed 且可测试的契约。
+
+## 实施计划
+
+- [ ] 审计当前 stable Go 的 `go env GOBIN/GOPATH`、`go version -m`、`go list -m -versions` 与 `go install module@version` 输出和错误行为。
+- [ ] 冻结 module/package/binary identity、`PackageOrigin` reference、User scope 与 legacy Unknown compatibility grammar。
+- [ ] 直接实现 descriptor、availability、current version、installed/count、updates、exact module search 与统一 execute。
+- [ ] 使用 validated build-info parser 保留 module path、package path、binary path/version；malformed 或缺失 metadata 不静默伪造 registry package。
+- [ ] GOBIN 解析优先 manager setting，再使用 `go env GOBIN`，随后使用第一个 GOPATH/bin；空值、非 UTF-8、多 GOPATH 与 filesystem errors 返回稳定 typed result。
+- [ ] installed directory traversal 使用确定性排序、普通文件边界和有界 metadata probing；单个 binary probe失败不能被无条件吞掉。
+- [ ] updates 只查询具有可重放 module identity 的 binary，固定串行上限，明确 devel/pseudo/prerelease/replace metadata 的比较边界。
+- [ ] exact module search 使用 `go list -m -versions MODULE`，命令失败、empty/no-version 与 malformed output不伪造成通用目录搜索。
+- [ ] write 冻结 `go install MODULE@VERSION|latest` 与 command-local `GOBIN`；uninstall 只删除已验证属于 configured GOBIN 的 binary target，防止 path traversal/任意文件删除。
+- [ ] 将 core Go 收缩为 Config V1、`go_bin_dir` setting、model、progress 与 typed error wrapper，并更新 mixed registry。
+- [ ] 增加 fake Go、temporary GOBIN、build-info/versions fixtures、module/binary collision、path safety、command/env、conversion、registration 与 public contracts。
+- [ ] 执行显式 opt-in 宿主只读 smoke；不执行真实 install、update 或 binary removal。
+- [ ] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
+
+## Identity 与安全边界
+
+- `PackageInfo.name` 保留用户可识别的 binary name，module/package path 放入 typed `PackageOrigin.reference`；direct update target必须能恢复准确 module install path。
+- 同一 module 可能产生多个 binary，同名 binary 也可能来自不同 module；不得只用末段名称覆盖 identity。
+- `PackageScope::User` 表示 configured/resolved GOBIN；Unknown 只用于 Config V1/UI 的旧短名称兼容。
+- uninstall target必须先验证 binary basename、GOBIN containment、symlink/目录边界；本轮不提供任意路径删除。
+- Go exact module lookup不是 crates.io/npm 风格的目录搜索，UI 展示语义留待阶段 3/5调整。
+
+## 非目标
+
+- 本轮不迁移 npm、pnpm 或 pipx。
+- 本轮不管理 Go toolchain、`go.mod` dependency 或 workspace module updates。
+- 本轮不修改 Config V2、UI identity 或 manager settings 页面。
+- 本轮不执行真实 `go install` 或删除宿主 binary。
+- 本轮不写死 Go 或依赖 crate 的最低 minor/patch版本。
+
+## 设计约束
+
+- Go 实现位于平铺的 `managers/src/go.rs`，不新增 `crates/` 或 manager 分组目录。
+- 命令输出使用 typed line/parser structures；不以正则或字符串容错隐藏 protocol error。
+- 默认 tests 完全离线，使用 fake Go executable 与 temporary GOBIN；宿主 smoke 显式 opt-in且只读。
+- 所有 probe/update/write 串行且有固定 timeout；不持锁跨 await，不修改调用者全局环境。
+- toolchain 与 CI 跟随 stable channel；manifest 使用宽 semver line，精确依赖图由 `Cargo.lock` 固定。
+
+## 进度日志
+
+### 2026-07-29
+
+- Iteration 010 已完成 direct Cargo、source identity、typed crates.io client、宿主只读 smoke、本地完整门禁；等待 GitHub Actions 最终复验。
+- 初步代码审阅确认旧 Go 会吞掉单个 `go version -m` 与 version query failure，GOBIN directory read/entry/file-type error也被转换为空或跳过。
+- 旧 uninstall 通过短 name 拼接 GOBIN 后直接删除文件；本轮必须先冻结 typed target并验证 containment与文件边界。
+
+## Git 提交
+
+本轮实施后逐项记录。
+
+## 验证记录
+
+本轮实施后逐项记录。
+
+## 遗留项 / 下一轮
+
+本轮完成后填写。
