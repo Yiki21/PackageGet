@@ -1,7 +1,7 @@
 # Iteration 014：Direct Registry Cutover 与 Legacy Adapter 清理
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——完成direct built-in切换并清理过渡层
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -19,7 +19,7 @@
 - [x] 增加catalog完整性、稳定顺序、duplicate ID、capability与descriptor平台集合契约；外部trait-object manager测试继续通过。
 - [x] 审计并删除因adapter退出而无调用方的依赖、imports、tests与dead code，不引入新的crate分组目录。
 - [x] 更新manager authoring/ROADMAP相关文档，明确第三方manager走公共API显式注册，不再以legacy enum adapter接入。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## 边界决策
 
@@ -77,7 +77,11 @@
 - managers built-in catalog：4 passed。
 - core direct built-in registration：3 passed；core lib：44 passed。
 - focused managers/core clippy：通过，`-D warnings`下无警告。
+- workspace完整门禁通过：format、all-target check、all-target test、clippy `-D warnings`与build全部成功。
+- GitHub Actions：实现提交run `30455848535`成功；进度文档run `30455922279`成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- direct built-in catalog与core registration已成为唯一built-in bootstrap路径；registry侧legacy adapter已完全删除。
+- Config V1、`PackageManagerType`与静态manager wrapper仍是UI兼容边界，未在本轮扩大修改范围。
+- Iteration 015进入Config V2 schema、V1无损迁移、未知ManagerId保留、backup与原子写；UI identity迁移继续拆分实施。
