@@ -22,7 +22,8 @@
 - [x] 将 core Homebrew 收缩为 Config V1、model、progress 与 typed error wrapper，并更新 mixed registry。
 - [x] 增加 JSON/text fixtures、formula/cask collision、tap/origin、refresh/no-refresh、timeout、command construction、conversion、registration 与 public API contracts。
 - [x] 在可用的 Linuxbrew 宿主或容器执行显式 opt-in 只读 smoke；macOS 命令差异以 fixture/CI 可验证边界记录，不执行真实写事务。
-- [ ] 串行通过 workspace format、check、test、clippy 与 build 完整门禁，并由 GitHub Actions 复验。
+- [x] 串行通过 workspace format、check、test、clippy 与 build 完整门禁。
+- [ ] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
 
 ## 审计重点
 
@@ -99,6 +100,11 @@
 - `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：72 passed，5 ignored。
 - `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：7 passed。
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
