@@ -12,16 +12,16 @@
 ## 实施计划
 
 - [x] 审计当前 Homebrew stable CLI 的 availability、installed、outdated、search、formula/cask info、refresh 与写命令，优先选择稳定 JSON 输出并固定离线 fixtures。
-- [ ] 直接实现 Homebrew descriptor、availability、current version、installed/count、updates、search 与统一 execute。
-- [ ] 为 formula 与 cask 建立明确的 private identity，并映射到 `PackageScope`、`PackageOrigin` 与完整 write target；同名 formula/cask 不得静默去重。
-- [ ] installed 解析保留 formula/cask 的版本、description、homepage、tap 与安装状态；失败时不得以不完整文本结果伪装成功。
-- [ ] updates 保留 `refresh=false` 的 no-auto-update 语义；`refresh=true` 的 `brew update` 设有明确 timeout，并区分 timeout、network、permission 与 repository failure。
-- [ ] search 先发现候选 identity，再以有界、确定性的 metadata 查询补齐 formula/cask 类型和 installed state；命令失败不返回伪造空列表。
-- [ ] write 根据冻结的 formula/cask target 构造 install/upgrade/uninstall argv；Config V1 的 `PackageScope::Unknown` 保留旧名称命令作为受控兼容路径。
-- [ ] 保持 manager group 内写操作串行，所有 target 在执行前完成校验；progress 与错误使用 managers crate 的 bounded shared runner。
-- [ ] 将 core Homebrew 收缩为 Config V1、model、progress 与 typed error wrapper，并更新 mixed registry。
-- [ ] 增加 JSON/text fixtures、formula/cask collision、tap/origin、refresh/no-refresh、timeout、command construction、conversion、registration 与 public API contracts。
-- [ ] 在可用的 Linuxbrew 宿主或容器执行显式 opt-in 只读 smoke；macOS 命令差异以 fixture/CI 可验证边界记录，不执行真实写事务。
+- [x] 直接实现 Homebrew descriptor、availability、current version、installed/count、updates、search 与统一 execute。
+- [x] 为 formula 与 cask 建立明确的 private identity，并映射到 `PackageScope`、`PackageOrigin` 与完整 write target；同名 formula/cask 不得静默去重。
+- [x] installed 解析保留 formula/cask 的版本、description、homepage、tap 与安装状态；失败时不得以不完整文本结果伪装成功。
+- [x] updates 保留 `refresh=false` 的 no-auto-update 语义；`refresh=true` 的 `brew update` 设有明确 timeout，并区分 timeout、network、permission 与 repository failure。
+- [x] search 先发现候选 identity，再以有界、确定性的 metadata 查询补齐 formula/cask 类型和 installed state；命令失败不返回伪造空列表。
+- [x] write 根据冻结的 formula/cask target 构造 install/upgrade/uninstall argv；Config V1 的 `PackageScope::Unknown` 保留旧名称命令作为受控兼容路径。
+- [x] 保持 manager group 内写操作串行，所有 target 在执行前完成校验；progress 与错误使用 managers crate 的 bounded shared runner。
+- [x] 将 core Homebrew 收缩为 Config V1、model、progress 与 typed error wrapper，并更新 mixed registry。
+- [x] 增加 JSON/text fixtures、formula/cask collision、tap/origin、refresh/no-refresh、timeout、command construction、conversion、registration 与 public API contracts。
+- [x] 在可用的 Linuxbrew 宿主或容器执行显式 opt-in 只读 smoke；macOS 命令差异以 fixture/CI 可验证边界记录，不执行真实写事务。
 - [ ] 串行通过 workspace format、check、test、clippy 与 build 完整门禁，并由 GitHub Actions 复验。
 
 ## 审计重点
@@ -68,11 +68,21 @@
 - 非 TTY 的无类型 `brew search QUERY` 只输出名称和空行，无法可靠判断 formula/cask；direct search 将分别执行 `brew search --formula QUERY` 与 `brew search --cask QUERY`，再分类型批量调用 `info --json=v2` 补齐 metadata。
 - direct reference 冻结为 `formula:FULL_NAME` 或 `cask:FULL_TOKEN`，`PackageScope::User` 表示当前 Homebrew prefix 的用户安装，tap 保存在 `PackageOrigin.name`；同名跨类型结果不能去重。
 - scoped write 使用 `brew install|upgrade|uninstall --formula|--cask` 和冻结的 full identity；Unknown compatibility target 保留旧的 `brew COMMAND NAME` argv。
-- read/write command-local 环境设置 `HOMEBREW_NO_AUTO_UPDATE=1` 与 `HOMEBREW_NO_ANALYTICS=1`；显式 refresh 的 `brew update` 不设置 no-auto-update，并延续 180 秒 update/90 秒 outdated timeout。
+- read/write command-local 环境设置 no-auto-update、no-analytics、no-ask、no-install-cleanup 与 C locale；显式 refresh 的 `brew update` 不设置 no-auto-update，并延续 180 秒 update/90 秒 read timeout。
+- `managers/src/homebrew.rs` 已使用 typed serde structures 解析 installed/outdated/info JSON；direct installed/search/update target 统一输出短 name、User scope、tap origin 与 canonical typed reference。
+- formula 多 keg 作为一条 write identity 保留全部 display versions；legacy singular current version 优先 `linked_keg`，没有 linked keg 时使用最后一个 installed version。
+- search metadata 以 32 个候选为固定上限串行分批；formula/cask discovery、metadata 与 no-match 分支均有 public fake executable contracts。
+- shared Tokio command 增加 `kill_on_drop(true)`；fake slow child contract 验证 100ms timeout 后 PID 已终止，避免 `brew update` 超时后在后台继续运行。
+- resolver 补齐 Intel macOS `/usr/local/bin`，并保留 Linuxbrew 与 Apple Silicon `/opt/homebrew/bin` contracts。
+- scoped write 校验 User scope、typed kind、tap、短 name、canonical reference 和不支持的 version pin；Unknown target 只保留裸名称 argv，同时通过 command-local no-auto-update/no-analytics/no-ask 避免隐式 refresh 与交互阻塞。
+- core Homebrew 已删除 JSON/text parser、timeout 与命令副本，只保留 Config V1、legacy model/progress 和 typed error 转换；mixed registry 当前为六个 direct manager、五个 legacy adapter。
+- 本机 Linuxbrew opt-in smoke 已通过 availability、installed/count parity、typed current version 与 `updates(false)`；未执行 refresh、search 或任何写事务。
 
 ## Git 提交
 
-本轮实施后逐项记录。
+- `0ee3cbf docs: record Homebrew command audit`
+- `6903f89 feat: add typed Homebrew manager`
+- `bc0292e refactor: route Homebrew through direct manager`
 
 ## 验证记录
 
@@ -80,6 +90,15 @@
 - `brew info --json=v2 --installed`：只读成功，76 个 formula、2 个 cask；观察到 formula 同时保留两个 installed versions。
 - `brew outdated --json=v2`：只读成功，本机当前 formula/cask outdated 数组均为空。
 - `brew search --formula ripgrep` 与 `brew search --cask ripgrep`：只读成功，确认必须分类型查询。
+- `cargo check -p updater-managers --jobs 1`：通过。
+- `cargo test -p updater-managers --jobs 1 -- --test-threads=1`：68 passed，6 ignored。
+- `cargo test -p updater-managers --test homebrew_contract --jobs 1 -- --test-threads=1`：8 passed，1 ignored。
+- `cargo test -p updater-managers --test homebrew_contract host_homebrew_read_only_smoke --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：1 passed。
+- `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo check -p updater_core --jobs 1`：通过。
+- `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：72 passed，5 ignored。
+- `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：7 passed。
+- `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 
