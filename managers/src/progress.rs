@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::OnceLock};
+use std::{collections::VecDeque, process::ExitStatus, sync::OnceLock};
 
 use regex::Regex;
 use tokio::{
@@ -52,7 +52,21 @@ pub(crate) async fn run_command_with_progress(
     spec: &CommandSpec,
     on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
-    run_command_with_parser(spec, ProgressParser::Percent, on_progress).await
+    run_command_with_parser(
+        spec,
+        ProgressParser::Percent,
+        command_status_error,
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn run_command_with_progress_and_status(
+    spec: &CommandSpec,
+    status_error: fn(&CommandSpec, ExitStatus, &str) -> ManagerError,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(spec, ProgressParser::Percent, status_error, on_progress).await
 }
 
 pub(crate) async fn run_dnf_command_with_progress(
@@ -62,6 +76,7 @@ pub(crate) async fn run_dnf_command_with_progress(
     run_command_with_parser(
         spec,
         ProgressParser::Dnf(DnfProgressState::default()),
+        command_status_error,
         on_progress,
     )
     .await
@@ -70,6 +85,7 @@ pub(crate) async fn run_dnf_command_with_progress(
 async fn run_command_with_parser(
     spec: &CommandSpec,
     mut parser: ProgressParser,
+    status_error: fn(&CommandSpec, ExitStatus, &str) -> ManagerError,
     mut on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
     let mut child = piped_command(spec)
@@ -121,7 +137,7 @@ async fn run_command_with_parser(
         .map_err(|error| io_error("failed to wait for package manager command", error))?;
     if !status.success() {
         let tail = tail_logs.into_iter().collect::<Vec<_>>().join("\n");
-        return Err(command_status_error(spec, status, &tail));
+        return Err(status_error(spec, status, &tail));
     }
 
     on_progress(CommandProgress::new(1.0, None));

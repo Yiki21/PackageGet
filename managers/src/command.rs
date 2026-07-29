@@ -19,6 +19,7 @@ const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
 pub(crate) struct CommandSpec {
     program: PathBuf,
     args: Vec<OsString>,
+    environment: Vec<(OsString, OsString)>,
 }
 
 impl CommandSpec {
@@ -26,6 +27,7 @@ impl CommandSpec {
         Self {
             program: program.into(),
             args: Vec::new(),
+            environment: Vec::new(),
         }
     }
 
@@ -43,12 +45,21 @@ impl CommandSpec {
         self
     }
 
+    pub(crate) fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.environment.push((key.into(), value.into()));
+        self
+    }
+
     pub(crate) fn program(&self) -> &Path {
         &self.program
     }
 
     pub(crate) fn arguments(&self) -> &[OsString] {
         &self.args
+    }
+
+    pub(crate) fn environment(&self) -> &[(OsString, OsString)] {
+        &self.environment
     }
 }
 
@@ -165,6 +176,7 @@ pub(crate) fn decode_stdout(output: Output, message: &str) -> ManagerResult<Stri
 pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
     command.args(spec.arguments());
+    command.envs(spec.environment().iter().cloned());
     if let Ok(path) = env::join_paths(manager_search_directories()) {
         command.env("PATH", path);
     }
@@ -483,6 +495,18 @@ mod tests {
             ["/custom/apt", "install", "-y"]
                 .map(OsString::from)
                 .as_slice()
+        );
+    }
+
+    #[test]
+    fn command_specs_preserve_command_local_environment() {
+        let spec = CommandSpec::new("zypper")
+            .env("LC_ALL", "C")
+            .args(["--non-interactive", "list-updates"]);
+
+        assert_eq!(
+            spec.environment(),
+            [(OsString::from("LC_ALL"), OsString::from("C"))]
         );
     }
 }
