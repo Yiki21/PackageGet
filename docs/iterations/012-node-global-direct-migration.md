@@ -68,6 +68,7 @@
 - core npm/pnpm已删除legacy command、directory traversal和parser副本，只保留Config V1、自定义executable、model/progress/error转换；mixed registry目前10个direct manager，仅pipx保留legacy adapter。
 - 首次pnpm宿主smoke暴露真实global dependency path是symlink；实现已改为保留identity但不跟随计算size，普通目录仍执行canonical containment和fallible deterministic traversal，并增加离线symlink contract。
 - npm与pnpm宿主只读smoke最终均通过availability、inventory/count、outdated与search；未执行任何global write或配置修改。
+- npm/pnpm direct migration后的完整本地门禁已串行通过；format、locked workspace check、全部targets tests、workspace clippy `-D warnings`与build均无失败。
 
 ## Git 提交
 
@@ -87,6 +88,11 @@
 - `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`：56 passed。
 - `cargo test -p updater_core --test builtin_registry --locked --jobs 1 -- --test-threads=1`：11 passed。
 - `cargo clippy -p updater-managers -p updater_core --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：全部通过；默认忽略需要宿主工具、容器或live network的显式opt-in smoke。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
