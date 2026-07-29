@@ -1,54 +1,54 @@
 # updater
 
-一个基于 Rust 和 `iced` 的 Wayland 桌面 GUI 更新工具，用来统一查看、搜索、安装和更新不同包管理器中的软件包。
+A Wayland desktop GUI built with Rust and `iced` for viewing, searching, installing, and updating packages across multiple package managers.
 
-## 这个软件是干嘛的
+## Overview
 
-`updater` 的目标是把不同包管理器分散的操作统一到一个桌面界面里。
+`updater` brings package management workflows from different tools into a single desktop interface.
 
-你可以用它：
+You can use it to:
 
-- 查看当前机器里哪些包管理器可用
-- 统一查看有哪些软件包可以更新
-- 统一搜索软件包并安装
-- 查看已安装软件包并卸载
-- 在一个界面里处理系统包和开发工具包，而不是分别记 `apt`、`dnf`、`cargo`、`npm`、`flatpak` 等不同命令
+- Detect which package managers are available on the current system
+- View available package updates in one place
+- Search for and install packages across package managers
+- Browse installed packages and uninstall them
+- Manage system packages and development tools without switching between commands such as `apt`, `dnf`, `cargo`, `npm`, and `flatpak`
 
-它更适合下面这类场景：
+It is especially useful when:
 
-- 你同时使用多个包管理器，想集中管理更新
-- 你不想频繁切换不同命令行工具
-- 你希望用 GUI 做批量安装、卸载、更新操作
+- You use multiple package managers and want a central place to manage updates
+- You prefer not to switch frequently between different command-line tools
+- You want a GUI for batch installation, removal, and update operations
 
-目前支持的包管理器：
+Currently supported package managers:
 
-- 系统包：`apt`、`dnf`、`pacman`、`zypper`
-- 应用/开发工具包：`flatpak`、`homebrew`、`cargo`、`go`、`npm`、`pnpm`、`pipx`
+- System packages: `apt`, `dnf`, `pacman`, `zypper`
+- Applications and development tools: `flatpak`, `homebrew`, `cargo`, `go`, `npm`, `pnpm`, `pipx`
 
-## 功能列表
+## Features
 
-- 自动检测当前环境中可用的包管理器
-- 统一查看各包管理器的可更新包数量和详细列表
-- 批量更新选中的软件包
-- 查看已安装软件包，并支持搜索、排序和批量卸载
-- 跨包管理器搜索软件包，并支持批量安装
-- 在设置页管理已启用的包管理器
-- 为包管理器指定自定义可执行文件路径
-- 为 Go 包安装位置指定自定义二进制目录
-- 将配置保存到用户配置目录，重启后继续使用
+- Automatically detects package managers available in the current environment
+- Shows update counts and detailed package lists for each package manager
+- Updates selected packages in batches
+- Lists installed packages with search, sorting, and batch removal support
+- Searches for packages across package managers and installs them in batches
+- Manages enabled package managers from the settings page
+- Supports custom executable paths for package managers
+- Supports a custom binary installation directory for Go packages
+- Saves configuration in the user configuration directory for use across restarts
 
-## 构建依赖
+## Build requirements
 
-- Rust 工具链：项目使用 [`stable`](./rust-toolchain.toml)，并声明 `rustfmt`、`clippy` 与 `rust-analyzer` 组件
+- Rust toolchain: the project uses [`stable`](./rust-toolchain.toml) with the `rustfmt`, `clippy`, and `rust-analyzer` components
 - `cargo`
-- `mold`（Linux 构建默认使用）
-- C/C++ 构建工具链：如 `gcc` 或 `clang`
+- `mold`, which is used by default for Linux builds
+- A C/C++ build toolchain, such as `gcc` or `clang`
 - `pkg-config`
-- OpenSSL 开发库
-- 原生 Wayland 桌面会话，以及 `wayland` 和 `libxkbcommon` 开发库（当前不构建 X11 后端）
-- 如果需要对系统包执行安装、卸载、更新，还需要 `pkexec`（通常来自 `polkit`）
+- OpenSSL development libraries
+- A native Wayland desktop session, plus the `wayland` and `libxkbcommon` development libraries; the X11 backend is currently disabled
+- `pkexec`, usually provided by `polkit`, to install, remove, or update system packages
 
-常见发行版可直接安装：
+Install the required dependencies on common distributions:
 
 ```bash
 # Debian / Ubuntu
@@ -66,70 +66,70 @@ sudo dnf install -y gcc gcc-c++ mold pkgconf-pkg-config openssl-devel wayland-de
 sudo pacman -S --needed base-devel mold pkgconf openssl wayland libxkbcommon polkit
 ```
 
-## 开发运行
+## Running for development
 
-请在原生 Wayland 会话中运行：
+Run the application from a native Wayland session:
 
 ```bash
 cargo run -p updater
 ```
 
-## 安装方式
+## Installation
 
-### 方式一：下载发布包安装
+### Option 1: Install a release package
 
-如果仓库已经发布了 Release，按发行版下载 Linux `deb` 或 `rpm` 安装包。
+If the repository has published a release, download the Linux `deb` or `rpm` package for your distribution.
 
-这些产物由 GitHub Actions 自动打包生成，适合普通用户直接安装使用。
+GitHub Actions builds these packages automatically. They are intended for users who want to install and run the application directly.
 
-安装 `deb` 或 `rpm` 后，可以从桌面应用菜单中的 Updater 图标启动程序。
+After installing a `deb` or `rpm` package, launch Updater from your desktop application menu.
 
-### 方式二：从源码构建安装
+### Option 2: Build from source
 
-先准备好上面的构建依赖，然后执行：
+Install the build requirements listed above, then run:
 
 ```bash
 cargo build --release -p updater --locked
 ```
 
-构建完成后可直接运行：
+After the build completes, run the binary directly:
 
 ```bash
 ./target/release/updater
 ```
 
-如果希望安装到本地命令目录：
+To install it in your local binary directory:
 
 ```bash
 install -Dm755 target/release/updater ~/.local/bin/updater
 ```
 
-然后确保 `~/.local/bin` 在你的 `PATH` 中。
+Make sure `~/.local/bin` is included in your `PATH`.
 
-## 怎么用
+## Usage
 
-启动程序：
+Start the application with:
 
 ```bash
 updater
 ```
 
-如果你没有把它安装到 `PATH` 中，也可以直接运行：
+If it is not installed in your `PATH`, run the built binary directly:
 
 ```bash
 ./target/release/updater
 ```
 
-首次启动后，程序会自动检测当前环境中可用的包管理器。基础使用流程如下：
+On first launch, the application automatically detects package managers available in the current environment. The basic workflow is:
 
-1. 在更新页查看每个包管理器的可更新包。
-2. 勾选需要更新的软件包，执行批量更新。
-3. 在已安装页查看、搜索、排序，或批量卸载已安装软件。
-4. 在搜索页跨包管理器查找新软件并安装。
-5. 在设置页启用或禁用包管理器，并自定义可执行文件路径。
+1. Open the updates page to view available updates from each package manager.
+2. Select packages and run a batch update.
+3. Open the installed packages page to browse, search, sort, or remove packages in batches.
+4. Open the search page to find and install new packages across package managers.
+5. Open the settings page to enable or disable package managers and configure custom executable paths.
 
-补充说明：
+Additional notes:
 
-- 涉及系统包管理器的安装、卸载、更新时，程序会通过 `pkexec` 请求权限
-- 配置会保存到用户配置目录中的 `updater/config.json`
-- 如果某个包管理器没有被检测到，可以在设置页手动指定它的可执行文件路径
+- Operations that install, remove, or update system packages request elevated privileges through `pkexec`
+- Configuration is stored in `updater/config.json` under the user configuration directory
+- If a package manager is not detected, you can specify its executable path manually from the settings page
