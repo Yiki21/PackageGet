@@ -22,7 +22,7 @@ pub struct CommandProgress {
 }
 
 impl CommandProgress {
-    fn new(fraction: f32, message: Option<String>) -> Self {
+    pub(crate) fn new(fraction: f32, message: Option<String>) -> Self {
         Self {
             fraction: fraction.clamp(0.0, 1.0),
             message,
