@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 审计当前stable pipx的availability、`list --json`、environment paths、upgrade/install/uninstall参数与exit behavior；只读检查本机真实venv inventory。
+- [x] 审计当前stable pipx的availability、`list --json`、environment paths、upgrade/install/uninstall参数与exit behavior；只读检查本机真实venv inventory。
 - [ ] 冻结`builtin:pipx` descriptor、Linux/macOS平台、六项capabilities、User scope与legacy Unknown兼容边界。
 - [ ] 冻结venv name、distribution name、normalized PyPI name和`package_or_url`来源identity；同名、case、hyphen/underscore/dot不能无条件折叠。
 - [ ] 建立typed `pipx list --json` schema，缺失main package/name/version、duplicate identity与unknown shape不伪造`unknown` package。
@@ -59,14 +59,18 @@
 - 当前`pipx list --json`在缺失main package时跳过、缺失name/version时回退venv name/`unknown`；direct schema必须明确required identity，避免伪造registry package。
 - 当前write直接使用display package name，而pipx upgrade/uninstall实际target是venv name；本轮必须冻结venv与distribution双identity。
 - 本机只读初检确认pipx可用，`PIPX_HOME`与`PIPX_BIN_DIR`可解析，真实inventory包含多个venv；版本只作为审计证据，不进入最低版本约束。
+- 完成Iteration 013正式只读审计：本机`pipx list --json`顶层包含`pipx_spec_version`与`venvs`，当前7个venv；抽样venv明确提供`metadata.main_package.package`、`package_or_url`与`package_version`。
+- 确认本机`PIPX_HOME=/home/ayi/.local/share/pipx`、`PIPX_BIN_DIR=/home/ayi/.local/bin`；只记录当前pipx版本作为审计证据，不建立版本门槛。
 
 ## Git 提交
 
 - Iteration 013计划检查点：本次提交（`docs: complete npm pnpm iteration and plan pipx`）。
+- pipx只读契约审计检查点：本次提交。
 
 ## 验证记录
 
 - pipx初步只读检查：availability、environment path和`list --json`成功；未执行install、upgrade或uninstall。
+- `pipx list --json | jq ...`确认顶层、venv metadata与main package字段形状；只输出schema和计数，不修改pipx环境。
 
 ## 遗留项 / 下一轮
 
