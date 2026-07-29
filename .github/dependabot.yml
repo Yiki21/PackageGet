@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      foundation:
+        patterns:
+          - anyhow
+          - async-trait
+          - chrono
+          - env_logger
+          - futures*
+          - log
+          - regex
+          - tempfile
+          - thiserror
+      network-and-serialization:
+        patterns:
+          - reqwest
+          - serde*
+          - tokio
+          - url
+      desktop-integration:
+        patterns:
+          - directories-next
+          - iced
+          - mimalloc
+          - notify-rust
+          - rfd
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"

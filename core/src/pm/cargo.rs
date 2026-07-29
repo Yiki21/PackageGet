@@ -504,6 +504,7 @@ local-tool v1.0.0 (/home/user/local-tool):
     }
 
     #[tokio::test]
+    #[ignore = "requires crates.io network access"]
     async fn test_search_package_yazi() {
         let _ = env_logger::builder().is_test(true).try_init();
         let config = crate::Config::default();
@@ -530,6 +531,7 @@ local-tool v1.0.0 (/home/user/local-tool):
     }
 
     #[tokio::test]
+    #[ignore = "requires crates.io network access"]
     async fn test_search_package_eza() {
         let _ = env_logger::builder().is_test(true).try_init();
         let config = crate::Config::default();
@@ -558,6 +560,7 @@ local-tool v1.0.0 (/home/user/local-tool):
     }
 
     #[tokio::test]
+    #[ignore = "requires crates.io network access"]
     async fn test_search_package_returns_install_state() {
         let _ = env_logger::builder().is_test(true).try_init();
         let config = crate::Config::default();
@@ -582,6 +585,7 @@ local-tool v1.0.0 (/home/user/local-tool):
     }
 
     #[tokio::test]
+    #[ignore = "requires crates.io network access"]
     async fn test_search_empty_query() {
         let config = crate::Config::default();
         // 空查询应该返回一些结果（crates.io 会返回流行的包）
@@ -601,6 +605,7 @@ local-tool v1.0.0 (/home/user/local-tool):
     }
 
     #[tokio::test]
+    #[ignore = "requires crates.io network access"]
     async fn test_search_nonexistent_package() {
         let config = crate::Config::default();
         // 搜索一个不存在的包名

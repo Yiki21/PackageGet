@@ -363,6 +363,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires a local Flatpak installation"]
     async fn test_get_all_installed_info() {
         let config = crate::Config::default();
         match FlatpakManager::get_all_installed_info(&config).await {
@@ -381,6 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a local Flatpak installation"]
     async fn test_flatpak_list_updates() {
         let config = crate::Config::default();
         match FlatpakManager::list_updates(&config).await {
@@ -397,6 +399,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a local Flatpak installation"]
     async fn test_get_current_version() {
         let config = crate::Config::default();
 

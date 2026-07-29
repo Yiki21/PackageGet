@@ -370,6 +370,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires a local DNF installation and RPM database"]
     async fn test_dnf_list_updates() {
         let config = crate::Config::default();
         match DnfManager::list_updates_with_refresh(&config, false).await {
@@ -387,6 +388,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a local DNF installation and RPM database"]
     async fn test_dnf_get_current_version() {
         let config = crate::Config::default();
         let package_name = "bash"; // Common package

@@ -29,7 +29,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: 1.97.1
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -43,7 +43,7 @@ jobs:
         run: cargo install cargo-deb --locked --no-default-features
 
       - name: Build release binary
-        run: cargo build --release --locked -p updater
+        run: cargo build --release --locked --jobs 1 -p updater
 
       - name: Build deb package
         run: cargo deb -p updater --no-build --no-strip
@@ -86,7 +86,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: 1.97.1
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -95,10 +95,10 @@ jobs:
         run: cargo install cargo-generate-rpm --locked
 
       - name: Build release binary
-        run: cargo build --release --locked -p updater
+        run: cargo build --release --locked --jobs 1 -p updater
 
       - name: Build rpm package
-        run: cargo generate-rpm -p ui
+        run: cargo generate-rpm -p updater
 
       - name: Upload rpm artifact
         uses: actions/upload-artifact@v7

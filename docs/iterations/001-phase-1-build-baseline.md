@@ -15,8 +15,8 @@
 - [x] 将全部直接依赖集中到根 `Cargo.toml`，成员 crate 统一使用 workspace 继承。
 - [x] 删除 nightly 专用编译参数，固定到实施时确认的 stable Rust，并安装 rustfmt、clippy。
 - [x] 按基础库、网络/序列化、平台集成、Iced 的顺序升级依赖并审阅 lockfile。
-- [ ] 将依赖真实网络或本机包管理器的测试明确标记为 ignored，保持默认测试确定性。
-- [ ] 新增质量 CI 和分组 Dependabot，修正 RPM workflow 的 Cargo package 名称。
+- [x] 将依赖真实网络或本机包管理器的测试明确标记为 ignored，保持默认测试确定性。
+- [x] 新增质量 CI 和分组 Dependabot，修正 RPM workflow 的 Cargo package 名称。
 - [ ] 串行通过 format、check、test、clippy、build 五项质量门槛。
 
 ## 已确认基线
@@ -42,6 +42,10 @@
 - 完成异步/网络/序列化组更新：Tokio 1.53.1、Reqwest 0.13.4、Serde 1.0.229、serde_json 1.0.151；URL 已在当前兼容线最新版。
 - 完成平台集成组更新：Mimalloc 0.1.52；Notify、RFD、Directories 已在当前稳定兼容线最新版。
 - 确认 Iced 0.14.0 已是当前稳定版，现有 API 在 Rust 1.97.1 下无需迁移即可通过 all-targets check。
+- 将 DNF、Flatpak、Homebrew、本机环境及 crates.io 网络测试标记为显式 ignored，默认测试只运行确定性用例。
+- 新增串行质量 CI、Cargo/GitHub Actions 分组 Dependabot，并修正 RPM package selector 为 `updater`。
+- 本机首次全目标测试编译耗时较长，经确认后停止本地任务，改由 GitHub Actions 完成完整 test、clippy、build。
+- 使用 nektos/act 0.2.89 成功解析并列出 CI 与 Package workflow jobs。
 
 ## Git 提交
 
@@ -51,7 +55,8 @@
 | `d8f0444` | 集中 workspace 依赖并迁移到 stable Rust | `cargo fmt`、`cargo check` |
 | `1285137` | 采用宽松 semver 声明并更新基础依赖组 | `cargo check` |
 | `4014565` | 更新异步、网络与序列化依赖组 | `cargo check` |
-| 待提交 | 更新并审阅平台集成依赖组 | `cargo check`、`cargo tree` |
+| `8e215cd` | 更新并审阅平台集成依赖组 | `cargo check`、`cargo tree` |
+| 待提交 | 新增确定性 CI、Dependabot 与打包修复 | YAML、`cargo fmt`、`cargo check`、`act --list` |
 
 ## 验证记录
 
@@ -60,6 +65,9 @@
 - 基础依赖组更新后再次执行 workspace all-targets check：通过。
 - 异步/网络/序列化依赖组更新后再次执行 workspace all-targets check：通过。
 - 平台集成依赖组更新后再次执行 workspace all-targets check：通过；直接依赖树已审阅。
+- 三个 GitHub 配置文件均通过本地 YAML 解析。
+- `act --list` 成功发现 CI quality、DEB、RPM、release jobs。
+- 完整 test、clippy、build：等待 GitHub Actions 结果。
 
 ## 遗留项 / 下一轮
 

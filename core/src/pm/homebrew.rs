@@ -345,6 +345,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires a local Homebrew installation"]
     async fn test_homebrew_list_updates() {
         let config = crate::Config::default();
         match HomebrewManager::list_updates(&config).await {
@@ -361,6 +362,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a local Homebrew installation"]
     async fn test_get_current_version() {
         let config = crate::Config::default();
         match HomebrewManager::get_current_version(&config, "git").await {
