@@ -17,8 +17,8 @@
 - [x] 增加 Zypper 专属退出码映射：permission、busy、reboot required、search no-match、cancelled、network/incomplete result 与其他事务失败。
 - [x] 将 core 的旧 Zypper 入口收缩为 Config V1、model、progress 与 typed error compatibility wrapper。
 - [x] 更新 mixed built-in registry：四个 system manager 使用直接实现，其余 7 个 manager 继续使用 legacy adapter。
-- [ ] 增加离线 RPM/table fixtures、command construction、exit-code、conversion、registration 与 public API contract tests。
-- [ ] 在 openSUSE Tumbleweed 容器中执行 direct API 的无网络、只读 availability/installed/count/current-version smoke。
+- [x] 增加离线 RPM/table fixtures、command construction、exit-code、conversion、registration 与 public API contract tests。
+- [x] 在 openSUSE Tumbleweed 容器中执行 direct API 的无网络、只读 availability/installed/count/current-version smoke。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 现有命令契约
@@ -71,6 +71,8 @@
 - search 仅将退出码 104 解释为无匹配；106 等失败即使带有 partial stdout 也不会被解析成成功结果。
 - `core/src/pm/zypper.rs` 已删除旧 command construction、RPM/table parser 与执行副本，只保留 Config V1、model、progress 和 typed error 转换。
 - mixed built-in registry 现在直接注册 APT、DNF、Pacman、Zypper；其余 7 个 manager 继续使用 legacy adapter，并增加 direct Zypper duplicate contract。
+- public API fake executable contracts 已实际验证 `LC_ALL=C` 子进程环境、reordered table、duplicate first-wins、104 search no-match、106 partial-result rejection，以及完整 status/fallback error matrix。
+- Podman `registry.opensuse.org/opensuse/tumbleweed:latest`（digest `sha256:cb29ab2b3c1a47859ac491f105319ed03b6334121ef815c1bab3de0825178f11`）在 rootfs/workspace 只读且 `--network none` 下通过 direct API smoke。
 
 ## Git 提交
 
@@ -78,6 +80,7 @@
 | --- | --- | --- |
 | `a48fb14` | 实现 direct Zypper、command-local locale 与专属退出码 | managers 41 项通过、3 项 ignored；check/clippy 通过 |
 | `80d20f0` | 将 legacy Zypper 路由到 direct manager 并更新 mixed registry | core 74 项通过、11 项 ignored；check/clippy 通过 |
+| `f234fe7` | 增加 direct Zypper public contracts 与 Tumbleweed smoke | 7 个默认 contract tests；Podman smoke 1 项 |
 
 ## 验证记录
 
@@ -87,6 +90,8 @@
 - `cargo check -p updater_core --jobs 1` 通过。
 - `cargo test -p updater_core --jobs 1 -- --test-threads=1`：74 项通过，11 项环境或网络测试保持 ignored。
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
+- `cargo test -p updater-managers --test zypper_contract --jobs 1 -- --test-threads=1`：7 项通过，1 项容器 smoke 保持 ignored。
+- Podman Tumbleweed 显式运行 `tumbleweed_container_zypper_read_only_smoke`：1 项通过；容器无网络且没有执行 refresh、search、updates 或写事务。
 
 ## 遗留项 / 下一轮
 
