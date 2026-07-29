@@ -1,7 +1,7 @@
 # Iteration 015：Config 直接切换
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 3——配置、identity与manager设置迁移
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -23,7 +23,7 @@
 - [x] 将Settings和direct wrapper直接改用`ManagerConfig`，不提供旧Config兼容查询或投影层；本轮不迁移页面selection key。
 - [x] 增加round-trip、unknown manager、Go settings、duplicate、missing/unknown field、malformed和atomic replacement contracts。
 - [x] 更新manager authoring与配置文档，说明settings ownership、未知manager保留和schema失败策略。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Schema决策
 
@@ -63,13 +63,15 @@
 - Settings draft/baseline、内置manager executable和Go settings已直接接入新Config；磁盘不再序列化`PackageManagerType`。
 - 初次定向验证通过：`updater_core` 53项单元测试、`updater` 19项binary单元测试全部通过；删除版本字段后将重新执行。
 - 本机`~/.config/updater/config.json`已按当前schema手工转换并通过结构校验；人工回退副本为`config.json.manual-backup-20260729`，两者权限均为`0600`。
-- 完整本地门禁已通过，等待GitHub Actions复验最终HEAD。
+- 完整本地门禁已通过。
+- GitHub Actions run `30459148407`已在提交`7d522a6`上通过全部CI门禁。
 
 ## Git 提交
 
 - Iteration 015初始计划检查点：`eacc84c`。
 - Config直接切换实现：`e3888e4`。
 - 现行Config测试命名与Clippy清理：`62be3e8`。
+- 首次完整推送检查点：`7d522a6`。
 
 ## 验证记录
 
@@ -80,7 +82,10 @@
 - `cargo test --workspace --all-targets --jobs 1 -- --test-threads=1`：通过；宿主与网络smoke按设计保持ignored。
 - `cargo clippy --workspace --all-targets --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --jobs 1`：通过。
+- GitHub Actions `30459148407`（format、check、test、clippy、build）：通过。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮将Finding、Updates、Installed与Settings的页面state/selection key从`PackageManagerType`迁为`ManagerId`。
+- manager名称、说明、category、platform与capability改由registry/catalog descriptor解析，并移除硬编码fallback display manager。
+- 缺失第三方manager的完整Settings状态与Config load恢复界面继续按ROADMAP阶段3拆分实施。
