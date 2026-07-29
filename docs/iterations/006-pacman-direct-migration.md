@@ -1,7 +1,7 @@
 # Iteration 006：Pacman 直接迁移与 Arch Transaction Parity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -19,7 +19,7 @@
 - [x] 更新 mixed built-in 注册：APT、DNF、Pacman 使用直接实现，其余 8 个 manager 继续使用 legacy adapter。
 - [x] 增加纯离线 installed/update/search fixture、command construction、conversion 与 registration contract tests。
 - [x] 宿主机验证结构化 availability，并在 Arch Linux 容器内执行 direct manager 的只读 availability/installed/count smoke test。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
 
@@ -66,6 +66,7 @@
 | `65e8fc8` | 将 legacy Pacman 路由到直接实现并更新 mixed registry | `cargo test -p updater_core --jobs 1 -- --test-threads=1`；`cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` |
 | `746d111` | 增加 direct Pacman integration contracts 与环境 smoke | 4 个默认 contract tests；宿主 availability 1 项；Arch Docker smoke 1 项 |
 | `c42d391` | 修复 availability version、cancel/lock error parity，并增加 public API fixtures | managers 34 项通过；core 71 项通过；Arch Docker smoke 1 项 |
+| `48bb9e4` | 记录 Iteration 006 完整本地门禁 | workspace 128 项通过；完整 format/check/test/clippy/build |
 
 ## 验证记录
 
@@ -85,7 +86,10 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：128 项通过，14 项环境或网络测试保持 ignored。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings` 通过。
 - `cargo build --workspace --locked --jobs 1` 通过。
+- GitHub Actions CI run `30433800326` 通过，耗时 3 分 13 秒；format、check、deterministic tests、clippy 与 build 全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮进入 [Iteration 007：Zypper 直接迁移与 Exit-Code/Locale Parity](007-zypper-direct-migration.md)。
+- 并行审计确认 Zypper 的主要迁移风险是 locale-sensitive 表格与专属退出码；本轮不顺带切换 XML 协议。
+- Flatpak 审计确认 user/system scope、完整 ref 与 remote identity 是直接迁移前提，不能按单一 application ID 简单照搬；安排为 Iteration 008 独立处理。
