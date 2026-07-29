@@ -229,7 +229,7 @@ async fn search_uses_structured_query_encoding_and_typed_schema() {
         .expect("Cargo search");
     assert_eq!(packages.len(), 1);
     assert_eq!(packages[0].name, "cargo-edit");
-    assert_eq!(packages[0].version, "0.13.7");
+    assert_eq!(packages[0].version, "Not Installed");
     assert_eq!(
         packages[0].homepage.as_deref(),
         Some("https://example.test/edit")
@@ -282,6 +282,24 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
         .expect_err("surface invalid registry schema");
     assert_eq!(schema.kind(), ManagerErrorKind::Protocol);
     schema_task.await.expect("schema request task");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn installed_size_uses_the_configured_install_root() {
+    let manager = CargoManager::new();
+    let (_directory, executable) = inventory_cargo();
+    let install_root = tempdir().expect("create Cargo install root");
+    let bin_dir = install_root.path().join("bin");
+    fs::create_dir(&bin_dir).expect("create Cargo bin directory");
+    fs::write(bin_dir.join("rg"), b"twelve bytes").expect("write installed binary");
+    let mut config =
+        ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    config.settings = serde_json::json!({ "install_root": install_root.path() });
+
+    let packages = manager.installed(&config).await.expect("Cargo inventory");
+    assert_eq!(packages[0].name, "ripgrep");
+    assert_eq!(packages[0].size, Some(12));
 }
 
 #[cfg(unix)]
@@ -382,4 +400,22 @@ async fn empty_execution_emits_stable_boundaries() {
             }
         ]
     );
+}
+
+#[tokio::test]
+#[ignore = "machine-specific host availability and installed inventory smoke test"]
+async fn host_cargo_read_only_smoke() -> Result<(), updater_manager_api::ManagerError> {
+    let manager = CargoManager::new();
+    let config = ManagerConfig::new(manager.descriptor().id().clone());
+    assert!(manager.availability(&config).await?.is_available());
+
+    let installed = manager.installed(&config).await?;
+    assert_eq!(manager.count_installed(&config).await?, installed.len());
+    if let Some(package) = installed.first() {
+        assert_eq!(
+            manager.current_version(&config, &package.name).await?,
+            package.version
+        );
+    }
+    Ok(())
 }

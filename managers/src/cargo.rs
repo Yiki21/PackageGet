@@ -1,4 +1,10 @@
-use std::{collections::HashSet, env, path::Path, process::Output, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    path::Path,
+    process::Output,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode, Url};
@@ -22,6 +28,7 @@ const CARGO_ID: &str = "builtin:cargo";
 const CARGO_COMMAND: &str = "cargo";
 const CRATES_IO_API: &str = "https://crates.io/api/v1/";
 const CRATES_IO_INDEX: &str = "https://github.com/rust-lang/crates.io-index";
+const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -229,12 +236,11 @@ impl PackageManager for CargoManager {
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {
-        Ok(self
-            .installed_packages(config)
+        self.installed_packages(config)
             .await?
             .into_iter()
             .map(|package| package.info(self.descriptor.id(), config))
-            .collect())
+            .collect()
     }
 
     async fn count_installed(&self, config: &ManagerConfig) -> ManagerResult<usize> {
@@ -273,11 +279,21 @@ impl PackageManager for CargoManager {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
+        let installed = self
+            .installed_packages(config)
+            .await?
+            .into_iter()
+            .filter(|package| package.source == CargoSource::CratesIo)
+            .map(|package| (package.name, package.version))
+            .collect::<HashMap<_, _>>();
         let response = self.registry_client(config).await?.search(query).await?;
         response
             .crates
             .into_iter()
-            .map(|metadata| metadata.info(self.descriptor.id()))
+            .map(|metadata| {
+                let installed_version = installed.get(&metadata.name).map(String::as_str);
+                metadata.info(self.descriptor.id(), installed_version)
+            })
             .collect()
     }
 
@@ -429,12 +445,12 @@ impl InstalledCargoPackage {
         target
     }
 
-    fn info(self, manager_id: &ManagerId, config: &ManagerConfig) -> PackageInfo {
+    fn info(self, manager_id: &ManagerId, config: &ManagerConfig) -> ManagerResult<PackageInfo> {
         let mut info = PackageInfo::new(manager_id.clone(), &self.name, self.version);
         info.scope = PackageScope::User;
         info.origin = Some(self.source.origin(&self.name));
-        info.size = installed_binary_size(config, &self.binaries);
-        info
+        info.size = installed_binary_size(config, &self.binaries)?;
+        Ok(info)
     }
 }
 
@@ -682,10 +698,18 @@ impl CrateMetadata {
             })
     }
 
-    fn info(self, manager_id: &ManagerId) -> ManagerResult<PackageInfo> {
+    fn info(
+        self,
+        manager_id: &ManagerId,
+        installed_version: Option<&str>,
+    ) -> ManagerResult<PackageInfo> {
         let metadata = self.validated()?;
-        let available_version = metadata.available_version()?.to_owned();
-        let mut info = PackageInfo::new(manager_id.clone(), &metadata.name, available_version);
+        metadata.available_version()?;
+        let mut info = PackageInfo::new(
+            manager_id.clone(),
+            &metadata.name,
+            installed_version.unwrap_or(NOT_INSTALLED_VERSION),
+        );
         info.description = metadata.description;
         info.homepage = metadata.homepage.or(metadata.repository);
         info.scope = PackageScope::User;
@@ -770,14 +794,27 @@ fn install_command(
     Ok(command.arg(&target.name))
 }
 
-fn installed_binary_size(config: &ManagerConfig, binaries: &[String]) -> Option<u64> {
-    let settings = serde_json::from_value::<CargoSettings>(config.settings.clone()).ok()?;
-    let bin_dir = env::var_os("CARGO_INSTALL_ROOT")
+fn installed_binary_size(
+    config: &ManagerConfig,
+    binaries: &[String],
+) -> ManagerResult<Option<u64>> {
+    let settings =
+        serde_json::from_value::<CargoSettings>(config.settings.clone()).map_err(|error| {
+            ManagerError::new(
+                ManagerErrorKind::Protocol,
+                "cargo manager settings are invalid",
+            )
+            .with_detail(error.to_string())
+        })?;
+    let root = env::var_os("CARGO_INSTALL_ROOT")
         .map(std::path::PathBuf::from)
         .or(settings.install_root)
         .or_else(|| env::var_os("CARGO_HOME").map(std::path::PathBuf::from))
-        .or_else(|| directories_next::UserDirs::new().map(|dirs| dirs.home_dir().join(".cargo")))?
-        .join("bin");
+        .or_else(|| directories_next::UserDirs::new().map(|dirs| dirs.home_dir().join(".cargo")));
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    let bin_dir = root.join("bin");
     let total = binaries
         .iter()
         .filter_map(|binary| {
@@ -788,7 +825,7 @@ fn installed_binary_size(config: &ManagerConfig, binaries: &[String]) -> Option<
                 .map(|metadata| metadata.len())
         })
         .sum::<u64>();
-    (total > 0).then_some(total)
+    Ok((total > 0).then_some(total))
 }
 
 fn validate_package_name(name: &str) -> ManagerResult<()> {
