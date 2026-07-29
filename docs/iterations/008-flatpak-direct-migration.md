@@ -11,29 +11,30 @@
 
 ## 实施计划
 
-- [ ] 直接实现 Flatpak descriptor、availability、current version、installed/count、updates、search 与统一 execute。
-- [ ] installed 使用 machine-readable columns 同时读取 user/system scope、完整 ref 与 origin，并保留同 ID 多 installation/branch 实例。
-- [ ] 删除不可用的 `flatpak info --show-version/--show-branch` 路径，current version 改为从完整 installed listing 精确匹配。
-- [ ] 分别查询 system/user app updates；`refresh=false` 使用 `--cached`，并按 `(scope, normalized ref)` 匹配 installed state。
-- [ ] 分别查询 system/user search catalog，将 remote 写入 `PackageOrigin`，确保 install target 能无交互选择 remote/ref。
-- [ ] write 根据 target scope/ref/origin 构造 `--system|--user --noninteractive` 命令，不使用 `pkexec`；Project scope 明确返回 Unsupported。
-- [ ] 为 legacy `PackageScope::Unknown` 保留旧命令默认行为并加测试，作为 Config V1/UI 迁移完成前的受控兼容路径。
-- [ ] 扩展 Flatpak busy/network/permission/cancelled typed error classifier，不吞掉 repository 或 system-helper failure。
-- [ ] 将 core Flatpak 收缩为 Config V1、model、progress 与 error wrapper，并更新 mixed registry。
-- [ ] 增加 scope/ref/origin、NBSP size、new-build update、命令构造、conversion、registration 与 public API contracts。
-- [ ] 在当前宿主机执行 opt-in 只读 smoke，验证 user/system installed、count 与 cached app updates；search 保持单独 opt-in。
+- [x] 直接实现 Flatpak descriptor、availability、current version、installed/count、updates、search 与统一 execute。
+- [x] installed 使用 machine-readable columns 同时读取 user/system scope、完整 ref 与 origin，并保留同 ID 多 installation/branch 实例。
+- [x] 删除不可用的 `flatpak info --show-version/--show-branch` 路径，current version 改为从完整 installed listing 精确匹配。
+- [x] 分别查询 system/user app updates；`refresh=false` 使用 `--cached`，并按 `(scope, normalized ref)` 匹配 installed state。
+- [x] 分别查询 system/user search catalog，将 remote 写入 `PackageOrigin`，确保 install target 能无交互选择 remote/ref。
+- [x] write 根据 target scope/ref/origin 构造 `--system|--user --noninteractive` 命令，不使用 `pkexec`；Project scope 明确返回 Unsupported。
+- [x] 为 legacy `PackageScope::Unknown` 保留旧命令默认行为并加测试，作为 Config V1/UI 迁移完成前的受控兼容路径。
+- [x] 扩展 Flatpak busy/network/permission/cancelled typed error classifier，不吞掉 repository 或 system-helper failure。
+- [x] 将 core Flatpak 收缩为 Config V1、model、progress 与 error wrapper，并更新 mixed registry。
+- [x] 增加 scope/ref/origin、NBSP size、new-build update、命令构造、conversion、registration 与 public API contracts。
+- [x] 在当前宿主机执行 opt-in 只读 smoke，验证 user/system installed、count 与 cached app updates；search 保持单独 opt-in。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 目标命令契约
 
 - availability：`flatpak --version`。
-- installed：`flatpak list --app --columns=application,name,version,branch,size,origin,installation,ref`。
+- installed：`flatpak list --app --columns=application:f,name:f,version:f,branch:f,size,origin:f,installation:f,ref:f`。
 - updates 分别执行：
-  - `flatpak remote-ls --system --updates --app [--cached] --columns=application,ref,branch,version,commit,origin`
-  - `flatpak remote-ls --user --updates --app [--cached] --columns=application,ref,branch,version,commit,origin`
+  - `flatpak remote-ls --system --updates --app [--cached] --columns=application:f,ref:f,branch:f,version:f,commit:f,origin:f`
+  - `flatpak remote-ls --user --updates --app [--cached] --columns=application:f,ref:f,branch:f,version:f,commit:f,origin:f`
 - search 分别执行：
-  - `flatpak search --system --columns=application,name,description,version,branch,remotes QUERY`
-  - `flatpak search --user --columns=application,name,description,version,branch,remotes QUERY`
+  - `flatpak --default-arch`
+  - `flatpak search --system --columns=application:f,name:f,description:f,version:f,branch:f,remotes:f QUERY`
+  - `flatpak search --user --columns=application:f,name:f,description:f,version:f,branch:f,remotes:f QUERY`
 - write：
   - install：`flatpak install --system|--user -y --noninteractive REMOTE REF`
   - update：`flatpak update --system|--user -y --noninteractive REF`
@@ -71,14 +72,28 @@
 - Flatpak 只读审计确认旧 `info --show-version/--show-branch` 在当前 Flatpak 1.18.0 不可用，旧 updates 也会漏掉 user installation 并可能混入 runtime。
 - 当前宿主机 `/usr/bin/flatpak` 为 1.18.0，同时存在 system 与 user app installations，可用于本轮高价值只读 smoke。
 - 确定 scope/ref/origin 是本轮核心验收，不能只把旧 application-ID parser 搬到 managers crate。
+- 实测确认 `list` 的 ref 是三段 `ID/ARCH/BRANCH`，`remote-ls` 的 ref 是四段 `app/ID/ARCH/BRANCH`；direct 实现统一存储并输出四段 canonical app ref，同时拒绝 runtime、段数错误和 application/ref 不一致。
+- search 无 arch/ref columns，因此通过同一 executable 执行 `flatpak --default-arch` 后构造完整 ref；逗号分隔的 remotes 拆成独立 scope/ref/remote target。
+- direct public contracts 已覆盖同 ID 的 system/user 实例、decimal/binary/NBSP size、cached updates、same-version new build、search 多 remote、scoped/legacy write argv、配置/target mismatch 与空执行边界。
+- core Flatpak 已收缩为 Config V1、旧 model、progress 与 typed error wrapper；mixed registry 当前包含五个 direct manager 和六个 legacy adapter。
+- opt-in 宿主只读 smoke 通过：availability、system/user installed、count 和 cached system/user app updates 均符合 direct contract。
 
 ## Git 提交
 
-本轮实施后逐项记录。
+- `2d5f0fc feat: add scoped Flatpak manager`
+- `a9055c2 refactor: route Flatpak through direct manager`
 
 ## 验证记录
 
-本轮实施后逐项记录。
+- `cargo check -p updater-managers --jobs 1`：通过。
+- `cargo test -p updater-managers --lib --jobs 1 -- --test-threads=1`：34 passed。
+- `cargo test -p updater-managers --test flatpak_contract --jobs 1 -- --test-threads=1`：6 passed，1 ignored。
+- `cargo test -p updater-managers --test flatpak_contract host_flatpak_read_only_smoke --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：1 passed。
+- `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo check -p updater_core --jobs 1`：通过。
+- `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：69 passed，7 ignored。
+- `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：6 passed。
+- `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 
