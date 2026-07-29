@@ -546,7 +546,7 @@ impl PackageManagerType {
             Self::Dnf => DnfManager::list_updates_with_refresh(config, refresh).await,
             Self::Pacman => PacmanManager::list_updates_with_refresh(config, refresh).await,
             Self::Zypper => ZypperManager::list_updates_with_refresh(config, refresh).await,
-            Self::Flatpak => FlatpakManager::list_updates(config).await,
+            Self::Flatpak => FlatpakManager::list_updates_with_refresh(config, refresh).await,
             Self::Homebrew => HomebrewManager::list_updates_with_refresh(config, refresh).await,
             Self::Cargo => CargoManager::list_updates(config).await,
             Self::Go => GoManager::list_updates(config).await,
