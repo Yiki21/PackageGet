@@ -1,239 +1,80 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
-
 use async_trait::async_trait;
-use futures::future::join_all;
-use serde::Deserialize;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager, PackageTarget,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::PipxManager as DirectPipxManager;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::{
-        common::{directory_size, manager_command, manager_command_path},
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct PipxManager;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PipxPackage {
-    venv_name: String,
-    name: String,
-    version: String,
-    package_or_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PipxList {
-    #[serde(default)]
-    venvs: HashMap<String, PipxVenv>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PipxVenv {
-    #[serde(default)]
-    metadata: PipxMetadata,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PipxMetadata {
-    main_package: Option<PipxMainPackage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PipxMainPackage {
-    package: Option<String>,
-    package_or_url: Option<String>,
-    package_version: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PypiPackageResponse {
-    info: PypiPackageInfo,
-}
-
-#[derive(Debug, Deserialize)]
-struct PypiPackageInfo {
-    name: String,
-    version: String,
-    summary: Option<String>,
-    home_page: Option<String>,
-    project_url: Option<String>,
-    project_urls: Option<HashMap<String, String>>,
-}
-
-impl PypiPackageInfo {
-    fn homepage(&self) -> Option<String> {
-        self.home_page
-            .as_ref()
-            .filter(|url| !url.trim().is_empty())
-            .cloned()
-            .or_else(|| {
-                let urls = self.project_urls.as_ref()?;
-                ["Homepage", "Source", "Source Code", "Repository"]
-                    .into_iter()
-                    .find_map(|key| urls.get(key).filter(|url| !url.trim().is_empty()).cloned())
-            })
-            .or_else(|| {
-                self.project_url
-                    .as_ref()
-                    .filter(|url| !url.trim().is_empty())
-                    .cloned()
-            })
-    }
-}
-
-fn command_path(config: &Config) -> String {
-    manager_command_path(config, PackageManagerType::Pipx)
-}
-
 #[async_trait]
 impl PackageManager for PipxManager {
     async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-        let installed = Self::installed_packages(config).await?;
-        let client = Self::pypi_client()?;
-        let mut updates = Vec::new();
-
-        for package in installed {
-            let Ok(info) = Self::get_pypi_package_info(&client, &package.name).await else {
-                continue;
-            };
-
-            if info.version != package.version {
-                updates.push(PackageUpdate {
-                    name: package.name,
-                    current_version: package.version,
-                    new_version: info.version,
-                });
-            }
-        }
-
-        Ok(updates)
+        Self::list_updates_with_refresh(config, false).await
     }
 
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        Self::installed_packages(config)
-            .await?
-            .into_iter()
-            .find(|package| package.name == package_name)
-            .map(|package| package.version)
-            .ok_or_else(|| {
-                crate::error::CoreError::UnknownError(format!(
-                    "Package {} not installed",
-                    package_name
-                ))
-            })
+        DirectPipxManager::new()
+            .current_version(&manager_config(config), package_name)
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let installed = Self::installed_packages(config).await?;
-        let client = Self::pypi_client()?;
-        let mut metadata_by_name = HashMap::with_capacity(installed.len());
-
-        for packages in installed.chunks(6) {
-            let responses = join_all(
-                packages
-                    .iter()
-                    .map(|package| Self::get_pypi_package_info(&client, &package.name)),
-            )
-            .await;
-            for (package, metadata) in packages.iter().zip(responses) {
-                if let Ok(metadata) = metadata {
-                    metadata_by_name.insert(package.name.clone(), metadata);
-                }
-            }
-        }
-
-        let path = command_path(config);
-        let pipx_home = match manager_command(&path)
-            .arg("environment")
-            .arg("--value")
-            .arg("PIPX_HOME")
-            .output()
+        DirectPipxManager::new()
+            .installed(&manager_config(config))
             .await
-        {
-            Ok(output) if output.status.success() => {
-                let home = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-                (!home.is_empty()).then(|| PathBuf::from(home).join("venvs"))
-            }
-            _ => None,
-        };
-
-        let mut packages = Vec::with_capacity(installed.len());
-        for package in installed {
-            let metadata = metadata_by_name.remove(&package.name);
-            let homepage = metadata
-                .as_ref()
-                .and_then(PypiPackageInfo::homepage)
-                .or_else(|| {
-                    let source = package.package_or_url.as_deref()?;
-                    let source = source.strip_prefix("git+").unwrap_or(source);
-                    (source.starts_with("https://") || source.starts_with("http://"))
-                        .then(|| source.to_owned())
-                });
-            let size = if let Some(venvs_dir) = &pipx_home {
-                directory_size(&venvs_dir.join(&package.venv_name)).await
-            } else {
-                None
-            };
-
-            packages.push(PackageInfo {
-                name: package.name,
-                version: package.version,
-                source: PackageManagerType::Pipx,
-                description: metadata.and_then(|info| info.summary),
-                size,
-                install_date: None,
-                homepage,
-            });
-        }
-
-        Ok(packages)
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 
     async fn count_installed(config: &Config) -> CoreResult<usize> {
-        Ok(Self::installed_packages(config).await?.len())
+        DirectPipxManager::new()
+            .count_installed(&manager_config(config))
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let client = Self::pypi_client()?;
-        let Ok(info) = Self::get_pypi_package_info(&client, package_name).await else {
-            return Ok(Vec::new());
-        };
-
-        let installed_versions = Self::installed_packages(config)
-            .await?
-            .into_iter()
-            .map(|package| (package.name.to_ascii_lowercase(), package.version))
-            .collect::<std::collections::HashMap<_, _>>();
-
-        let version = installed_versions
-            .get(&info.name.to_ascii_lowercase())
-            .cloned()
-            .unwrap_or_else(|| "Not Installed".to_owned());
-
-        let homepage = info.homepage();
-        Ok(vec![PackageInfo {
-            name: info.name,
-            version,
-            source: PackageManagerType::Pipx,
-            description: info.summary,
-            size: None,
-            install_date: None,
-            homepage,
-        }])
+        DirectPipxManager::new()
+            .search(&manager_config(config), package_name)
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 }
 
 impl PipxManager {
+    pub async fn list_updates_with_refresh(
+        config: &Config,
+        refresh: bool,
+    ) -> CoreResult<Vec<PackageUpdate>> {
+        DirectPipxManager::new()
+            .updates(&manager_config(config), refresh)
+            .await
+            .map(|updates| updates.into_iter().map(convert_package_update).collect())
+            .map_err(convert_manager_error)
+    }
+
     pub async fn uninstall_package_with_progress(
         config: &Config,
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = command_path(config);
-        let args = vec!["uninstall".to_owned(), package_name.to_owned()];
-        run_command_with_progress(&path, &args, on_progress).await
+        run_package_with_progress(
+            config,
+            ApiPackageAction::Uninstall,
+            package_name,
+            on_progress,
+        )
+        .await
     }
 
     pub async fn update_package_with_progress(
@@ -241,9 +82,7 @@ impl PipxManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = command_path(config);
-        let args = vec!["upgrade".to_owned(), package_name.to_owned()];
-        run_command_with_progress(&path, &args, on_progress).await
+        run_package_with_progress(config, ApiPackageAction::Update, package_name, on_progress).await
     }
 
     pub async fn install_package_with_progress(
@@ -251,154 +90,116 @@ impl PipxManager {
         package_name: &str,
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        let path = command_path(config);
-        let args = vec!["install".to_owned(), package_name.to_owned()];
-        run_command_with_progress(&path, &args, on_progress).await
+        run_package_with_progress(config, ApiPackageAction::Install, package_name, on_progress)
+            .await
     }
+}
 
-    async fn installed_packages(config: &Config) -> CoreResult<Vec<PipxPackage>> {
-        let path = command_path(config);
-        let output = manager_command(&path)
-            .arg("list")
-            .arg("--json")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(crate::error::CoreError::from_command_failure(format!(
-                "pipx list --json failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        Self::parse_installed_packages(&stdout)
-    }
-
-    fn parse_installed_packages(stdout: &str) -> CoreResult<Vec<PipxPackage>> {
-        let list: PipxList = serde_json::from_str(stdout)?;
-        let mut packages = Vec::new();
-
-        for (venv_name, venv) in list.venvs {
-            let Some(main_package) = venv.metadata.main_package else {
-                continue;
-            };
-
-            let name = main_package.package.unwrap_or_else(|| venv_name.clone());
-            let version = main_package
-                .package_version
-                .unwrap_or_else(|| "unknown".to_owned());
-
-            packages.push(PipxPackage {
-                venv_name,
-                name,
-                version,
-                package_or_url: main_package.package_or_url,
+async fn run_package_with_progress(
+    config: &Config,
+    action: ApiPackageAction,
+    package_name: &str,
+    mut on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    let target = PackageTarget::new(PackageManagerType::Pipx.manager_id(), package_name);
+    DirectPipxManager::new()
+        .execute_target_with_progress(&manager_config(config), action, &target, |event| {
+            let (progress, command_message) = event.into_parts();
+            on_progress(CommandProgressEvent {
+                progress,
+                command_message,
             });
-        }
+        })
+        .await
+        .map_err(convert_manager_error)
+}
 
-        packages.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(packages)
+fn manager_config(config: &Config) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(PackageManagerType::Pipx.manager_id());
+    if let Some(path) = config.get_package_path(PackageManagerType::Pipx) {
+        manager_config.with_executable(path)
+    } else {
+        manager_config
     }
+}
 
-    async fn get_pypi_package_info(
-        client: &reqwest::Client,
-        package_name: &str,
-    ) -> CoreResult<PypiPackageInfo> {
-        let resp = client
-            .get(format!("https://pypi.org/pypi/{}/json", package_name))
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(crate::error::CoreError::RequestError(format!(
-                "PyPI request failed with status {}",
-                resp.status()
-            )));
-        }
-
-        let response: PypiPackageResponse = resp.json().await?;
-        Ok(response.info)
+fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source: PackageManagerType::Pipx,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
     }
+}
 
-    fn pypi_client() -> CoreResult<reqwest::Client> {
-        Ok(reqwest::Client::builder()
-            .user_agent("updater/0.1.0 (https://github.com/Yiki21/updater)")
-            .timeout(Duration::from_secs(20))
-            .build()?)
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
+    }
+}
+
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired
+        | ManagerErrorKind::Cancelled => CoreError::from_command_failure(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Other => CoreError::UnknownError(detail),
+        _ => CoreError::UnknownError(detail),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
+
     use super::*;
+    use crate::PackageManagerConfig;
 
     #[test]
-    fn parse_installed_packages_reads_pipx_json() {
-        let stdout = r#"{
-            "venvs": {
-                "black": {
-                    "metadata": {
-                        "main_package": {
-                            "package": "black",
-                            "package_version": "24.10.0"
-                        }
-                    }
-                },
-                "httpie": {
-                    "metadata": {
-                        "main_package": {
-                            "package": "httpie",
-                            "package_version": "3.2.4"
-                        }
-                    }
-                }
-            }
-        }"#;
-
-        let packages = PipxManager::parse_installed_packages(stdout).unwrap();
-
+    fn legacy_config_bridge_preserves_custom_pipx_path() {
+        let config = Config {
+            app_managers: vec![PackageManagerConfig {
+                manager_type: PackageManagerType::Pipx,
+                custom_path: Some("/custom/pipx".to_owned()),
+            }],
+            ..Config::default()
+        };
         assert_eq!(
-            packages,
-            vec![
-                PipxPackage {
-                    venv_name: "black".to_owned(),
-                    name: "black".to_owned(),
-                    version: "24.10.0".to_owned(),
-                    package_or_url: None,
-                },
-                PipxPackage {
-                    venv_name: "httpie".to_owned(),
-                    name: "httpie".to_owned(),
-                    version: "3.2.4".to_owned(),
-                    package_or_url: None,
-                },
-            ]
+            manager_config(&config).executable(),
+            Some(std::path::Path::new("/custom/pipx"))
         );
     }
 
     #[test]
-    fn parse_installed_packages_uses_venv_name_and_unknown_version_as_fallback() {
-        let stdout = r#"{
-            "venvs": {
-                "ruff": {
-                    "metadata": {
-                        "main_package": {}
-                    }
-                }
-            }
-        }"#;
+    fn legacy_model_bridge_preserves_pipx_metadata() {
+        let id = ManagerId::parse("builtin:pipx").expect("valid pipx ID");
+        let mut package = ApiPackageInfo::new(id.clone(), "black", "25.0");
+        package.description = Some("Python formatter".to_owned());
+        package.homepage = Some("https://black.readthedocs.io/".to_owned());
+        package.size = Some(1024);
+        let converted = convert_package_info(package);
+        assert_eq!(converted.source, PackageManagerType::Pipx);
+        assert_eq!(converted.size, Some(1024));
 
-        let packages = PipxManager::parse_installed_packages(stdout).unwrap();
-
-        assert_eq!(
-            packages,
-            vec![PipxPackage {
-                venv_name: "ruff".to_owned(),
-                name: "ruff".to_owned(),
-                version: "unknown".to_owned(),
-                package_or_url: None,
-            }]
-        );
+        let converted = convert_package_update(ApiPackageUpdate::new(
+            PackageTarget::new(id, "black"),
+            "25.0",
+            "26.0",
+        ));
+        assert_eq!(converted.new_version, "26.0");
     }
 }

@@ -13,7 +13,8 @@ use updater_managers::{
     DnfManager as DirectDnfManager, FlatpakManager as DirectFlatpakManager,
     GoManager as DirectGoManager, HomebrewManager as DirectHomebrewManager,
     NpmManager as DirectNpmManager, PacmanManager as DirectPacmanManager,
-    PnpmManager as DirectPnpmManager, ZypperManager as DirectZypperManager,
+    PipxManager as DirectPipxManager, PnpmManager as DirectPnpmManager,
+    ZypperManager as DirectZypperManager,
 };
 
 use crate::{
@@ -289,6 +290,7 @@ pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), R
     registry.register(Arc::new(DirectGoManager::new()))?;
     registry.register(Arc::new(DirectNpmManager::new()))?;
     registry.register(Arc::new(DirectPnpmManager::new()))?;
+    registry.register(Arc::new(DirectPipxManager::new()))?;
 
     for manager_type in ALL_PACKAGE_MANAGERS {
         if !matches!(
@@ -303,6 +305,7 @@ pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), R
                 | PackageManagerType::Go
                 | PackageManagerType::Npm
                 | PackageManagerType::Pnpm
+                | PackageManagerType::Pipx
         ) {
             registry.register(Arc::new(LegacyPackageManagerAdapter::new(*manager_type)))?;
         }

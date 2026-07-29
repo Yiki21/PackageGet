@@ -6,7 +6,7 @@ use updater_core::{
 };
 use updater_managers::{
     AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager, NpmManager,
-    PacmanManager, PnpmManager, ZypperManager,
+    PacmanManager, PipxManager, PnpmManager, ZypperManager,
 };
 
 #[test]
@@ -160,5 +160,19 @@ fn mixed_registration_rejects_a_preexisting_direct_pnpm_manager() {
         register_builtin_managers(&mut registry),
         Err(RegistryError::DuplicateManager { id })
             if id == PackageManagerType::Pnpm.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_pipx_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(PipxManager::new()))
+        .expect("register direct pipx manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Pipx.manager_id()
     ));
 }

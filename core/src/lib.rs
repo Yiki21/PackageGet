@@ -552,7 +552,7 @@ impl PackageManagerType {
             Self::Go => GoManager::list_updates_with_refresh(config, refresh).await,
             Self::Npm => NpmManager::list_updates_with_refresh(config, refresh).await,
             Self::Pnpm => PnpmManager::list_updates_with_refresh(config, refresh).await,
-            Self::Pipx => PipxManager::list_updates(config).await,
+            Self::Pipx => PipxManager::list_updates_with_refresh(config, refresh).await,
         }
     }
 
