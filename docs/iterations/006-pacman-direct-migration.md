@@ -18,7 +18,7 @@
 - [ ] 将 core 的旧 Pacman 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
 - [ ] 更新 mixed built-in 注册：APT、DNF、Pacman 使用直接实现，其余 8 个 manager 继续使用 legacy adapter。
 - [ ] 增加纯离线 installed/update/search fixture、command construction、conversion 与 registration contract tests。
-- [ ] 在本机 Pacman 可用时执行只读 availability/installed/count smoke test；不可用时只记录结构化 availability，不运行 refresh 或事务。
+- [ ] 宿主机验证结构化 availability，并在 Podman Arch Linux 容器内执行 direct manager 的只读 availability/installed/count smoke test。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
@@ -26,7 +26,7 @@
 - 本轮不迁移 Zypper、Flatpak、Homebrew 或语言工具 manager。
 - 本轮不引入 `checkupdates`、`expac` 等额外 Arch 工具依赖。
 - 本轮不重新设计现有 `pacman -Sy` refresh 或特定 package update 策略。
-- 本轮不运行 `pacman -Sy`、安装、升级、删除或任何 privileged smoke transaction。
+- 本轮不在宿主机或容器内运行 `pacman -Sy`、安装、升级、删除或任何 privileged smoke transaction。
 - 本轮不修改 UI identity、Config V2 或 manager settings 页面。
 
 ## 设计约束
@@ -43,12 +43,14 @@
 
 - Iteration 005 已完成本地与 GitHub Actions 门禁，DNF 已成为第二个直接 manager，并验证了复杂两阶段 progress 迁移路径。
 - 确定 Pacman 为下一迁移对象，用于继续收敛系统 manager 的 command/error/wrapper 模式，同时验证无需专属 progress state 的直接迁移。
+- 宿主机未安装 Pacman；根据补充验收要求，真实只读验证将使用 Podman 的 Arch Linux 容器执行 direct API，而不是仅验证 CLI 或缺失状态。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
-| 待提交 | 完成 Iteration 005 并建立 Iteration 006 计划 | 文档检查 |
+| `03720cd` | 完成 Iteration 005 并建立 Iteration 006 计划 | 文档检查；GitHub Actions `30431775898` |
+| 待提交 | 将真实只读 smoke 扩展为 Podman Arch Linux direct API 验证 | 文档检查 |
 
 ## 验证记录
 
