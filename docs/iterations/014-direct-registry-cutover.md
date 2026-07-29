@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 审计`LegacyPackageManagerAdapter`、`register_legacy_managers`、built-in registration、Config V1 wrapper与外部fake manager测试的当前调用图。
+- [x] 审计`LegacyPackageManagerAdapter`、`register_legacy_managers`、built-in registration、Config V1 wrapper与外部fake manager测试的当前调用图。
 - [ ] 冻结全部built-in ID、descriptor顺序、平台集合与capability，确保cutover不改变registry可见契约。
 - [ ] 将direct built-in集合收敛为单一catalog/registration入口，避免core手写direct注册后再遍历legacy fallback。
 - [ ] 删除`LegacyPackageManagerAdapter`、`register_legacy_managers`及其仅服务过渡层的转换、错误和progress代码。
@@ -53,14 +53,19 @@
 - Iteration 013完成后，全部内置manager均已有`updater-managers` direct implementation。
 - 当前`register_builtin_managers`先逐个注册全部direct manager，随后仍遍历`ALL_PACKAGE_MANAGERS`执行一个实际上不会命中的legacy fallback。
 - 调用图初查约有323处`PackageManagerType`相关引用，分布在Config V1、UI页面state、静态wrapper和adapter；本轮只处理已无生产必要的adapter路径。
+- 完成正式调用图审计：`LegacyPackageManagerAdapter`与`register_legacy_managers`仅被原文件内部单测使用；`register_builtin_managers`保留为公共bootstrap入口。
+- fallback exclusion已覆盖全部11个built-in ID，因此现有fallback循环不可达；adapter专用转换、错误分类和progress桥接可以整块删除。
+- 冻结现有无条件catalog策略：Linux-only descriptor为APT/DNF/Pacman/Zypper/Flatpak，其余现有built-in为Linux+macOS；target filtering留到跨平台阶段单独处理。
+- 确认`docs/manager-authoring.md`尚不存在，而ROADMAP明确要求提供第三方trait-object注册示例，本轮补齐该文档。
 
 ## Git 提交
 
 - Iteration 014计划检查点：本次提交。
+- legacy adapter调用图审计检查点：本次提交。
 
 ## 验证记录
 
-待实施后填写。
+- 只读`rg`调用图、Cargo依赖归属与descriptor源码审计完成；未运行package manager写操作。
 
 ## 遗留项 / 下一轮
 
