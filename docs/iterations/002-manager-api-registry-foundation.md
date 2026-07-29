@@ -15,7 +15,7 @@
 - [x] 定义 descriptor、platform、category、capabilities、授权提示与稳定显示元数据。
 - [x] 定义 manager config、package/update/target、action、progress、availability 与结构化错误模型。
 - [x] 定义对象安全的异步 `PackageManager: Send + Sync` 和非 Iced `ProgressSink`。
-- [ ] 在 core 中实现确定性 `ManagerRegistry`：显式注册、拒绝重复/非法 ID、稳定排序和 capability gate。
+- [x] 在 core 中实现确定性 `ManagerRegistry`：显式注册、拒绝重复/非法 ID、稳定排序和 capability gate。
 - [ ] 增加公共 API 单元测试、core registry 测试和外部 fake manager 集成测试。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
@@ -42,19 +42,24 @@
 - `ManagerId` 使用私有 newtype，在 parse、`FromStr`、`TryFrom` 和 serde 反序列化边界统一验证。
 - descriptor、capability、平台、配置、package model、progress、availability 与 typed error 已落地。
 - `PackageManager` 使用实例方法和 `async-trait`，可作为 `Arc<dyn PackageManager>` 使用；非支持方法返回结构化 Unsupported 错误。
+- core 新增 `ManagerRegistry`，使用 `BTreeMap<ManagerId, Arc<dyn PackageManager>>` 显式注册实例。
+- registry 拒绝重复 ID，按 category、display name、ID 稳定排序，并在返回 manager 前执行 capability gate。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
 | `581da60` | 完成 Iteration 001 并建立 Iteration 002 计划 | 文档检查 |
-| 待提交 | 新增 `updater-manager-api` 公共扩展契约 | crate check、test、clippy |
+| `371956c` | 新增 `updater-manager-api` 公共扩展契约 | crate check、test、clippy |
+| 待提交 | 在 core 中新增确定性 ManagerRegistry | core check、clippy |
 
 ## 验证记录
 
 - `cargo check -p updater-manager-api --all-targets --jobs 1`：通过。
 - `cargo test -p updater-manager-api --all-targets --locked --jobs 1 -- --test-threads=1`：4 个测试通过。
 - `cargo clippy -p updater-manager-api --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo check -p updater_core --all-targets --locked --jobs 1`：通过。
+- `cargo clippy -p updater_core --all-targets --locked --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 

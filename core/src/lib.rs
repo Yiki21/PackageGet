@@ -23,8 +23,10 @@ use crate::{
 
 pub mod error;
 mod pm;
+mod registry;
 mod storage;
 
+pub use registry::{ManagerRegistry, RegistryError};
 pub use storage::{Config, PackageManagerConfig};
 
 #[derive(Debug, Clone)]
