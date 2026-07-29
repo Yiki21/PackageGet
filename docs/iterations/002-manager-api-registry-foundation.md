@@ -46,6 +46,7 @@
 - registry 拒绝重复 ID，按 category、display name、ID 稳定排序，并在返回 manager 前执行 capability gate。
 - 新增外部集成测试 crate，实现 fake manager 并通过 `Arc<dyn PackageManager>` 完成 availability、search、execute 与 progress 调用。
 - 集成测试覆盖重复 ID、unsupported capability 和 descriptor 稳定排序。
+- workspace format、all-targets check 与 Clippy 已在本机串行通过；完整 test/build 交由 GitHub Actions 复验。
 
 ## Git 提交
 
@@ -54,7 +55,8 @@
 | `581da60` | 完成 Iteration 001 并建立 Iteration 002 计划 | 文档检查 |
 | `371956c` | 新增 `updater-manager-api` 公共扩展契约 | crate check、test、clippy |
 | `2b4d815` | 在 core 中新增确定性 ManagerRegistry | core check、clippy |
-| 待提交 | 增加外部 fake manager registry contract test | focused test、clippy |
+| `d0e09e2` | 增加外部 fake manager registry contract test | focused test、clippy |
+| 待提交 | 记录本地 workspace 验证结果 | format、check、clippy |
 
 ## 验证记录
 
@@ -64,6 +66,9 @@
 - `cargo check -p updater_core --all-targets --locked --jobs 1`：通过。
 - `cargo clippy -p updater_core --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo test -p updater_core --test manager_registry --locked --jobs 1 -- --test-threads=1`：3 个测试通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 
