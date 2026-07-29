@@ -47,6 +47,7 @@
 - core 的旧 APT 模块缩减为兼容转换层，读取与写入均调用直接实现；原 parser、命令参数和进程逻辑已删除。
 - 新增混合 `register_builtin_managers`：APT 注册直接实例，其余 10 个 stable ID 继续注册 legacy adapter。
 - 补齐 managers public contract、缺失 executable、空执行、target/config 防串用、parser、command、bounded progress、typed error、legacy conversion 与 mixed registry 离线测试。
+- workspace 完整本地门禁通过；全量容器复验交由 GitHub Actions，不在本机使用 `act` 重复构建相同 Rust 依赖图。
 
 ## Git 提交
 
@@ -56,7 +57,8 @@
 | `454a59a` | 建立平铺的 `updater-managers` crate 与 workspace 边界 | managers check、manifest review |
 | `ddc9f94` | 实现共享 command/progress 工具与直接 APT manager | managers unit test、clippy |
 | `1e0b649` | 让 core legacy APT 入口复用直接实现并加入混合注册 | core check、focused test |
-| 待提交 | 补齐直接 APT、legacy bridge 与 mixed registry 离线 contract tests | focused test、clippy |
+| `84301bf` | 补齐直接 APT、legacy bridge 与 mixed registry 离线 contract tests | focused test、clippy |
+| 待提交 | 记录 Iteration 004 完整本地验证 | format、check、test、clippy、build |
 
 ## 验证记录
 
@@ -70,6 +72,10 @@
 - `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`（bridge checkpoint）：66 个测试通过，12 个环境测试 ignored。
 - `cargo test -p updater_core --test builtin_registry --locked --jobs 1 -- --test-threads=1`：2 个 mixed registry 测试通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 --quiet -- --test-threads=1`：108 个测试通过，13 个环境测试 ignored。
+- `cargo build --workspace --locked --jobs 1 --quiet`：通过。
 
 ## 遗留项 / 下一轮
 
