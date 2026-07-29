@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 审计当前 stable Cargo 的 `install --list`、install/uninstall argv、registry/path/git source 表达，以及 crates.io API 的 search/detail schema、HTTP 状态和 rate-limit headers。
+- [x] 审计当前 stable Cargo 的 `install --list`、install/uninstall argv、registry/path/git source 表达，以及 crates.io API 的 search/detail schema、HTTP 状态和 rate-limit headers。
 - [ ] 直接实现 Cargo descriptor、availability、current version、installed/count、updates、search 与统一 execute。
 - [ ] 将 installed parser 收敛为 validated source identity，保留 crate name、version、binary 列表和 registry/local source；malformed header/continuation 不静默污染相邻 crate。
 - [ ] direct registry target 使用明确 origin/reference；local/path/git package 只读展示，不伪装成可从 crates.io 更新的 registry package。
@@ -63,15 +63,23 @@
 
 - Iteration 009 已完成 direct Homebrew、formula/cask/tap identity、timeout child termination、Linuxbrew 只读 smoke、本地完整门禁与 GitHub Actions 复验。
 - 初步代码审阅确认旧 Cargo parser 能识别简单 local path marker，但 updates/metadata 会逐包吞掉 crates.io failure，search 手写 percent encoding并将非成功 HTTP 状态转换为空结果。
-- 下一步先审计真实 stable Cargo 输出与 crates.io typed schema，再冻结 registry/local/git identity 和 HTTP error contract。
+- 本机 Cargo 1.97.1 的 `cargo install --list` 对 crates.io 安装输出 `name vVERSION:`，对 path 安装输出 `name vVERSION (/absolute/path):`；`.crates.toml` 中同一批记录保留 `registry+URL`、`path+file://URL` 的完整 source key，证明 display output 与 tracking identity 不能混为一谈。
+- `cargo install` 当前同时支持 `CRATE@VERSION` 与 `--version`，以及 `--registry`、`--index`、`--git`、`--path`；本轮 direct registry write 固定使用 crate name 与可选 `--version`，path/git installed identity 只读展示，不把 source marker重放为 registry write。
+- crates.io live read-only audit 验证 search endpoint 支持结构化 `q/page/per_page` query，并返回 typed `crates` 与 `meta`；detail endpoint 返回 `newest_version`、`max_version`、`max_stable_version`。生产逻辑使用 typed fields 和统一 User-Agent，不依赖手写 URL encoding。
+- source grammar 冻结为 `registry:crates.io/NAME`、`path:SOURCE` 与 `git:SOURCE`；`PackageInfo.name` 仍为 crate name，scope 为 User。只有 crates.io registry identity参与 update discovery，local/git 同名项不产生错误 update。
+- HTTP failure contract 冻结为：timeout -> Timeout，transport/5xx -> Network，429 -> Busy 并保留 bounded status/header detail，其他非成功状态和 invalid JSON/schema -> Protocol；逐包 metadata 请求 fail-fast 且并发有固定上限。
+- 下一步实现 direct manager 与完全离线的 fake Cargo/local HTTP contracts。
 
 ## Git 提交
 
-本轮实施后逐项记录。
+- 审计检查点：待提交。
 
 ## 验证记录
 
-本轮实施后逐项记录。
+- `cargo 1.97.1 (c980f4866 2026-06-30)`。
+- `cargo install --list`：成功，只读确认 registry/path 与 multi-binary 输出。
+- `.crates.toml` / `.crates2.json`：只读确认 registry/path tracking source，无修改。
+- crates.io search/detail：成功，只读确认 query encoding、typed schema 与 HTTP response headers。
 
 ## 遗留项 / 下一轮
 
