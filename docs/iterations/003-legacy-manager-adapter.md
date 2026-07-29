@@ -50,12 +50,13 @@
 | --- | --- | --- |
 | `0bade6c` | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
 | `ad798ec` | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
-| 待提交 | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
+| `6b31606` | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
 
 ## 验证记录
 
 - `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`：54 个测试通过，12 个环境测试 ignored。
 - `cargo test -p updater-manager-api --all-targets --locked --jobs 1 -- --test-threads=1`：4 个测试通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：扁平化 workspace 路径后通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
