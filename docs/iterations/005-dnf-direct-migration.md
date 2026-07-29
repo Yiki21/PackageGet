@@ -14,8 +14,8 @@
 - [x] 扩展共享 progress parser，支持 DNF step ratio、下载/事务两阶段区间和现有中英文 transaction marker，同时保持 APT percent 行为不变。
 - [x] 直接实现 DNF descriptor、availability、current version、installed/count、updates、search 与统一 execute。
 - [x] 保留 refresh/no-refresh、`pkexec`、批量 install/update/remove 和现有命令参数语义。
-- [ ] 将 core 的旧 DNF 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
-- [ ] 更新 mixed built-in 注册：APT、DNF 使用直接实现，其余 9 个 manager 继续使用 legacy adapter。
+- [x] 将 core 的旧 DNF 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
+- [x] 更新 mixed built-in 注册：APT、DNF 使用直接实现，其余 9 个 manager 继续使用 legacy adapter。
 - [ ] 增加纯离线 fixture/parser、command construction、progress phase、conversion 与 registration contract tests。
 - [ ] 在本机 DNF 可用时执行只读 availability/listing smoke test，不运行安装、升级、删除或 privileged transaction。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
@@ -44,6 +44,9 @@
 - `updater-managers` 已增加平铺的 `dnf.rs`，直接实现完整 object-safe manager contract，并继续使用宽依赖声明与锁文件固定依赖图。
 - shared progress 现以 `DnfPhase::{Download, Transaction}` 表达阶段状态，保留中英文 transaction marker、step ratio reset 检测及 `0.00..0.60` / `0.60..0.99` 映射。
 - DNF refresh/no-refresh、`pkexec`、批量 install/upgrade/remove 与 `--skip-unavailable` 命令语义已由离线测试锁定。
+- `core/src/pm/dnf.rs` 已收缩为 Config V1、model、progress 与 typed error 转换层，旧 DNF command/parser/execute 副本已删除。
+- mixed built-in registry 现在直接注册 APT 与 DNF，并继续为其余 9 个 manager 注册 legacy adapter；两类 direct duplicate contract 均有测试覆盖。
+- 根据本机编辑器反馈，将仓库 toolchain override 与 GitHub Actions 统一改为不写死 patch 版本的 `stable` channel，并在本地声明 `rust-analyzer` 组件。
 
 ## Git 提交
 
@@ -51,12 +54,18 @@
 | --- | --- | --- |
 | `57565e4` | 完成 Iteration 004 并建立 Iteration 005 计划 | 文档检查 |
 | `66193a5` | 实现直接 DNF manager 与两阶段 progress parser | `cargo test -p updater-managers --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
+| `5476e99` | 将 legacy DNF 路由到直接实现并更新 mixed registry | `cargo test -p updater_core --jobs 1 -- --test-threads=1`；`cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` |
+| `7d9caaa` | 改用 stable channel 并补齐本地 rust-analyzer component | `rustup show active-toolchain`；`rust-analyzer --version`；`cargo check -p updater-managers --jobs 1` |
 
 ## 验证记录
 
 - `updater-managers`：17 个单元测试、4 个 APT integration contract tests 通过。
 - `cargo check -p updater-managers --jobs 1` 通过。
 - `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` 通过。
+- `updater_core`：68 项测试通过，11 项依赖本机软件或网络的测试保持 ignored。
+- `cargo check -p updater_core --jobs 1` 通过。
+- `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
+- 仓库 override 已解析为本机 `stable` toolchain，`rust-analyzer` 可从该 toolchain 正常启动；CI 与 package workflow 不再固定 patch 版本。
 
 ## 遗留项 / 下一轮
 
