@@ -4,7 +4,7 @@ use updater_core::{
     ALL_PACKAGE_MANAGERS, ManagerRegistry, PackageManagerType, RegistryError,
     register_builtin_managers,
 };
-use updater_managers::AptManager;
+use updater_managers::{AptManager, DnfManager};
 
 #[test]
 fn mixed_builtin_registration_preserves_all_stable_ids() {
@@ -31,5 +31,19 @@ fn mixed_registration_rejects_a_preexisting_direct_apt_manager() {
         register_builtin_managers(&mut registry),
         Err(RegistryError::DuplicateManager { id })
             if id == PackageManagerType::Apt.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_dnf_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(DnfManager::new()))
+        .expect("register direct DNF manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Dnf.manager_id()
     ));
 }

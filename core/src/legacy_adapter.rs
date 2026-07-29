@@ -8,7 +8,7 @@ use updater_manager_api::{
     PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager, PackageScope,
     PackageTarget, PackageUpdate as ApiPackageUpdate, Platform, ProgressEvent, ProgressSink,
 };
-use updater_managers::AptManager as DirectAptManager;
+use updater_managers::{AptManager as DirectAptManager, DnfManager as DirectDnfManager};
 
 use crate::{
     ALL_PACKAGE_MANAGERS, Config, InstallProgress, ManagerRegistry, PackageInfo,
@@ -264,8 +264,8 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 
 /// Registers the current mixed set of direct and legacy built-in managers.
 ///
-/// APT is registered through its direct `updater-managers` implementation.
-/// Managers that have not migrated yet remain wrapped by
+/// APT and DNF are registered through their direct `updater-managers`
+/// implementations. Managers that have not migrated yet remain wrapped by
 /// [`LegacyPackageManagerAdapter`].
 ///
 /// # Errors
@@ -274,9 +274,13 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 /// contains any stable built-in ID.
 pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), RegistryError> {
     registry.register(Arc::new(DirectAptManager::new()))?;
+    registry.register(Arc::new(DirectDnfManager::new()))?;
 
     for manager_type in ALL_PACKAGE_MANAGERS {
-        if *manager_type != PackageManagerType::Apt {
+        if !matches!(
+            manager_type,
+            PackageManagerType::Apt | PackageManagerType::Dnf
+        ) {
             registry.register(Arc::new(LegacyPackageManagerAdapter::new(*manager_type)))?;
         }
     }
@@ -470,7 +474,7 @@ mod tests {
     use std::sync::Mutex;
 
     use serde_json::json;
-    use updater_manager_api::{ManagerCapability, ManagerId, PackageManager as _};
+    use updater_manager_api::{ManagerCapability, ManagerId};
 
     use super::*;
 

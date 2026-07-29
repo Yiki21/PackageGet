@@ -1,188 +1,49 @@
 use async_trait::async_trait;
-use log::debug;
-use std::{collections::HashSet, process::ExitStatus};
-use tokio::process::Command;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::DnfManager as DirectDnfManager;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError,
-    pm::{
-        common::manager_command_path,
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct DnfManager;
 
-fn command_path(config: &Config) -> String {
-    manager_command_path(config, PackageManagerType::Dnf)
-}
-
 #[async_trait]
 impl PackageManager for DnfManager {
-    async fn get_current_version(_config: &Config, package_name: &str) -> CoreResult<String> {
-        let output = Command::new("rpm")
-            .arg("-q")
-            .arg("--queryformat")
-            .arg("%{VERSION}-%{RELEASE}")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(String::from_utf8(output.stdout)?.trim().to_string())
-        } else {
-            Err(CoreError::ParseError(format!(
-                "Package {} not found",
-                package_name
-            )))
-        }
+    async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
+        DirectDnfManager::new()
+            .current_version(&manager_config(config), package_name)
+            .await
+            .map_err(convert_manager_error)
     }
 
-    async fn list_installed(_config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        // use rpm -qa to list installed packages
-        let output = Command::new("rpm")
-            .arg("-qa")
-            .arg("--queryformat")
-            .arg("%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\t%{INSTALLTIME}\t%{URL}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(CoreError::UnknownError("rpm -qa failed".into()));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let packages = stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    let description = parts
-                        .get(2)
-                        .filter(|s| !s.is_empty() && **s != "(none)")
-                        .map(|s| s.to_string());
-
-                    let size = parts.get(3).and_then(|s| s.parse::<u64>().ok());
-
-                    let install_date = parts
-                        .get(4)
-                        .filter(|s| !s.is_empty() && **s != "(none)")
-                        .and_then(|timestamp| {
-                            timestamp.parse::<i64>().ok().and_then(|ts| {
-                                let datetime = chrono::DateTime::from_timestamp(ts, 0)?;
-                                Some(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
-                            })
-                        });
-
-                    let homepage = parts
-                        .get(5)
-                        .filter(|s| !s.is_empty() && **s != "(none)")
-                        .map(|s| s.to_string());
-
-                    Some(PackageInfo {
-                        name: parts[0].to_string(),
-                        version: parts[1].to_string(),
-                        source: PackageManagerType::Dnf,
-                        description,
-                        size,
-                        install_date,
-                        homepage,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
+    async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
+        DirectDnfManager::new()
+            .installed(&manager_config(config))
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 
-    async fn count_installed(_config: &Config) -> CoreResult<usize> {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg("rpm -qa | wc -l")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Self::list_installed(_config).await?.len());
-        }
-
-        let count_str = String::from_utf8(output.stdout)?.trim().to_string();
-
-        count_str
-            .parse::<usize>()
-            .map_err(|e| CoreError::ParseError(format!("Failed to parse count: {}", e)))
+    async fn count_installed(config: &Config) -> CoreResult<usize> {
+        DirectDnfManager::new()
+            .count_installed(&manager_config(config))
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = command_path(config);
-
-        let output = Command::new(&path)
-            .arg("search")
-            .arg("--quiet")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut packages = Vec::new();
-        let mut seen_packages = HashSet::new();
-
-        debug!("Starting dnf search_package");
-        debug!("dnf search output size: {} bytes", stdout.len());
-
-        // dnf search 输出格式：
-        // Matched fields: name, summary
-        // package-name.arch<TAB>Summary description
-        for line in stdout.lines() {
-            let line = line.trim();
-
-            // 跳过头部行和空行
-            if line.is_empty() || line.starts_with("Matched fields:") {
-                continue;
-            }
-
-            // DNF 使用 tab 分隔包名和描述
-            if let Some((name_part, _summary)) = line.split_once('\t') {
-                let name_part = name_part.trim();
-
-                // 移除架构后缀 (如 .x86_64, .noarch)
-                let name = name_part
-                    .rsplit_once('.')
-                    .map(|(n, _)| n)
-                    .unwrap_or(name_part)
-                    .to_string();
-
-                if !seen_packages.insert(name.clone()) {
-                    continue;
-                }
-
-                let version = Self::get_current_version(config, &name)
-                    .await
-                    .unwrap_or_else(|_| "Not Installed".to_string());
-
-                packages.push(PackageInfo {
-                    name,
-                    version,
-                    source: PackageManagerType::Dnf,
-                    description: None,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
-                });
-            }
-        }
-
-        packages.sort_by(|a, b| a.name.cmp(&b.name));
-
-        Ok(packages)
+        DirectDnfManager::new()
+            .search(&manager_config(config), package_name)
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 }
 
@@ -191,84 +52,25 @@ impl DnfManager {
         config: &Config,
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
-        debug!("Starting dnf list_updates (refresh={})", refresh);
-        let path = command_path(config);
-
-        let (program, args) = build_check_upgrade_command(&path, refresh);
-        let output = Command::new(&program).args(&args).output().await?;
-
-        if !is_check_upgrade_status_ok(&output.status) {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stderr = stderr.trim();
-            let detail = if stderr.is_empty() {
-                "no stderr output".to_string()
-            } else {
-                stderr.to_string()
-            };
-            return Err(CoreError::from_command_failure(format!(
-                "dnf check-upgrade failed with status {:?}: {}",
-                output.status.code(),
-                detail
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        debug!("dnf check-upgrade exited: {}", output.status);
-        debug!("dnf output size: {} bytes", stdout.len());
-
-        let mut updates: Vec<PackageUpdate> = Vec::new();
-        let mut seen_packages: HashSet<String> = HashSet::new();
-
-        for raw_line in stdout.lines() {
-            let Some((name, new_version)) = parse_check_upgrade_entry(raw_line) else {
-                continue;
-            };
-
-            // Skip if we've already processed this package (handle duplicates)
-            if seen_packages.contains(name) {
-                debug!("Skipping duplicate package: {}", name);
-                continue;
-            }
-            seen_packages.insert(name.to_string());
-
-            // Get current version, but don't fail entire function if one package fails
-            let current_version = Self::get_current_version(config, name)
-                .await
-                .unwrap_or_else(|e| {
-                    debug!("Failed to get current version for {}: {}", name, e);
-                    "unknown".to_string()
-                });
-
-            debug!(
-                "Found update: {}: {} -> {}",
-                name, current_version, new_version
-            );
-
-            updates.push(PackageUpdate {
-                name: name.to_owned(),
-                current_version,
-                new_version: new_version.to_owned(),
-            });
-        }
-
-        debug!("Total updates found: {}", updates.len());
-        Ok(updates)
+        DirectDnfManager::new()
+            .updates(&manager_config(config), refresh)
+            .await
+            .map(|updates| updates.into_iter().map(convert_package_update).collect())
+            .map_err(convert_manager_error)
     }
+
     pub async fn uninstall_packages_with_progress(
         config: &Config,
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-
-        let mut args = vec![path, "remove".to_string(), "-y".to_string()];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Uninstall,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 
     pub async fn update_packages_with_progress(
@@ -276,21 +78,8 @@ impl DnfManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-
-        let mut args = vec![
-            path,
-            "upgrade".to_string(),
-            "-y".to_string(),
-            "--skip-unavailable".to_string(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(config, ApiPackageAction::Update, package_names, on_progress)
+            .await
     }
 
     pub async fn install_packages_with_progress(
@@ -298,138 +87,168 @@ impl DnfManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Install,
+            package_names,
+            on_progress,
+        )
+        .await
+    }
+}
+
+async fn run_packages_with_progress(
+    config: &Config,
+    action: ApiPackageAction,
+    package_names: &[String],
+    mut on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    DirectDnfManager::new()
+        .execute_packages_with_progress(&manager_config(config), action, package_names, |event| {
+            let (progress, command_message) = event.into_parts();
+            on_progress(CommandProgressEvent {
+                progress,
+                command_message,
+            });
+        })
+        .await
+        .map_err(convert_manager_error)
+}
+
+fn manager_config(config: &Config) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(PackageManagerType::Dnf.manager_id());
+    if let Some(path) = config.get_package_path(PackageManagerType::Dnf) {
+        manager_config.with_executable(path)
+    } else {
+        manager_config
+    }
+}
+
+fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source: PackageManagerType::Dnf,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
+    }
+}
+
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
+    }
+}
+
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired => CoreError::CommandError(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Cancelled | ManagerErrorKind::Other => {
+            CoreError::UnknownError(detail)
         }
-
-        let path = command_path(config);
-
-        let mut args = vec![path, "install".to_string(), "-y".to_string()];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        _ => CoreError::UnknownError(detail),
     }
-}
-
-fn build_check_upgrade_command(path: &str, refresh: bool) -> (String, Vec<String>) {
-    if refresh {
-        return (
-            "pkexec".to_string(),
-            vec![
-                path.to_string(),
-                "check-upgrade".to_string(),
-                "--refresh".to_string(),
-            ],
-        );
-    }
-
-    (path.to_string(), vec!["check-upgrade".to_string()])
-}
-
-fn is_check_upgrade_status_ok(status: &ExitStatus) -> bool {
-    // dnf check-upgrade returns code 100 when updates are available.
-    status.success() || status.code() == Some(100)
-}
-
-fn parse_check_upgrade_entry(raw_line: &str) -> Option<(&str, &str)> {
-    // Obsoleted package rows are indented and should not be treated as direct upgrades.
-    if raw_line
-        .chars()
-        .next()
-        .is_some_and(|first| first.is_whitespace())
-    {
-        return None;
-    }
-
-    let line = raw_line.trim();
-    if line.is_empty()
-        || line.starts_with("Updating and loading repositories:")
-        || line.starts_with("Repositories loaded.")
-        || line.starts_with("Available upgrades")
-        || line.starts_with("Obsoleting packages")
-    {
-        return None;
-    }
-
-    // Expected format: name.arch version repository
-    let mut parts = line.split_whitespace();
-    let package_with_arch = parts.next()?;
-    let new_version = parts.next()?;
-    let _repo = parts.next()?;
-
-    let (name, arch) = package_with_arch.rsplit_once('.')?;
-    if name.is_empty() || arch.is_empty() {
-        return None;
-    }
-
-    Some((name, new_version))
 }
 
 #[cfg(test)]
 mod tests {
+    use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
+
     use super::*;
+    use crate::PackageManagerConfig;
 
-    #[tokio::test]
-    #[ignore = "requires a local DNF installation and RPM database"]
-    async fn test_dnf_list_updates() {
-        let config = crate::Config::default();
-        match DnfManager::list_updates_with_refresh(&config, false).await {
-            Ok(updates) => {
-                println!("Found {} updates:", updates.len());
-                for update in updates.iter().take(5) {
-                    println!(
-                        "  {}: {} -> {}",
-                        update.name, update.current_version, update.new_version
-                    );
-                }
-            }
-            Err(e) => eprintln!("Error: {}", e),
+    #[test]
+    fn legacy_config_bridge_preserves_custom_dnf_path() {
+        let config = Config {
+            system_manager: Some(PackageManagerConfig {
+                manager_type: PackageManagerType::Dnf,
+                custom_path: Some("/custom/dnf5".to_owned()),
+            }),
+            ..Config::default()
+        };
+
+        let converted = manager_config(&config);
+        assert_eq!(converted.id, PackageManagerType::Dnf.manager_id());
+        assert_eq!(
+            converted.executable(),
+            Some(std::path::Path::new("/custom/dnf5"))
+        );
+    }
+
+    #[test]
+    fn legacy_model_bridge_preserves_dnf_metadata() {
+        let id = ManagerId::parse("builtin:dnf").expect("valid DNF ID");
+        let mut package = ApiPackageInfo::new(id.clone(), "bash", "5.2-1.fc43");
+        package.description = Some("GNU shell".to_owned());
+        package.size = Some(42);
+        package.install_date = Some("2026-07-29".to_owned());
+        package.homepage = Some("https://www.gnu.org/software/bash/".to_owned());
+
+        let converted = convert_package_info(package);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.version, "5.2-1.fc43");
+        assert_eq!(converted.source, PackageManagerType::Dnf);
+        assert_eq!(converted.description.as_deref(), Some("GNU shell"));
+        assert_eq!(converted.size, Some(42));
+        assert_eq!(converted.install_date.as_deref(), Some("2026-07-29"));
+        assert_eq!(
+            converted.homepage.as_deref(),
+            Some("https://www.gnu.org/software/bash/")
+        );
+
+        let update = ApiPackageUpdate::new(PackageTarget::new(id, "bash"), "5.1", "5.2");
+        let converted = convert_package_update(update);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.current_version, "5.1");
+        assert_eq!(converted.new_version, "5.2");
+    }
+
+    #[test]
+    fn typed_manager_errors_map_back_to_legacy_categories() {
+        for (kind, expected) in [
+            (ManagerErrorKind::Network, "request"),
+            (ManagerErrorKind::Protocol, "parse"),
+            (ManagerErrorKind::Permission, "command"),
+            (ManagerErrorKind::Other, "unknown"),
+        ] {
+            let error = convert_manager_error(
+                ManagerError::new(kind, "operation failed").with_detail("diagnostic"),
+            );
+            let category = match error {
+                CoreError::RequestError(_) => "request",
+                CoreError::ParseError(_) => "parse",
+                CoreError::CommandError(_) => "command",
+                CoreError::UnknownError(_) => "unknown",
+                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+            };
+            assert_eq!(category, expected);
         }
     }
 
     #[tokio::test]
-    #[ignore = "requires a local DNF installation and RPM database"]
-    async fn test_dnf_get_current_version() {
-        let config = crate::Config::default();
-        let package_name = "bash"; // Common package
-        match DnfManager::get_current_version(&config, package_name).await {
-            Ok(version) => println!("Current version of {}: {}", package_name, version),
-            Err(e) => eprintln!("Error: {}", e),
-        }
-    }
+    async fn empty_legacy_execution_does_not_run_dnf() {
+        let mut events = Vec::new();
+        DnfManager::install_packages_with_progress(&Config::default(), &[], |event| {
+            events.push(event);
+        })
+        .await
+        .expect("execute empty legacy DNF group");
 
-    #[test]
-    fn test_parse_check_upgrade_entry_parses_normal_line() {
-        let line = "akonadi-calendar.x86_64 25.12.3-1.fc43 updates";
-        let parsed = parse_check_upgrade_entry(line);
-
-        assert_eq!(parsed, Some(("akonadi-calendar", "25.12.3-1.fc43")));
-    }
-
-    #[test]
-    fn test_parse_check_upgrade_entry_skips_headers() {
-        assert!(parse_check_upgrade_entry("Repositories loaded.").is_none());
-        assert!(parse_check_upgrade_entry("Available upgrades").is_none());
-        assert!(parse_check_upgrade_entry("Obsoleting packages").is_none());
-    }
-
-    #[test]
-    fn test_parse_check_upgrade_entry_skips_indented_obsoleted_rows() {
-        let line = "    kernel-headers.x86_64 6.18.3-200.fc43 updates";
-        assert!(parse_check_upgrade_entry(line).is_none());
-    }
-
-    #[test]
-    fn test_build_check_upgrade_command_without_refresh() {
-        let (program, args) = build_check_upgrade_command("/usr/bin/dnf", false);
-        assert_eq!(program, "/usr/bin/dnf");
-        assert_eq!(args, vec!["check-upgrade"]);
-    }
-
-    #[test]
-    fn test_build_check_upgrade_command_with_refresh_uses_pkexec() {
-        let (program, args) = build_check_upgrade_command("/usr/bin/dnf", true);
-        assert_eq!(program, "pkexec");
-        assert_eq!(args, vec!["/usr/bin/dnf", "check-upgrade", "--refresh"]);
+        assert!(events.is_empty());
     }
 }
