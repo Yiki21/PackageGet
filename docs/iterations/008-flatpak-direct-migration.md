@@ -22,7 +22,8 @@
 - [x] 将 core Flatpak 收缩为 Config V1、model、progress 与 error wrapper，并更新 mixed registry。
 - [x] 增加 scope/ref/origin、NBSP size、new-build update、命令构造、conversion、registration 与 public API contracts。
 - [x] 在当前宿主机执行 opt-in 只读 smoke，验证 user/system installed、count 与 cached app updates；search 保持单独 opt-in。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 workspace format、check、test、clippy 与 build 完整门禁。
+- [ ] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
 
 ## 目标命令契约
 
@@ -94,6 +95,11 @@
 - `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：69 passed，7 ignored。
 - `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：6 passed。
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
