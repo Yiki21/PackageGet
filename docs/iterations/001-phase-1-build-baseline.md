@@ -12,8 +12,8 @@
 ## 实施计划
 
 - [x] 审计 workspace manifest、Cargo.lock、Rust 工具链、Cargo 配置、测试、CI 和打包流程。
-- [ ] 将全部直接依赖集中到根 `Cargo.toml`，成员 crate 统一使用 workspace 继承。
-- [ ] 删除 nightly 专用编译参数，固定到实施时确认的 stable Rust，并安装 rustfmt、clippy。
+- [x] 将全部直接依赖集中到根 `Cargo.toml`，成员 crate 统一使用 workspace 继承。
+- [x] 删除 nightly 专用编译参数，固定到实施时确认的 stable Rust，并安装 rustfmt、clippy。
 - [ ] 按基础库、网络/序列化、平台集成、Iced 的顺序升级依赖并审阅 lockfile。
 - [ ] 将依赖真实网络或本机包管理器的测试明确标记为 ignored，保持默认测试确定性。
 - [ ] 新增质量 CI 和分组 Dependabot，修正 RPM workflow 的 Cargo package 名称。
@@ -34,16 +34,21 @@
 - 完成仓库与 ROADMAP 基线审计。
 - 确认采用 `docs/iterations/NNN-*.md` 持久化每轮计划和进度。
 - 确认采用单人 `main` 线性提交工作流，不创建额外分支或 PR。
+- 将 ui、core 的全部直接依赖集中到根 workspace manifest。
+- 将工具链固定为 Rust 1.97.1，并删除 `-Zthreads`、`-Zshare-generics`。
+- stable 下的格式检查与 workspace all-targets check 已通过。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
-| 待提交 | 持久化 ROADMAP 与 Iteration 001 计划 | 文档检查 |
+| `6aaaf4e` | 持久化 ROADMAP 与 Iteration 001 计划 | 文档检查 |
+| 待提交 | 集中 workspace 依赖并迁移到 stable Rust | `cargo fmt`、`cargo check` |
 
 ## 验证记录
 
-尚未开始本轮最终验证。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 

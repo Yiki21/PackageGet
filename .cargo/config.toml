@@ -1,9 +1,8 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-Clink-arg=-fuse-ld=mold", "-Zshare-generics=y"]
+rustflags = ["-Clink-arg=-fuse-ld=mold"]
 
 [build]
-rustflags = "-Zthreads=8"
 incremental = true
 # rustc-wrapper = "sccache"
 
