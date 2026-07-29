@@ -12,10 +12,10 @@
 ## 实施计划
 
 - [x] 为每个 `PackageManagerType` 定义唯一稳定 ID、descriptor、platform、category、capabilities 与授权提示。
-- [ ] 实现 `ManagerConfig` 到现有 Config V1 的兼容桥接，包括 executable path 和 Go 私有设置。
-- [ ] 实现 `LegacyPackageManagerAdapter`，映射 availability、installed/count、updates、search 和 execute。
-- [ ] 将旧 package model、progress event 和 `CoreError` 转换为新公共 API 类型。
-- [ ] 提供 `register_legacy_managers`，通过新 registry 注册全部现有 built-in adapter。
+- [x] 实现 `ManagerConfig` 到现有 Config V1 的兼容桥接，包括 executable path 和 Go 私有设置。
+- [x] 实现 `LegacyPackageManagerAdapter`，映射 availability、installed/count、updates、search 和 execute。
+- [x] 将旧 package model、progress event 和 `CoreError` 转换为新公共 API 类型。
+- [x] 提供 `register_legacy_managers`，通过新 registry 注册全部现有 built-in adapter。
 - [ ] 增加纯离线 identity、注册、转换、capability 与 progress contract tests。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
@@ -43,6 +43,10 @@
 - 平台 metadata 当前按已实现能力保守声明：Linux managers、Homebrew 与便携开发 manager 的 macOS 支持；Windows 留待平台层完成后开放。
 - 公共 `PackageInfo` 补齐旧模型已有的 size 与 install date，避免 adapter 迁移丢失 UI 元数据。
 - 按仓库的扁平 workspace 结构将公共 crate 放在根目录 `manager-api/`，不增加无实际分组意义的 `crates/` 层。
+- 新增对象安全 legacy adapter，所有读取和写入继续委托现有命令实现，不复制 manager 逻辑。
+- 新 `ManagerConfig` 在调用边界校验 stable ID，并桥接 custom executable；Go 的 `go_bin_dir` 从 typed JSON settings 解析。
+- availability、package/update metadata、write progress 与 `CoreError` 已转换为公共 API 的结构化模型和 typed error kind。
+- `register_legacy_managers` 可将现有 11 个 built-in adapter 显式注册到 `ManagerRegistry`。
 
 ## Git 提交
 
@@ -51,6 +55,7 @@
 | `0bade6c` | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
 | `ad798ec` | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
 | `6b31606` | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
+| 待提交 | 实现 Config V1 桥接、legacy adapter、类型转换与 built-in 注册 | core check、clippy |
 
 ## 验证记录
 
