@@ -546,6 +546,10 @@ pub struct PackageInfo {
     pub description: Option<String>,
     /// Optional package homepage.
     pub homepage: Option<String>,
+    /// Optional installed size in bytes.
+    pub size: Option<u64>,
+    /// Optional manager-reported installation date.
+    pub install_date: Option<String>,
     /// Installation scope.
     pub scope: PackageScope,
     /// Optional repository or channel metadata.
@@ -562,6 +566,8 @@ impl PackageInfo {
             version: version.into(),
             description: None,
             homepage: None,
+            size: None,
+            install_date: None,
             scope: PackageScope::Unknown,
             origin: None,
         }

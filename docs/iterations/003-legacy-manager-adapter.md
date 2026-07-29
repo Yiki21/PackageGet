@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 为每个 `PackageManagerType` 定义唯一稳定 ID、descriptor、platform、category、capabilities 与授权提示。
+- [x] 为每个 `PackageManagerType` 定义唯一稳定 ID、descriptor、platform、category、capabilities 与授权提示。
 - [ ] 实现 `ManagerConfig` 到现有 Config V1 的兼容桥接，包括 executable path 和 Go 私有设置。
 - [ ] 实现 `LegacyPackageManagerAdapter`，映射 availability、installed/count、updates、search 和 execute。
 - [ ] 将旧 package model、progress event 和 `CoreError` 转换为新公共 API 类型。
@@ -39,16 +39,22 @@
 
 - Iteration 002 已完成，对象安全公共 API、registry 和外部 fake manager contract 已通过 CI。
 - 建立本轮 adapter 迁移计划。
+- 为 11 个现有 manager 增加唯一 `builtin:*` ID 和 descriptor，系统 manager 声明授权提示。
+- 平台 metadata 当前按已实现能力保守声明：Linux managers、Homebrew 与便携开发 manager 的 macOS 支持；Windows 留待平台层完成后开放。
+- 公共 `PackageInfo` 补齐旧模型已有的 size 与 install date，避免 adapter 迁移丢失 UI 元数据。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
-| 待提交 | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
+| `0bade6c` | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
+| 待提交 | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
 
 ## 验证记录
 
-尚未开始本轮代码验证。
+- `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`：54 个测试通过，12 个环境测试 ignored。
+- `cargo test -p updater-manager-api --all-targets --locked --jobs 1 -- --test-threads=1`：4 个测试通过。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 

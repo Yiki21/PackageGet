@@ -2,6 +2,10 @@ use std::{fmt::Debug, path::Path, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use updater_manager_api::{
+    AuthorizationHint, ManagerCapabilities, ManagerCapability, ManagerCategory, ManagerDescriptor,
+    ManagerId, Platform, SupportedPlatforms,
+};
 
 use crate::{
     error::CoreError,
@@ -461,6 +465,73 @@ define_package_managers! {
 }
 
 impl PackageManagerType {
+    /// Returns the stable built-in manager ID.
+    #[must_use]
+    pub fn manager_id(self) -> ManagerId {
+        ManagerId::parse(match self {
+            Self::Apt => "builtin:apt",
+            Self::Dnf => "builtin:dnf",
+            Self::Pacman => "builtin:pacman",
+            Self::Zypper => "builtin:zypper",
+            Self::Flatpak => "builtin:flatpak",
+            Self::Homebrew => "builtin:homebrew",
+            Self::Cargo => "builtin:cargo",
+            Self::Go => "builtin:go",
+            Self::Npm => "builtin:npm",
+            Self::Pnpm => "builtin:pnpm",
+            Self::Pipx => "builtin:pipx",
+        })
+        .expect("built-in manager IDs must be valid")
+    }
+
+    /// Returns the object-safe API descriptor for this built-in manager.
+    #[must_use]
+    pub fn manager_descriptor(self) -> ManagerDescriptor {
+        let category = match self {
+            Self::Apt | Self::Dnf | Self::Pacman | Self::Zypper => ManagerCategory::System,
+            Self::Flatpak | Self::Homebrew => ManagerCategory::Application,
+            Self::Cargo | Self::Go | Self::Npm | Self::Pnpm | Self::Pipx => {
+                ManagerCategory::Development
+            }
+        };
+
+        let platforms = match self {
+            Self::Apt | Self::Dnf | Self::Pacman | Self::Zypper | Self::Flatpak => {
+                SupportedPlatforms::from([Platform::Linux])
+            }
+            Self::Homebrew | Self::Cargo | Self::Go | Self::Npm | Self::Pnpm | Self::Pipx => {
+                SupportedPlatforms::from([Platform::Linux, Platform::MacOs])
+            }
+        };
+
+        let capabilities = ManagerCapabilities::from([
+            ManagerCapability::Installed,
+            ManagerCapability::Updates,
+            ManagerCapability::Search,
+            ManagerCapability::Install,
+            ManagerCapability::Update,
+            ManagerCapability::Uninstall,
+        ]);
+
+        let descriptor = ManagerDescriptor::new(
+            self.manager_id(),
+            self.name(),
+            category,
+            platforms,
+            capabilities,
+        )
+        .expect("built-in manager descriptors must be valid")
+        .with_description(self.description());
+
+        if self.is_system_manager() {
+            descriptor.with_authorization(AuthorizationHint::RequiresElevation {
+                message: Some("System package changes require administrator approval.".to_owned()),
+            })
+        } else {
+            descriptor
+        }
+    }
+
     pub async fn list_updates_with_refresh(
         &self,
         config: &Config,
@@ -581,7 +652,7 @@ mod tests {
 
     use super::{
         ALL_APP_PACKAGE_MANAGERS, ALL_PACKAGE_MANAGERS, ALL_SYSTEM_PACKAGE_MANAGERS,
-        PackageManagerType,
+        ManagerCapability, PackageManagerType,
     };
 
     #[test]
@@ -619,6 +690,36 @@ mod tests {
         for manager in ALL_PACKAGE_MANAGERS {
             if *manager != PackageManagerType::Go {
                 assert_eq!(manager.version_args(), &["--version"]);
+            }
+        }
+    }
+
+    #[test]
+    fn built_in_manager_ids_are_unique_and_namespaced() {
+        let ids: HashSet<_> = ALL_PACKAGE_MANAGERS
+            .iter()
+            .map(|manager| manager.manager_id())
+            .collect();
+
+        assert_eq!(ids.len(), ALL_PACKAGE_MANAGERS.len());
+        assert!(ids.iter().all(|id| id.as_str().starts_with("builtin:")));
+    }
+
+    #[test]
+    fn built_in_descriptors_advertise_current_capabilities() {
+        for manager in ALL_PACKAGE_MANAGERS {
+            let descriptor = manager.manager_descriptor();
+            assert_eq!(descriptor.id(), &manager.manager_id());
+
+            for capability in [
+                ManagerCapability::Installed,
+                ManagerCapability::Updates,
+                ManagerCapability::Search,
+                ManagerCapability::Install,
+                ManagerCapability::Update,
+                ManagerCapability::Uninstall,
+            ] {
+                assert!(descriptor.capabilities().contains(capability));
             }
         }
     }
