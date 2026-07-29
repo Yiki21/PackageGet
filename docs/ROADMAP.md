@@ -83,9 +83,9 @@ manager-api/**、managers/**、docs/manager-authoring.md。
 
 ### 阶段 3：迁移配置、UI identity 和 manager 设置
 
-1.  引入带 format_version 的 Config V2，将 manager identity 从序列化 Rust enum 改为 ManagerId；把旧 system_manager、app_managers、go_bin_dir 无损迁移成
-    managers: Vec<ManagerConfig> 和对应 manager settings。
-2.  兼容读取现有 config.json：旧 Apt/Cargo 等 variant 映射为稳定 built-in ID；迁移成功后原子写入新文件并保留恢复备份。未注册的第三方 manager
+1.  引入带 format_version 的 Config V2，将 manager identity 从序列化 Rust enum 直接改为 ManagerId；磁盘只保留
+    managers: Vec<ManagerConfig> 和对应 manager settings，不保留 system_manager、app_managers、go_bin_dir 等旧字段或兼容投影。
+2.  Config V2-only loader拒绝缺少版本、版本不受支持、重复manager ID或损坏的config.json，不猜测或迁移旧格式；保存使用同目录临时文件和原子替换。未注册的第三方manager
     配置不删除，而是保留为 disabled/missing 状态。
 3.  将 UI 中用 PackageManagerType 作为 HashMap/HashSet/selection key 的地方逐页迁为 ManagerId，名称、说明、平台和 capability 全部通过 registry/catalog
     解析；移除 Finding/Updates/Installed 中 DNF 作为 fallback display manager 的假设。
