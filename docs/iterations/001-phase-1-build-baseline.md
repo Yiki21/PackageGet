@@ -39,6 +39,7 @@
 - stable 下的格式检查与 workspace all-targets check 已通过。
 - manifest 不写死类似 `3.27.0` 的最低 patch/minor：1.x 以上使用主版本线，0.x 保留兼容 minor 线，实际版本由 lockfile 固定。
 - 完成基础库组更新：anyhow、async-trait、chrono、env_logger、futures、log、regex、tempfile、thiserror，并审阅新增的传递依赖。
+- 完成异步/网络/序列化组更新：Tokio 1.53.1、Reqwest 0.13.4、Serde 1.0.229、serde_json 1.0.151；URL 已在当前兼容线最新版。
 
 ## Git 提交
 
@@ -46,13 +47,15 @@
 | --- | --- | --- |
 | `6aaaf4e` | 持久化 ROADMAP 与 Iteration 001 计划 | 文档检查 |
 | `d8f0444` | 集中 workspace 依赖并迁移到 stable Rust | `cargo fmt`、`cargo check` |
-| 待提交 | 采用宽松 semver 声明并更新基础依赖组 | `cargo check` |
+| `1285137` | 采用宽松 semver 声明并更新基础依赖组 | `cargo check` |
+| 待提交 | 更新异步、网络与序列化依赖组 | `cargo check` |
 
 ## 验证记录
 
 - `cargo fmt --all -- --check`：通过。
 - `cargo check --workspace --all-targets --locked --jobs 1`：通过。
 - 基础依赖组更新后再次执行 workspace all-targets check：通过。
+- 异步/网络/序列化依赖组更新后再次执行 workspace all-targets check：通过。
 
 ## 遗留项 / 下一轮
 
