@@ -12,13 +12,13 @@
 ## 实施计划
 
 - [x] 审计`LegacyPackageManagerAdapter`、`register_legacy_managers`、built-in registration、Config V1 wrapper与外部fake manager测试的当前调用图。
-- [ ] 冻结全部built-in ID、descriptor顺序、平台集合与capability，确保cutover不改变registry可见契约。
-- [ ] 将direct built-in集合收敛为单一catalog/registration入口，避免core手写direct注册后再遍历legacy fallback。
-- [ ] 删除`LegacyPackageManagerAdapter`、`register_legacy_managers`及其仅服务过渡层的转换、错误和progress代码。
-- [ ] 保留Config V1和当前UI所需的静态wrapper，不在本轮同时迁移配置格式或页面state key。
-- [ ] 增加catalog完整性、稳定顺序、duplicate ID、capability与平台过滤契约；外部trait-object manager测试继续通过。
-- [ ] 审计并删除因adapter退出而无调用方的依赖、imports、tests与dead code，不引入新的crate分组目录。
-- [ ] 更新manager authoring/ROADMAP相关文档，明确第三方manager走公共API显式注册，不再以legacy enum adapter接入。
+- [x] 冻结全部built-in ID、descriptor顺序、平台集合与capability，确保cutover不改变registry可见契约。
+- [x] 将direct built-in集合收敛为单一catalog/registration入口，避免core手写direct注册后再遍历legacy fallback。
+- [x] 删除`LegacyPackageManagerAdapter`、`register_legacy_managers`及其仅服务过渡层的转换、错误和progress代码。
+- [x] 保留Config V1和当前UI所需的静态wrapper，不在本轮同时迁移配置格式或页面state key。
+- [x] 增加catalog完整性、稳定顺序、duplicate ID、capability与descriptor平台集合契约；外部trait-object manager测试继续通过。
+- [x] 审计并删除因adapter退出而无调用方的依赖、imports、tests与dead code，不引入新的crate分组目录。
+- [x] 更新manager authoring/ROADMAP相关文档，明确第三方manager走公共API显式注册，不再以legacy enum adapter接入。
 - [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## 边界决策
@@ -57,15 +57,26 @@
 - fallback exclusion已覆盖全部11个built-in ID，因此现有fallback循环不可达；adapter专用转换、错误分类和progress桥接可以整块删除。
 - 冻结现有无条件catalog策略：Linux-only descriptor为APT/DNF/Pacman/Zypper/Flatpak，其余现有built-in为Linux+macOS；target filtering留到跨平台阶段单独处理。
 - 确认`docs/manager-authoring.md`尚不存在，而ROADMAP明确要求提供第三方trait-object注册示例，本轮补齐该文档。
+- 新增`updater_managers::builtin_managers()`，以稳定产品顺序返回11个独立`Arc<dyn PackageManager>`实例，不持有全局可变状态。
+- core registration已改为消费direct catalog并逐项交给`ManagerRegistry`；duplicate ID继续返回typed `RegistryError`。
+- 删除820行`legacy_adapter.rs`及adapter专用转换、错误分类、progress bridge和14个过渡测试；Config V1 wrapper测试仍保留。
+- catalog contract冻结exact ID/order、display name、category、platform、authorization、六项capability和独立Arc实例。
+- core registration contract改为数据驱动，覆盖全部preexisting built-in duplicate ID，并确认catalog与Config V1兼容集合一致。
+- 新增`docs/manager-authoring.md`，演示第三方crate实现对象安全trait并由应用组合层显式注册；ROADMAP同步为真实catalog API。
+- adapter符号残留扫描为零；现有Cargo依赖均仍有其他调用方，本轮未做无依据的manifest删除。
 
 ## Git 提交
 
 - Iteration 014计划检查点：本次提交。
 - legacy adapter调用图审计检查点：本次提交。
+- direct registry cutover实现检查点：`22ed0fd`（`refactor: cut over to direct manager catalog`）。
 
 ## 验证记录
 
 - 只读`rg`调用图、Cargo依赖归属与descriptor源码审计完成；未运行package manager写操作。
+- managers built-in catalog：4 passed。
+- core direct built-in registration：3 passed；core lib：44 passed。
+- focused managers/core clippy：通过，`-D warnings`下无警告。
 
 ## 遗留项 / 下一轮
 
