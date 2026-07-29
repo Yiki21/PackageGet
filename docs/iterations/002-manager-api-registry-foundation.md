@@ -1,7 +1,7 @@
 # Iteration 002：Manager API 与 Registry 基础
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——拆分 crate，并建立真正可扩展的 PackageManager API
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -17,7 +17,7 @@
 - [x] 定义对象安全的异步 `PackageManager: Send + Sync` 和非 Iced `ProgressSink`。
 - [x] 在 core 中实现确定性 `ManagerRegistry`：显式注册、拒绝重复/非法 ID、稳定排序和 capability gate。
 - [x] 增加公共 API 单元测试、core registry 测试和外部 fake manager 集成测试。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
 
@@ -47,6 +47,7 @@
 - 新增外部集成测试 crate，实现 fake manager 并通过 `Arc<dyn PackageManager>` 完成 availability、search、execute 与 progress 调用。
 - 集成测试覆盖重复 ID、unsupported capability 和 descriptor 稳定排序。
 - workspace format、all-targets check 与 Clippy 已在本机串行通过；完整 test/build 交由 GitHub Actions 复验。
+- GitHub Actions run 30424759721 在 2 分 33 秒内通过 format、check、test、clippy、build。
 
 ## Git 提交
 
@@ -56,7 +57,8 @@
 | `371956c` | 新增 `updater-manager-api` 公共扩展契约 | crate check、test、clippy |
 | `2b4d815` | 在 core 中新增确定性 ManagerRegistry | core check、clippy |
 | `d0e09e2` | 增加外部 fake manager registry contract test | focused test、clippy |
-| 待提交 | 记录本地 workspace 验证结果 | format、check、clippy |
+| `3bf3ff7` | 记录本地 workspace 验证结果 | format、check、clippy、GitHub Actions |
+| 待提交 | 完成本轮报告并建立 Iteration 003 计划 | 文档检查 |
 
 ## 验证记录
 
@@ -69,7 +71,9 @@
 - `cargo fmt --all -- --check`：通过。
 - `cargo check --workspace --all-targets --locked --jobs 1`：通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- [GitHub Actions CI run 30424759721](https://github.com/Yiki21/PackageGet/actions/runs/30424759721)：完整五项门槛通过。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮通过 adapter 将现有 `PackageManagerType` 接入新 registry，保持 UI、Config V1 和现有执行行为不变。
+- 具体计划见 [Iteration 003](003-legacy-manager-adapter.md)。
