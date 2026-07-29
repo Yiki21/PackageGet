@@ -11,10 +11,10 @@
 
 ## 实施计划
 
-- [ ] 直接实现 Zypper descriptor、availability、current version、installed/count、updates、search 与统一 execute。
-- [ ] 保留自定义 Zypper executable、RPM query metadata、refresh/no-explicit-refresh 和批量 install/update/remove 命令语义。
-- [ ] 为 Zypper 表格命令固定 `LC_ALL=C`，避免用户桌面 locale 改变 header 与 parser contract。
-- [ ] 增加 Zypper 专属退出码映射：permission、busy、reboot required、search no-match、cancelled、network/incomplete result 与其他事务失败。
+- [x] 直接实现 Zypper descriptor、availability、current version、installed/count、updates、search 与统一 execute。
+- [x] 保留自定义 Zypper executable、RPM query metadata、refresh/no-explicit-refresh 和批量 install/update/remove 命令语义。
+- [x] 为 Zypper 表格命令固定 `LC_ALL=C`，避免用户桌面 locale 改变 header 与 parser contract。
+- [x] 增加 Zypper 专属退出码映射：permission、busy、reboot required、search no-match、cancelled、network/incomplete result 与其他事务失败。
 - [ ] 将 core 的旧 Zypper 入口收缩为 Config V1、model、progress 与 typed error compatibility wrapper。
 - [ ] 更新 mixed built-in registry：四个 system manager 使用直接实现，其余 7 个 manager 继续使用 legacy adapter。
 - [ ] 增加离线 RPM/table fixtures、command construction、exit-code、conversion、registration 与 public API contract tests。
@@ -65,14 +65,22 @@
 - Zypper 只读审计已完成，确认现有命令、parser、RPM metadata 和 wrapper 边界；没有在审计期间编辑代码或并行运行 Rust 构建。
 - 确定本轮优先锁定 `LC_ALL=C` 与专属退出码，而不是扩大迁移面切换 XML 协议。
 - 容器验收目标为 `registry.opensuse.org/opensuse/tumbleweed:latest`，只执行 availability、installed、count 与 current-version direct API。
+- `updater-managers` 已新增平铺 `zypper.rs`，直接实现完整 object-safe manager contract，并继续复用 bounded percent progress。
+- shared command boundary 已增加 command-local environment，且仅 search/list-updates 设置 `LC_ALL=C`；refresh/write 不依赖 locale-sensitive parser。
+- shared progress runner 已允许 manager 注入 status mapper；Zypper 5/7/102/105/106 映射到 typed error，103/104/107 保留 `Other` detail，未知状态继续回退通用 stderr classifier。
+- search 仅将退出码 104 解释为无匹配；106 等失败即使带有 partial stdout 也不会被解析成成功结果。
 
 ## Git 提交
 
-本轮实施后逐项记录。
+| 提交 | 内容 | 验证 |
+| --- | --- | --- |
+| `a48fb14` | 实现 direct Zypper、command-local locale 与专属退出码 | managers 41 项通过、3 项 ignored；check/clippy 通过 |
 
 ## 验证记录
 
-本轮实施后逐项记录。
+- `cargo check -p updater-managers --jobs 1` 通过。
+- `cargo test -p updater-managers --jobs 1 -- --test-threads=1`：41 项通过，3 项环境 smoke 保持 ignored。
+- `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` 通过。
 
 ## 遗留项 / 下一轮
 
