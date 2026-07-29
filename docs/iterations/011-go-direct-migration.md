@@ -1,7 +1,7 @@
 # Iteration 011：Go 直接迁移与 Module/Binary Identity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -23,7 +23,7 @@
 - [x] 将 core Go 收缩为 Config V1、`go_bin_dir` setting、model、progress 与 typed error wrapper，并更新 mixed registry。
 - [x] 增加 fake Go、temporary GOBIN、build-info/versions fixtures、module/binary collision、path safety、command/env、conversion、registration 与 public contracts。
 - [x] 执行显式 opt-in 宿主只读 smoke；不执行真实 install、update 或 binary removal。
-- [ ] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
+- [x] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
 
 ## Identity 与安全边界
 
@@ -72,12 +72,15 @@
 - core Go已删除regex、directory traversal与command副本，只保留Config V1、`go_bin_dir` setting、legacy model/progress和typed error转换；mixed registry当前为8个direct manager、3个legacy adapter。
 - 本机opt-in smoke已通过Go availability、真实GOBIN的gopls/gup/kind build-info与installed/count parity，未执行network query或任何写操作。
 - Go direct migration后的本地完整门禁已串行通过；format、locked workspace check、全部targets tests、workspace clippy `-D warnings`与build均无失败。
+- GitHub Actions在Go实现提交与最终验证提交上均通过完整CI；Iteration 011可以关闭。
 
 ## Git 提交
 
 - Cargo回归修复检查点：`3d9be46 fix: decode crates.io package metadata`。
 - Go CLI/identity审计检查点：`787fd0d docs: audit Go manager contracts`。
 - Go direct/core migration检查点：`4d92ba2 feat: migrate Go to direct manager`。
+- Go迁移进度检查点：`6831da1 docs: record Go migration progress`。
+- Go本地验证检查点：`78ce42c docs: record Go migration validation`。
 
 ## 验证记录
 
@@ -101,7 +104,11 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：全部通过；默认忽略需要宿主工具、容器或live network的显式opt-in smoke。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions `30445437066`（Go实现提交）：通过。
+- GitHub Actions `30445706357`（最终验证提交）：通过，format、check、deterministic tests、clippy与build全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- Cargo live schema回归已在本轮先行修复，并由exact `bluetui` smoke与CI保护。
+- Go已成为第八个direct manager；mixed registry剩余legacy manager为npm、pnpm与pipx。
+- 下一轮进入 [Iteration 012：npm/pnpm直接迁移与Global Package Identity](012-node-global-direct-migration.md)。
