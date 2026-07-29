@@ -315,7 +315,6 @@ mod tests {
             managers: vec![unknown],
             appearance: "dark".to_owned(),
             notifications_enabled: true,
-            ..Config::default()
         };
 
         config.save_to_path(&path).await.expect("save config");

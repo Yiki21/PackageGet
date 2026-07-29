@@ -35,15 +35,15 @@ fn direct_registration_rejects_each_preexisting_builtin_id() {
 }
 
 #[test]
-fn direct_catalog_ids_match_the_config_v1_compatibility_set() {
+fn direct_catalog_ids_match_the_builtin_runtime_set() {
     let catalog_ids = builtin_managers()
         .into_iter()
         .map(|manager| manager.descriptor().id().clone())
         .collect::<Vec<_>>();
-    let compatibility_ids = ALL_PACKAGE_MANAGERS
+    let runtime_ids = ALL_PACKAGE_MANAGERS
         .iter()
         .map(|manager_type| PackageManagerType::manager_id(*manager_type))
         .collect::<Vec<_>>();
 
-    assert_eq!(catalog_ids, compatibility_ids);
+    assert_eq!(catalog_ids, runtime_ids);
 }
