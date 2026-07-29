@@ -50,6 +50,8 @@
 - `core/src/pm/pacman.rs` 已收缩为 Config V1、model、progress 与 typed error 转换层，旧 Pacman command/parser/execute 副本已删除。
 - mixed built-in registry 现在直接注册 APT、DNF 与 Pacman，并继续为其余 8 个 manager 注册 legacy adapter；Pacman duplicate contract 已补齐。
 - direct Pacman integration contract 已覆盖 descriptor、elevation、缺失自定义 executable、空事务 progress boundary、错误 manager identity 与只读环境 smoke。
+- 并行 parity 审计发现并修复了 Pacman `--version` logo 误识别、取消错误未分类，以及 core wrapper 丢失旧锁冲突/授权取消提示的问题。
+- public API fake executable fixture 已直接覆盖 `--version`、`-Q`、`-Qq`、`-Qu` 与 `-Ss`，不再只依赖私有 parser 单元测试。
 - 当前 Fedora 宿主机未安装 Pacman；显式 availability smoke 验证其返回 `CommandMissing { command: "pacman" }`。
 - Podman 因本机 Docker Hub 失效凭据无法拉取镜像，因此在不改动登录配置的前提下改用 Docker；官方 `archlinux:base` 镜像（digest `sha256:3406a568f45d68f0bef35dc80b3eacec8bda59b0292b2e50d5932ba1667f20cf`）中的 direct API 只读 smoke 通过。
 
@@ -62,6 +64,7 @@
 | `c1fc617` | 实现直接 Pacman manager 与 lock error parity | `cargo test -p updater-managers --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
 | `65e8fc8` | 将 legacy Pacman 路由到直接实现并更新 mixed registry | `cargo test -p updater_core --jobs 1 -- --test-threads=1`；`cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` |
 | `746d111` | 增加 direct Pacman integration contracts 与环境 smoke | 4 个默认 contract tests；宿主 availability 1 项；Arch Docker smoke 1 项 |
+| `c42d391` | 修复 availability version、cancel/lock error parity，并增加 public API fixtures | managers 34 项通过；core 71 项通过；Arch Docker smoke 1 项 |
 
 ## 验证记录
 
@@ -71,9 +74,11 @@
 - `updater_core`：70 项测试通过，11 项依赖本机软件或网络的测试保持 ignored。
 - `cargo check -p updater_core --jobs 1` 通过。
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
-- `cargo test -p updater-managers --test pacman_contract --jobs 1 -- --test-threads=1`：4 项通过，2 项环境 smoke 保持 ignored。
+- `cargo test -p updater-managers --test pacman_contract --jobs 1 -- --test-threads=1`：5 项通过，2 项环境 smoke 保持 ignored。
 - 宿主机显式运行 `local_pacman_availability_is_structured`：1 项通过。
-- Docker `archlinux:base` 显式运行 `arch_container_pacman_read_only_smoke`：1 项通过，未执行 refresh 或写事务。
+- Docker `archlinux:base` 显式运行 `arch_container_pacman_read_only_smoke`：修复前后各 1 项通过，并断言版本行包含 `Pacman v`；未执行 refresh 或写事务。
+- `cargo test -p updater_core --jobs 1 -- --test-threads=1`：71 项通过，11 项环境或网络测试保持 ignored。
+- `cargo clippy -p updater-managers -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
 
 ## 遗留项 / 下一轮
 
