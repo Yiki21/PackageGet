@@ -110,3 +110,33 @@ async fn mismatched_config_and_targets_are_rejected_before_progress() {
     assert_eq!(target_error.kind(), ManagerErrorKind::Protocol);
     assert!(events.lock().expect("progress lock").is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires a local DNF installation and RPM database"]
+async fn local_dnf_availability_and_installed_listing_smoke() {
+    let manager = DnfManager::new();
+    let config = ManagerConfig::new(manager.descriptor().id().clone());
+
+    let availability = manager
+        .availability(&config)
+        .await
+        .expect("check local DNF availability");
+    assert!(availability.is_available());
+
+    let installed = manager
+        .installed(&config)
+        .await
+        .expect("list installed RPM packages");
+    let count = manager
+        .count_installed(&config)
+        .await
+        .expect("count installed RPM packages");
+
+    assert!(!installed.is_empty());
+    assert_eq!(count, installed.len());
+    assert!(
+        installed
+            .iter()
+            .all(|package| package.manager_id == *manager.descriptor().id())
+    );
+}
