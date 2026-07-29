@@ -23,6 +23,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 updater_manager_api.workspace = true
+updater_managers.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

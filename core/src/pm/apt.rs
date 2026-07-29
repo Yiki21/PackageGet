@@ -1,150 +1,49 @@
-use std::collections::HashMap;
-
 use async_trait::async_trait;
-use tokio::process::Command;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::AptManager as DirectAptManager;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError,
-    pm::{
-        common::manager_command_path,
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct AptManager;
 
-fn command_path(config: &Config) -> String {
-    manager_command_path(config, PackageManagerType::Apt)
-}
-
 #[async_trait]
 impl PackageManager for AptManager {
-    async fn get_current_version(_config: &Config, package_name: &str) -> CoreResult<String> {
-        let output = Command::new("dpkg-query")
-            .arg("-W")
-            .arg("-f=${Version}")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(CoreError::ParseError(format!(
-                "Package {} not found",
-                package_name
-            )));
-        }
-
-        let version = String::from_utf8(output.stdout)?.trim().to_owned();
-        if version.is_empty() {
-            return Err(CoreError::ParseError(format!(
-                "Package {} has empty version",
-                package_name
-            )));
-        }
-
-        Ok(version)
+    async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
+        DirectAptManager::new()
+            .current_version(&manager_config(config), package_name)
+            .await
+            .map_err(convert_manager_error)
     }
 
-    async fn list_installed(_config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let output = Command::new("dpkg-query")
-            .arg("-W")
-            .arg("-f=${binary:Package}\t${Version}\t${binary:Summary}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(CoreError::UnknownError("dpkg-query -W failed".to_string()));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let packages = stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() < 2 {
-                    return None;
-                }
-
-                let description = parts
-                    .get(2)
-                    .map(|desc| desc.trim())
-                    .filter(|desc| !desc.is_empty())
-                    .map(ToOwned::to_owned);
-
-                Some(PackageInfo {
-                    name: parts[0].trim().to_owned(),
-                    version: parts[1].trim().to_owned(),
-                    source: PackageManagerType::Apt,
-                    description,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
-                })
-            })
-            .collect();
-
-        Ok(packages)
+    async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
+        DirectAptManager::new()
+            .installed(&manager_config(config))
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 
-    async fn count_installed(_config: &Config) -> CoreResult<usize> {
-        let output = Command::new("dpkg-query")
-            .arg("-W")
-            .arg("-f=${binary:Package}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Self::list_installed(_config).await?.len());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        Ok(stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count())
+    async fn count_installed(config: &Config) -> CoreResult<usize> {
+        DirectAptManager::new()
+            .count_installed(&manager_config(config))
+            .await
+            .map_err(convert_manager_error)
     }
 
-    async fn search_package(_config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let output = Command::new("apt-cache")
-            .arg("search")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let installed_versions = Self::installed_version_map().await?;
-
-        let packages = stdout
-            .lines()
-            .filter_map(|line| {
-                let (name, description) = line.split_once(" - ")?;
-                let name = name.trim();
-                if name.is_empty() {
-                    return None;
-                }
-
-                Some(PackageInfo {
-                    name: name.to_owned(),
-                    version: installed_versions
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| "Not Installed".to_owned()),
-                    source: PackageManagerType::Apt,
-                    description: Some(description.trim().to_owned()),
-                    size: None,
-                    install_date: None,
-                    homepage: None,
-                })
-            })
-            .collect();
-
-        Ok(packages)
+    async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
+        DirectAptManager::new()
+            .search(&manager_config(config), package_name)
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 }
 
@@ -153,49 +52,11 @@ impl AptManager {
         config: &Config,
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
-        let path = command_path(config);
-
-        if refresh {
-            let args = vec![path.clone(), "update".to_owned()];
-            run_command_with_progress("pkexec", &args, |_| {}).await?;
-        }
-
-        let output = Command::new(&path)
-            .arg("list")
-            .arg("--upgradable")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::from_command_failure(format!(
-                "apt list --upgradable failed: {}",
-                stderr.trim()
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut updates = Vec::new();
-
-        for line in stdout.lines() {
-            let Some((name, mut current_version, new_version)) = parse_upgradable_line(line) else {
-                continue;
-            };
-
-            if current_version == "unknown" {
-                current_version = Self::get_current_version(config, &name)
-                    .await
-                    .unwrap_or_else(|_| "unknown".to_owned());
-            }
-
-            updates.push(PackageUpdate {
-                name,
-                current_version,
-                new_version,
-            });
-        }
-
-        Ok(updates)
+        DirectAptManager::new()
+            .updates(&manager_config(config), refresh)
+            .await
+            .map(|updates| updates.into_iter().map(convert_package_update).collect())
+            .map_err(convert_manager_error)
     }
 
     pub async fn uninstall_packages_with_progress(
@@ -203,15 +64,13 @@ impl AptManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![path, "remove".to_owned(), "-y".to_owned()];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Uninstall,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 
     pub async fn update_packages_with_progress(
@@ -219,20 +78,8 @@ impl AptManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![
-            path,
-            "install".to_owned(),
-            "-y".to_owned(),
-            "--only-upgrade".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(config, ApiPackageAction::Update, package_names, on_progress)
+            .await
     }
 
     pub async fn install_packages_with_progress(
@@ -240,105 +87,80 @@ impl AptManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![path, "install".to_owned(), "-y".to_owned()];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
-    }
-
-    async fn installed_version_map() -> CoreResult<HashMap<String, String>> {
-        let output = Command::new("dpkg-query")
-            .arg("-W")
-            .arg("-f=${binary:Package}\t${Version}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut map = HashMap::new();
-
-        for line in stdout.lines() {
-            let Some((name, version)) = line.split_once('\t') else {
-                continue;
-            };
-            let name = name.trim();
-            let version = version.trim();
-            if !name.is_empty() && !version.is_empty() {
-                map.insert(name.to_owned(), version.to_owned());
-            }
-        }
-
-        Ok(map)
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Install,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 }
 
-fn parse_upgradable_line(line: &str) -> Option<(String, String, String)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with("Listing...") {
-        return None;
-    }
-
-    let (name, rest) = line.split_once('/')?;
-    let name = name.trim();
-    if name.is_empty() {
-        return None;
-    }
-
-    let mut parts = rest.split_whitespace();
-    let _distribution = parts.next()?;
-    let new_version = parts.next()?.to_owned();
-
-    let current_version = parse_upgradable_from(line).unwrap_or_else(|| "unknown".to_owned());
-
-    Some((name.to_owned(), current_version, new_version))
+async fn run_packages_with_progress(
+    config: &Config,
+    action: ApiPackageAction,
+    package_names: &[String],
+    mut on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    DirectAptManager::new()
+        .execute_packages_with_progress(&manager_config(config), action, package_names, |event| {
+            let (progress, command_message) = event.into_parts();
+            on_progress(CommandProgressEvent {
+                progress,
+                command_message,
+            });
+        })
+        .await
+        .map_err(convert_manager_error)
 }
 
-fn parse_upgradable_from(line: &str) -> Option<String> {
-    let marker = "[upgradable from: ";
-    let start = line.find(marker)? + marker.len();
-    let end = line[start..].find(']')? + start;
-    let value = line[start..end].trim();
-    if value.is_empty() {
-        return None;
+fn manager_config(config: &Config) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(PackageManagerType::Apt.manager_id());
+    if let Some(path) = config.get_package_path(PackageManagerType::Apt) {
+        manager_config.with_executable(path)
+    } else {
+        manager_config
     }
-
-    Some(value.to_owned())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_upgradable_line_extracts_name_and_versions() {
-        let line = "bash/jammy-updates 5.1-6ubuntu1.1 amd64 [upgradable from: 5.1-6ubuntu1]";
-        let parsed = parse_upgradable_line(line).expect("line should parse");
-
-        assert_eq!(parsed.0, "bash");
-        assert_eq!(parsed.1, "5.1-6ubuntu1");
-        assert_eq!(parsed.2, "5.1-6ubuntu1.1");
+fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source: PackageManagerType::Apt,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
     }
+}
 
-    #[test]
-    fn parse_upgradable_line_handles_missing_current_version_marker() {
-        let line = "vim/stable 2:9.1.1234 amd64";
-        let parsed = parse_upgradable_line(line).expect("line should parse");
-
-        assert_eq!(parsed.0, "vim");
-        assert_eq!(parsed.1, "unknown");
-        assert_eq!(parsed.2, "2:9.1.1234");
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
     }
+}
 
-    #[test]
-    fn parse_upgradable_line_skips_listing_header() {
-        assert!(parse_upgradable_line("Listing...").is_none());
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired => CoreError::CommandError(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Cancelled | ManagerErrorKind::Other => {
+            CoreError::UnknownError(detail)
+        }
+        _ => CoreError::UnknownError(detail),
     }
 }

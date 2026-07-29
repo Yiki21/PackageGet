@@ -31,7 +31,9 @@ mod pm;
 mod registry;
 mod storage;
 
-pub use legacy_adapter::{LegacyPackageManagerAdapter, register_legacy_managers};
+pub use legacy_adapter::{
+    LegacyPackageManagerAdapter, register_builtin_managers, register_legacy_managers,
+};
 pub use registry::{ManagerRegistry, RegistryError};
 pub use storage::{Config, PackageManagerConfig};
 
