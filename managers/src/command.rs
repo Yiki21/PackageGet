@@ -245,6 +245,17 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
     } else if contains_any(
         &detail,
         &[
+            "could not resolve host",
+            "couldn't resolve host",
+            "network is unreachable",
+            "failed to download",
+            "connection refused",
+        ],
+    ) {
+        ManagerErrorKind::Network
+    } else if contains_any(
+        &detail,
+        &[
             "permission denied",
             "not authorized",
             "authorization failed",
@@ -254,6 +265,7 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "pkexec must be setuid root",
             "must be root",
             "requires root",
+            "not allowed for user",
             "access is denied",
             "eacces",
         ],
@@ -275,6 +287,8 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "failed to init transaction",
             "unable to lock database",
             "could not lock database",
+            "another system helper transaction is already active",
+            "transaction is already in progress",
         ],
     ) {
         ManagerErrorKind::Busy
@@ -464,7 +478,10 @@ mod tests {
             ("command not found", ManagerErrorKind::CommandMissing),
             ("operation was cancelled", ManagerErrorKind::Cancelled),
             ("pkexec: canceled", ManagerErrorKind::Cancelled),
+            ("could not resolve host", ManagerErrorKind::Network),
+            ("failed to download object", ManagerErrorKind::Network),
             ("pkexec: not authorized", ManagerErrorKind::Permission),
+            ("not allowed for user", ManagerErrorKind::Permission),
             ("could not get lock", ManagerErrorKind::Busy),
             (
                 "another app is currently holding the dnf lock",
@@ -472,6 +489,10 @@ mod tests {
             ),
             ("failed to init transaction", ManagerErrorKind::Busy),
             ("unable to lock database", ManagerErrorKind::Busy),
+            (
+                "another system helper transaction is already active",
+                ManagerErrorKind::Busy,
+            ),
             ("operation timed out", ManagerErrorKind::Timeout),
             ("reboot required", ManagerErrorKind::RebootRequired),
             (

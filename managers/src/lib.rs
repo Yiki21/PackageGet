@@ -9,12 +9,14 @@
 mod apt;
 mod command;
 mod dnf;
+mod flatpak;
 mod pacman;
 mod progress;
 mod zypper;
 
 pub use apt::AptManager;
 pub use dnf::DnfManager;
+pub use flatpak::FlatpakManager;
 pub use pacman::PacmanManager;
 pub use progress::CommandProgress;
 pub use zypper::ZypperManager;
