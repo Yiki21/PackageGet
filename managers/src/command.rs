@@ -20,6 +20,7 @@ pub(crate) struct CommandSpec {
     program: PathBuf,
     args: Vec<OsString>,
     environment: Vec<(OsString, OsString)>,
+    removed_environment: Vec<OsString>,
 }
 
 impl CommandSpec {
@@ -28,6 +29,7 @@ impl CommandSpec {
             program: program.into(),
             args: Vec::new(),
             environment: Vec::new(),
+            removed_environment: Vec::new(),
         }
     }
 
@@ -50,6 +52,11 @@ impl CommandSpec {
         self
     }
 
+    pub(crate) fn env_remove(mut self, key: impl Into<OsString>) -> Self {
+        self.removed_environment.push(key.into());
+        self
+    }
+
     pub(crate) fn program(&self) -> &Path {
         &self.program
     }
@@ -60,6 +67,10 @@ impl CommandSpec {
 
     pub(crate) fn environment(&self) -> &[(OsString, OsString)] {
         &self.environment
+    }
+
+    pub(crate) fn removed_environment(&self) -> &[OsString] {
+        &self.removed_environment
     }
 }
 
@@ -177,6 +188,9 @@ pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
     command.kill_on_drop(true);
     command.args(spec.arguments());
+    for key in spec.removed_environment() {
+        command.env_remove(key);
+    }
     command.envs(spec.environment().iter().cloned());
     if let Ok(path) = env::join_paths(manager_search_directories()) {
         command.env("PATH", path);
@@ -532,12 +546,17 @@ mod tests {
     #[test]
     fn command_specs_preserve_command_local_environment() {
         let spec = CommandSpec::new("zypper")
+            .env_remove("INHERITED_SETTING")
             .env("LC_ALL", "C")
             .args(["--non-interactive", "list-updates"]);
 
         assert_eq!(
             spec.environment(),
             [(OsString::from("LC_ALL"), OsString::from("C"))]
+        );
+        assert_eq!(
+            spec.removed_environment(),
+            [OsString::from("INHERITED_SETTING")]
         );
     }
 

@@ -752,6 +752,7 @@ fn outdated_command(brew_path: &Path) -> CommandSpec {
 
 fn refresh_command(brew_path: &Path) -> CommandSpec {
     CommandSpec::new(brew_path)
+        .env_remove("HOMEBREW_NO_AUTO_UPDATE")
         .env("HOMEBREW_NO_ANALYTICS", "1")
         .env("LC_ALL", "C")
         .env("LANG", "C")

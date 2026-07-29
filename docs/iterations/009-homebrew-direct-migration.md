@@ -78,6 +78,8 @@
 - scoped write 校验 User scope、typed kind、tap、短 name、canonical reference 和不支持的 version pin；Unknown target 只保留裸名称 argv，同时通过 command-local no-auto-update/no-analytics/no-ask 避免隐式 refresh 与交互阻塞。
 - core Homebrew 已删除 JSON/text parser、timeout 与命令副本，只保留 Config V1、legacy model/progress 和 typed error 转换；mixed registry 当前为六个 direct manager、五个 legacy adapter。
 - 本机 Linuxbrew opt-in smoke 已通过 availability、installed/count parity、typed current version 与 `updates(false)`；未执行 refresh、search 或任何写事务。
+- 首轮 GitHub Actions 在 `refresh_is_explicit_and_precedes_inventory_and_outdated` 失败：runner 父环境已设置 `HOMEBREW_NO_AUTO_UPDATE`，仅在 refresh command 中“不添加”变量无法保证显式 update 语义。
+- `CommandSpec` 已增加 command-local `env_remove`，`brew update` 主动删除继承的 no-auto-update；本地通过 `HOMEBREW_NO_AUTO_UPDATE=1` 精确复现 CI 环境并验证 refresh/update/inventory/outdated 顺序。
 
 ## Git 提交
 
@@ -105,6 +107,8 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions runs `30440505954`、`30440689740`、`30440752308`：在 deterministic tests 的 Homebrew refresh environment contract 失败，根因已定位并修复。
+- `HOMEBREW_NO_AUTO_UPDATE=1 cargo test -p updater-managers --test homebrew_contract refresh_is_explicit_and_precedes_inventory_and_outdated --jobs 1 -- --exact --test-threads=1`：修复后通过。
 
 ## 遗留项 / 下一轮
 
