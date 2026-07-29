@@ -1,7 +1,7 @@
 # Iteration 008：Flatpak 直接迁移与 User/System Scope Parity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -23,7 +23,7 @@
 - [x] 增加 scope/ref/origin、NBSP size、new-build update、命令构造、conversion、registration 与 public API contracts。
 - [x] 在当前宿主机执行 opt-in 只读 smoke，验证 user/system installed、count 与 cached app updates；search 保持单独 opt-in。
 - [x] 串行通过 workspace format、check、test、clippy 与 build 完整门禁。
-- [ ] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
+- [x] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
 
 ## 目标命令契约
 
@@ -83,6 +83,8 @@
 
 - `2d5f0fc feat: add scoped Flatpak manager`
 - `a9055c2 refactor: route Flatpak through direct manager`
+- `cce7599 docs: record Flatpak migration progress`
+- `96efa83 docs: record Flatpak workspace validation`
 
 ## 验证记录
 
@@ -100,7 +102,10 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions CI run `30438378318`：通过，耗时 3 分 15 秒；format、check、deterministic tests、clippy 与 build 全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮进入 [Iteration 009：Homebrew 直接迁移与 Formula/Cask Identity](009-homebrew-direct-migration.md)。
+- Config V1 与旧 UI 仍只能保存 package name，无法完整保留 Flatpak direct target 的 scope/ref/origin；该限制留待阶段 3 的 Config V2/UI identity 迁移解决。
+- named system installation 继续显式 Unsupported，不静默映射成默认 system installation。
