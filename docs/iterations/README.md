@@ -17,4 +17,5 @@
 | 001 | 已完成 | 阶段 1：可复现的现代依赖与跨平台构建基线 | [001-phase-1-build-baseline.md](001-phase-1-build-baseline.md) |
 | 002 | 已完成 | 阶段 2：Manager API 与 Registry 基础 | [002-manager-api-registry-foundation.md](002-manager-api-registry-foundation.md) |
 | 003 | 已完成 | 阶段 2：Legacy Manager Adapter | [003-legacy-manager-adapter.md](003-legacy-manager-adapter.md) |
-| 004 | 进行中 | 阶段 2：Managers Crate 与 APT 直接迁移 | [004-managers-crate-apt-migration.md](004-managers-crate-apt-migration.md) |
+| 004 | 已完成 | 阶段 2：Managers Crate 与 APT 直接迁移 | [004-managers-crate-apt-migration.md](004-managers-crate-apt-migration.md) |
+| 005 | 进行中 | 阶段 2：DNF 直接迁移与 Progress Parity | [005-dnf-direct-migration.md](005-dnf-direct-migration.md) |

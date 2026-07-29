@@ -1,7 +1,7 @@
 # Iteration 004：Managers Crate 与 APT 直接迁移
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -17,7 +17,7 @@
 - [x] 将 core 的旧 APT 入口改为兼容 wrapper，复用新实现并完成 Config V1、model 与 progress 的反向转换，删除旧 APT 命令实现副本。
 - [x] 提供混合 built-in 注册：APT 使用直接实现，其余 10 个 manager 暂时继续使用 legacy adapter，保持 stable ID 不变。
 - [x] 增加纯离线 parser、command construction、conversion、registration 与 progress contract tests。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
 
@@ -48,6 +48,7 @@
 - 新增混合 `register_builtin_managers`：APT 注册直接实例，其余 10 个 stable ID 继续注册 legacy adapter。
 - 补齐 managers public contract、缺失 executable、空执行、target/config 防串用、parser、command、bounded progress、typed error、legacy conversion 与 mixed registry 离线测试。
 - workspace 完整本地门禁通过；全量容器复验交由 GitHub Actions，不在本机使用 `act` 重复构建相同 Rust 依赖图。
+- GitHub Actions run 30428028592 在 3 分 19 秒内通过 format、check、deterministic tests、Clippy 与 build，本轮完成。
 
 ## Git 提交
 
@@ -58,7 +59,8 @@
 | `ddc9f94` | 实现共享 command/progress 工具与直接 APT manager | managers unit test、clippy |
 | `1e0b649` | 让 core legacy APT 入口复用直接实现并加入混合注册 | core check、focused test |
 | `84301bf` | 补齐直接 APT、legacy bridge 与 mixed registry 离线 contract tests | focused test、clippy |
-| 待提交 | 记录 Iteration 004 完整本地验证 | format、check、test、clippy、build |
+| `db7e22e` | 记录 Iteration 004 完整本地验证 | format、check、test、clippy、build |
+| 待提交 | 完成本轮报告并建立 Iteration 005 计划 | 文档检查 |
 
 ## 验证记录
 
@@ -76,7 +78,10 @@
 - `cargo check --workspace --all-targets --locked --jobs 1`：通过。
 - `cargo test --workspace --all-targets --locked --jobs 1 --quiet -- --test-threads=1`：108 个测试通过，13 个环境测试 ignored。
 - `cargo build --workspace --locked --jobs 1 --quiet`：通过。
+- [GitHub Actions CI run 30428028592](https://github.com/Yiki21/PackageGet/actions/runs/30428028592)：完整质量门禁通过。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮迁移 DNF，复用当前 command layer，并将旧 DNF 两阶段 progress 解析无损移入 `updater-managers`。
+- mixed registry 将直接注册 APT 与 DNF，其余 9 个 built-in 暂时继续使用 legacy adapter。
+- 具体计划见 [Iteration 005](005-dnf-direct-migration.md)。
