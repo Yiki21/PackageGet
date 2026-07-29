@@ -1,7 +1,7 @@
 # Iteration 001：阶段 1 构建基线
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 1——建立可复现的现代依赖与跨平台构建基线
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -17,15 +17,15 @@
 - [x] 按基础库、网络/序列化、平台集成、Iced 的顺序升级依赖并审阅 lockfile。
 - [x] 将依赖真实网络或本机包管理器的测试明确标记为 ignored，保持默认测试确定性。
 - [x] 新增质量 CI 和分组 Dependabot，修正 RPM workflow 的 Cargo package 名称。
-- [ ] 串行通过 format、check、test、clippy、build 五项质量门槛。
+- [x] 串行通过 format、check、test、clippy、build 五项质量门槛。
 
 ## 已确认基线
 
 - 本机最新 stable 工具链为 Rust 1.97.1，官方 stable channel manifest 日期为 2026-07-16。
 - Iced 已使用当前稳定版 0.14.0，本轮重点是集中声明和 stable 编译兼容，不需要跨大版本迁移。
-- 当前 `.cargo/config.toml` 仍包含 `-Zthreads` 和 `-Zshare-generics`，因此只能使用 nightly。
-- 当前 RPM workflow 使用目录名 `ui`，正确的 Cargo package 名称为 `updater`。
-- 当前部分测试会访问 crates.io 或调用本机 DNF、Flatpak、Homebrew，需要从默认确定性测试中隔离。
+- 迭代开始时 `.cargo/config.toml` 仍包含 `-Zthreads` 和 `-Zshare-generics`，因此只能使用 nightly。
+- 迭代开始时 RPM workflow 使用目录名 `ui`，正确的 Cargo package 名称为 `updater`。
+- 迭代开始时部分测试会访问 crates.io 或调用本机 DNF、Flatpak、Homebrew，需要从默认确定性测试中隔离。
 
 ## 进度日志
 
@@ -46,6 +46,7 @@
 - 新增串行质量 CI、Cargo/GitHub Actions 分组 Dependabot，并修正 RPM package selector 为 `updater`。
 - 本机首次全目标测试编译耗时较长，经确认后停止本地任务，改由 GitHub Actions 完成完整 test、clippy、build。
 - 使用 nektos/act 0.2.89 成功解析并列出 CI 与 Package workflow jobs。
+- GitHub Actions run 30422965239 在 16 分 9 秒内通过全部五项质量门槛。
 
 ## Git 提交
 
@@ -56,7 +57,8 @@
 | `1285137` | 采用宽松 semver 声明并更新基础依赖组 | `cargo check` |
 | `4014565` | 更新异步、网络与序列化依赖组 | `cargo check` |
 | `8e215cd` | 更新并审阅平台集成依赖组 | `cargo check`、`cargo tree` |
-| 待提交 | 新增确定性 CI、Dependabot 与打包修复 | YAML、`cargo fmt`、`cargo check`、`act --list` |
+| `529c76a` | 新增确定性 CI、Dependabot 与打包修复 | YAML、`cargo fmt`、`cargo check`、`act --list`、GitHub Actions |
+| 待提交 | 完成本轮验证记录并建立 Iteration 002 计划 | 文档检查 |
 
 ## 验证记录
 
@@ -67,8 +69,9 @@
 - 平台集成依赖组更新后再次执行 workspace all-targets check：通过；直接依赖树已审阅。
 - 三个 GitHub 配置文件均通过本地 YAML 解析。
 - `act --list` 成功发现 CI quality、DEB、RPM、release jobs。
-- 完整 test、clippy、build：等待 GitHub Actions 结果。
+- [GitHub Actions CI run 30422965239](https://github.com/Yiki21/PackageGet/actions/runs/30422965239)：format、check、test、clippy、build 全部通过。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮进入阶段 2 的第一个可回滚切片：新增 `updater-manager-api` 公共契约和 core registry，但暂不迁移现有 UI 与内置 manager。
+- 具体计划见 [Iteration 002](002-manager-api-registry-foundation.md)。

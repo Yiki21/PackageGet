@@ -14,4 +14,5 @@
 
 | 迭代 | 状态 | 主题 | 文件 |
 | --- | --- | --- | --- |
-| 001 | 进行中 | 阶段 1：可复现的现代依赖与跨平台构建基线 | [001-phase-1-build-baseline.md](001-phase-1-build-baseline.md) |
+| 001 | 已完成 | 阶段 1：可复现的现代依赖与跨平台构建基线 | [001-phase-1-build-baseline.md](001-phase-1-build-baseline.md) |
+| 002 | 进行中 | 阶段 2：Manager API 与 Registry 基础 | [002-manager-api-registry-foundation.md](002-manager-api-registry-foundation.md) |
