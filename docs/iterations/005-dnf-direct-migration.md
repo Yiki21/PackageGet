@@ -23,7 +23,7 @@
 ## 非目标
 
 - 本轮不迁移 Pacman、Zypper、Flatpak、Homebrew 或语言工具 manager。
-- 本轮不修改 UI identity、Config V2 或 manager settings 页面。
+- 本轮不修改 UI identity、Config schema 或 manager settings 页面。
 - 本轮不改变 DNF 的 stop-on-failure、刷新选择或提权模型。
 - 本轮不把本机只读 smoke test 误报为完整安装/升级事务验收。
 

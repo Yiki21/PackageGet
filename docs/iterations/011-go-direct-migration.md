@@ -37,7 +37,7 @@
 
 - 本轮不迁移 npm、pnpm 或 pipx。
 - 本轮不管理 Go toolchain、`go.mod` dependency 或 workspace module updates。
-- 本轮不修改 Config V2、UI identity 或 manager settings 页面。
+- 本轮不修改 Config schema、UI identity 或 manager settings 页面。
 - 本轮不执行真实 `go install` 或删除宿主 binary。
 - 本轮不写死 Go 或依赖 crate 的最低 minor/patch版本。
 

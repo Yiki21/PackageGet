@@ -52,7 +52,7 @@
 ## 非目标
 
 - 本轮不迁移 Homebrew 或语言工具 manager。
-- 本轮不引入新的 package identity 公共类型或修改 Config V2/UI identity。
+- 本轮不引入新的 package identity 公共类型或修改 Config schema/UI identity。
 - 本轮不支持 Flatpak runtime 更新，installed/updates/search 均保持 app 语义。
 - 本轮不在自动测试中安装、更新或卸载真实 Flatpak 应用。
 - 本轮不为 named system installation 扩展 manager-api；后续有真实需求再设计。
@@ -107,5 +107,5 @@
 ## 遗留项 / 下一轮
 
 - 下一轮进入 [Iteration 009：Homebrew 直接迁移与 Formula/Cask Identity](009-homebrew-direct-migration.md)。
-- Config V1 与旧 UI 仍只能保存 package name，无法完整保留 Flatpak direct target 的 scope/ref/origin；该限制留待阶段 3 的 Config V2/UI identity 迁移解决。
+- 当时的Config与旧UI仍只能保存package name，无法完整保留Flatpak direct target的scope/ref/origin；该限制留待阶段3的Config/UI identity迁移解决。
 - named system installation 继续显式 Unsupported，不静默映射成默认 system installation。

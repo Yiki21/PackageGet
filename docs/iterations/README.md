@@ -28,4 +28,4 @@
 | 012 | 已完成 | 阶段 2：npm/pnpm 直接迁移与 Global Package Identity | [012-node-global-direct-migration.md](012-node-global-direct-migration.md) |
 | 013 | 已完成 | 阶段 2：pipx 直接迁移与 Venv/Source Identity | [013-pipx-direct-migration.md](013-pipx-direct-migration.md) |
 | 014 | 已完成 | 阶段 2：Direct Registry Cutover 与 Legacy Adapter 清理 | [014-direct-registry-cutover.md](014-direct-registry-cutover.md) |
-| 015 | 进行中 | 阶段 3：Config V2 直接切换 | [015-config-v2.md](015-config-v2.md) |
+| 015 | 进行中 | 阶段 3：Config 直接切换 | [015-config-direct-cutover.md](015-config-direct-cutover.md) |

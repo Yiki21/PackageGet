@@ -23,7 +23,7 @@
 
 - 本轮不移动 `core/src/pm/*` 到 `updater-managers` crate。
 - 本轮不删除旧宏 dispatcher、静态 trait 或 `PackageManagerType`。
-- 本轮不让 UI 改用 `ManagerId`，也不迁移 Config V2。
+- 本轮不让 UI 改用 `ManagerId`，也不替换 Config schema。
 - 本轮不改变写操作的 manager group 串行与停止语义。
 
 ## 设计约束

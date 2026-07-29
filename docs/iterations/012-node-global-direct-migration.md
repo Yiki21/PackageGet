@@ -37,7 +37,7 @@
 - 本轮不迁移pipx，也不管理project-local `package.json`、workspace或lockfile依赖。
 - 本轮不切换npm registry、不修改auth token、`.npmrc`、pnpm config或Corepack配置。
 - 本轮不执行真实global package写操作。
-- 本轮不修改Config V2、UI identity或manager settings页面。
+- 本轮不修改Config schema、UI identity或manager settings页面。
 - 本轮不写死Node.js、npm、pnpm或Rust依赖的最低minor/patch版本。
 
 ## 设计约束

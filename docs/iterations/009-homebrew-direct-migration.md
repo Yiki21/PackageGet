@@ -45,7 +45,7 @@
 
 - 本轮不迁移 Cargo、Go、npm、pnpm 或 pipx。
 - 本轮不实现 Winget，也不展开阶段 4 的完整 Windows/macOS GUI 支持。
-- 本轮不修改 Config V2、UI identity 或 manager settings 页面。
+- 本轮不修改 Config schema、UI identity 或 manager settings 页面。
 - 本轮不执行真实 install、upgrade、uninstall 或 tap mutation。
 - 本轮不写死某个 Homebrew 最低 minor/patch 版本；只依赖经 fixtures 与 smoke 验证的能力，并对缺失能力返回 typed error。
 

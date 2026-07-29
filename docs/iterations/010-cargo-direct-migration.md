@@ -45,7 +45,7 @@
 
 - 本轮不迁移 Go、npm、pnpm 或 pipx。
 - 本轮不实现 Cargo workspace dependency 更新、`cargo update` 或 Rust toolchain 更新。
-- 本轮不修改 Config V2、UI identity 或 manager settings 页面。
+- 本轮不修改 Config schema、UI identity 或 manager settings 页面。
 - 本轮不执行真实 `cargo install`、force reinstall 或 uninstall。
 - 本轮不写死 Cargo、crates.io API client 或依赖 crate 的最低 minor/patch版本。
 
@@ -105,4 +105,4 @@
 
 - 下一轮进入 [Iteration 011：Go 直接迁移与 Module/Binary Identity](011-go-direct-migration.md)。
 - `cargo install --list` 仍是 primary CLI inventory；更完整的 `.crates2.json` tracking metadata 没有成为硬依赖，避免锁定 Cargo 私有文件版本。
-- custom registry、path、git 与 unknown source 暂不支持 install/update重放，只支持安全 uninstall 和只读展示；Config V2/UI identity 留待阶段 3。
+- custom registry、path、git 与 unknown source 暂不支持 install/update重放，只支持安全 uninstall 和只读展示；Config/UI identity 留待阶段 3。

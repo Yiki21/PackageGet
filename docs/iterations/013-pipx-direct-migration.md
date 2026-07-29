@@ -90,4 +90,4 @@
 
 - pipx已成为direct built-in，当前全部内置manager均由`register_builtin_managers`注册direct implementation。
 - Config V1、`PackageManagerType`、静态wrapper与`LegacyPackageManagerAdapter`仍存在；Iteration 014先移除已无生产调用的legacy adapter并收敛direct registry入口。
-- Config V2与UI `ManagerId`迁移继续作为后续独立迭代，避免把配置持久化、UI key和执行引擎同时重写。
+- Config与UI `ManagerId`迁移继续作为后续独立迭代，避免把配置持久化、UI key和执行引擎同时重写。

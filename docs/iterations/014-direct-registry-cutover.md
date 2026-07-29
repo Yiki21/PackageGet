@@ -7,7 +7,7 @@
 
 ## 本轮目标
 
-全部内置manager已经迁入`updater-managers`并由对象安全API直接注册，但core仍公开`LegacyPackageManagerAdapter`与`register_legacy_managers`，注册文件中也保留永远不会命中的legacy fallback循环。本轮移除这条已失去生产调用方的过渡路径，冻结单一direct built-in catalog/registration契约，为后续Config V2和UI `ManagerId`迁移提供稳定入口。
+全部内置manager已经迁入`updater-managers`并由对象安全API直接注册，但core仍公开`LegacyPackageManagerAdapter`与`register_legacy_managers`，注册文件中也保留永远不会命中的legacy fallback循环。本轮移除这条已失去生产调用方的过渡路径，冻结单一direct built-in catalog/registration契约，为后续Config identity和UI `ManagerId`迁移提供稳定入口。
 
 ## 实施计划
 
@@ -32,7 +32,7 @@
 
 ## 非目标
 
-- 本轮不实施Config V2持久化、backup/restore或V1到V2原子迁移。
+- 本轮不实施Config schema替换或原子存储。
 - 本轮不把UI selection、HashMap/HashSet key从`PackageManagerType`迁为`ManagerId`。
 - 本轮不删除静态manager wrapper或closed enum dispatcher；这些必须与Config/UI identity迁移协调完成。
 - 本轮不新增Winget、Windows/macOS发布物或修改Iced UI。
@@ -84,4 +84,4 @@
 
 - direct built-in catalog与core registration已成为唯一built-in bootstrap路径；registry侧legacy adapter已完全删除。
 - Config V1、`PackageManagerType`与静态manager wrapper仍是UI兼容边界，未在本轮扩大修改范围。
-- Iteration 015进入Config V2 schema、V1无损迁移、未知ManagerId保留、backup与原子写；UI identity迁移继续拆分实施。
+- Iteration 015进入Config schema直接替换、未知ManagerId保留与原子写；UI identity迁移继续拆分实施。

@@ -27,7 +27,7 @@
 - 本轮不引入 `checkupdates`、`expac` 等额外 Arch 工具依赖。
 - 本轮不重新设计现有 `pacman -Sy` refresh 或特定 package update 策略。
 - 本轮不在宿主机或容器内运行 `pacman -Sy`、安装、升级、删除或任何 privileged smoke transaction。
-- 本轮不修改 UI identity、Config V2 或 manager settings 页面。
+- 本轮不修改 UI identity、Config schema 或 manager settings 页面。
 
 ## 设计约束
 

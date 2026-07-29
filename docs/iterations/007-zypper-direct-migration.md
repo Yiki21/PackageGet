@@ -47,7 +47,7 @@
 - 本轮不从文本表格切换到 Zypper XML 输出，也不新增 XML parser 依赖。
 - 本轮不改变既有 `--non-interactive`、`-y`、refresh 或 manager-group 串行策略。
 - 本轮不在宿主机或容器内执行 refresh、search、update listing 或任何写事务 smoke。
-- 本轮不修改 Config V2、UI identity 或 manager settings 页面。
+- 本轮不修改 Config schema、UI identity 或 manager settings 页面。
 
 ## 设计约束
 

@@ -22,7 +22,7 @@
 ## 非目标
 
 - 本轮不迁移 DNF、Pacman、Zypper、Flatpak、Homebrew 或语言工具 manager。
-- 本轮不让 UI 改用 `ManagerId`，也不迁移 Config V2。
+- 本轮不让 UI 改用 `ManagerId`，也不替换 Config schema。
 - 本轮不改变 APT refresh、`pkexec` 提权、批量执行或 stop-on-failure 语义。
 - 本轮不新增运行时动态插件加载。
 

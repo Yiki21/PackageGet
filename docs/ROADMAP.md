@@ -83,9 +83,9 @@ manager-api/**、managers/**、docs/manager-authoring.md。
 
 ### 阶段 3：迁移配置、UI identity 和 manager 设置
 
-1.  引入带 format_version 的 Config V2，将 manager identity 从序列化 Rust enum 直接改为 ManagerId；磁盘只保留
+1.  直接替换Config schema，将manager identity从序列化Rust enum改为ManagerId；磁盘只保留
     managers: Vec<ManagerConfig> 和对应 manager settings，不保留 system_manager、app_managers、go_bin_dir 等旧字段或兼容投影。
-2.  Config V2-only loader拒绝缺少版本、版本不受支持、重复manager ID或损坏的config.json，不猜测或迁移旧格式；保存使用同目录临时文件和原子替换。未注册的第三方manager
+2.  Config loader拒绝缺少必需字段、未知顶层字段、重复manager ID或损坏的config.json，不增加版本判别或迁移路径；保存使用同目录临时文件和原子替换。未注册的第三方manager
     配置不删除，而是保留为 disabled/missing 状态。
 3.  将 UI 中用 PackageManagerType 作为 HashMap/HashSet/selection key 的地方逐页迁为 ManagerId，名称、说明、平台和 capability 全部通过 registry/catalog
     解析；移除 Finding/Updates/Installed 中 DNF 作为 fallback display manager 的假设。
@@ -96,7 +96,7 @@ manager-api/**、managers/**、docs/manager-authoring.md。
 - 支持多个配置 manager，不再把“system/app”类别当成执行策略；
 - manager 特有 settings 先由 built-in ID 对应的受控编辑器处理，公共 API 不依赖 Iced。
 
-5.  为 Config load error 增加可见启动恢复界面，提供 Retry、打开配置目录、经确认后重新检测/恢复备份；不再只在 ui/src/app.rs::ConfigLoaded 里写日志后停住。
+5.  为 Config load error 增加可见启动恢复界面，提供 Retry、打开配置目录、经确认后重新检测/重置配置；不再只在 ui/src/app.rs::ConfigLoaded 里写日志后停住。
 6.  Activity history 后续记录 ManagerId 与时间戳；继续兼容旧 display-name 记录，并保留现有上限和隐私脱敏。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
@@ -179,7 +179,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 自动化测试
 
 - updater-manager-api：外部 fake manager 的对象安全实现、capability、progress、typed errors。
-- updater_core：registry 重复 ID/稳定排序、Config V1→V2、未知 ID 保留、原子恢复、串行 manager ordering、stop-on-failure、partial success、在下一组前取消。
+- updater_core：registry重复ID/稳定排序、Config schema校验、未知ID保留、原子替换、串行manager ordering、stop-on-failure、partial success、在下一组前取消。
 - updater-managers：每个 manager 的离线 parser fixture、命令构造、平台注册；真实网络/本机 package manager 测试保持 opt-in。
 - updater：breakpoint/layout、dirty Settings、stale request rejection、确认计划冻结、Activity retention/redaction、status outcome、shortcut capture。
 - CI target matrix 至少覆盖 Linux Wayland/X11 编译、Windows x86_64、macOS arm64/x86_64；平台 smoke test

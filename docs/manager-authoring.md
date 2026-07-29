@@ -105,6 +105,8 @@ registry.register(Arc::new(ExampleManager::new()))?;
 - ID使用稳定的小写namespace格式，例如`org.example:packages`；发布后不要复用ID表示另一种manager。
 - descriptor只广告已经实现并有测试保护的capability。
 - `ManagerConfig.id`和每个`PackageTarget.manager_id`必须在边界验证。
+- Config要求`ManagerConfig.settings`为JSON object；manager拥有其内部schema并负责typed解析与校验，core只负责不透明保存。
+- manager settings升级必须由manager自身保持兼容；不要把manager私有字段提升为Config顶层字段。
 - `PackageInfo.name`与`PackageTarget.name`使用manager真实write identity；展示别名放在metadata/origin中。
 - 所有write target先整组验证，再开始命令与progress，防止部分写入。
 - manager内部可以批处理或逐项串行，但不能改变core的跨manager串行语义。
@@ -112,3 +114,4 @@ registry.register(Arc::new(ExampleManager::new()))?;
 - 默认测试离线；真实宿主或网络smoke必须显式`#[ignore]`且保持只读。
 
 仓库中的可执行外部manager契约测试见`core/tests/manager_registry.rs`，built-in catalog契约见`managers/tests/builtin_catalog.rs`。
+Config磁盘schema和失败语义见[`configuration.md`](configuration.md)。

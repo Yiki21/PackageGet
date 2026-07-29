@@ -132,4 +132,5 @@ Additional notes:
 
 - Operations that install, remove, or update system packages request elevated privileges through `pkexec`
 - Configuration is stored in `updater/config.json` under the user configuration directory
+- See [Configuration](docs/configuration.md) for the file schema and reset instructions
 - If a package manager is not detected, you can specify its executable path manually from the settings page

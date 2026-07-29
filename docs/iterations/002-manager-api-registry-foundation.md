@@ -23,7 +23,7 @@
 
 - 本轮不迁移 `core/src/pm/*` 的现有 manager 实现。
 - 本轮不删除 `PackageManagerType`、宏 dispatcher 或旧静态 trait。
-- 本轮不修改 UI identity、Config V2、平台注册逻辑或运行时插件协议。
+- 本轮不修改 UI identity、Config schema、平台注册逻辑或运行时插件协议。
 
 ## 设计约束
 
