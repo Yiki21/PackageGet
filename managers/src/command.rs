@@ -241,6 +241,9 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "holding the yum lock",
             "holding the dnf lock",
             "system management is locked",
+            "failed to init transaction",
+            "unable to lock database",
+            "could not lock database",
         ],
     ) {
         ManagerErrorKind::Busy
@@ -434,6 +437,8 @@ mod tests {
                 "another app is currently holding the dnf lock",
                 ManagerErrorKind::Busy,
             ),
+            ("failed to init transaction", ManagerErrorKind::Busy),
+            ("unable to lock database", ManagerErrorKind::Busy),
             ("operation timed out", ManagerErrorKind::Timeout),
             ("reboot required", ManagerErrorKind::RebootRequired),
             (

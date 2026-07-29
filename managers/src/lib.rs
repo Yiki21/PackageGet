@@ -9,8 +9,10 @@
 mod apt;
 mod command;
 mod dnf;
+mod pacman;
 mod progress;
 
 pub use apt::AptManager;
 pub use dnf::DnfManager;
+pub use pacman::PacmanManager;
 pub use progress::CommandProgress;
