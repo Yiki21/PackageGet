@@ -11,18 +11,18 @@
 
 ## 实施计划
 
-- [x] 审计当前 stable Go 的 `go env GOBIN/GOPATH`、`go version -m`、`go list -m -versions` 与 `go install module@version` 输出和错误行为。
+- [x] 审计当前 stable Go 的 `go env GOBIN/GOPATH`、`go version -m`、`go list -m -versions` 与 `go install PACKAGE_PATH@version` 输出和错误行为。
 - [x] 冻结 module/package/binary identity、`PackageOrigin` reference、User scope 与 legacy Unknown compatibility grammar。
-- [ ] 直接实现 descriptor、availability、current version、installed/count、updates、exact module search 与统一 execute。
-- [ ] 使用 validated build-info parser 保留 module path、package path、binary path/version；malformed 或缺失 metadata 不静默伪造 registry package。
-- [ ] GOBIN 解析优先 manager setting，再使用 `go env GOBIN`，随后使用第一个 GOPATH/bin；空值、非 UTF-8、多 GOPATH 与 filesystem errors 返回稳定 typed result。
-- [ ] installed directory traversal 使用确定性排序、普通文件边界和有界 metadata probing；单个 binary probe失败不能被无条件吞掉。
-- [ ] updates 只查询具有可重放 module identity 的 binary，固定串行上限，明确 devel/pseudo/prerelease/replace metadata 的比较边界。
-- [ ] exact module search 使用 `go list -m -versions MODULE`，命令失败、empty/no-version 与 malformed output不伪造成通用目录搜索。
-- [ ] write 冻结 `go install MODULE@VERSION|latest` 与 command-local `GOBIN`；uninstall 只删除已验证属于 configured GOBIN 的 binary target，防止 path traversal/任意文件删除。
-- [ ] 将 core Go 收缩为 Config V1、`go_bin_dir` setting、model、progress 与 typed error wrapper，并更新 mixed registry。
-- [ ] 增加 fake Go、temporary GOBIN、build-info/versions fixtures、module/binary collision、path safety、command/env、conversion、registration 与 public contracts。
-- [ ] 执行显式 opt-in 宿主只读 smoke；不执行真实 install、update 或 binary removal。
+- [x] 直接实现 descriptor、availability、current version、installed/count、updates、exact module search 与统一 execute。
+- [x] 使用 validated build-info parser 保留 module path、package path、binary path/version；malformed 或缺失 metadata 不静默伪造 registry package。
+- [x] GOBIN 解析优先 manager setting，再使用 `go env GOBIN`，随后使用第一个 GOPATH/bin；空值、非 UTF-8、多 GOPATH 与 filesystem errors 返回稳定 typed result。
+- [x] installed directory traversal 使用确定性排序、普通文件边界和有界 metadata probing；单个 binary probe失败不能被无条件吞掉。
+- [x] updates 只查询具有可重放 module identity 的 binary，固定串行上限，明确 devel/pseudo/prerelease/replace metadata 的比较边界。
+- [x] exact module search 使用 `go list -m -versions MODULE`，命令失败、empty/no-version 与 malformed output不伪造成通用目录搜索。
+- [x] write 冻结 `go install PACKAGE_PATH@VERSION|latest` 与 command-local `GOBIN`；uninstall 只删除已验证属于 configured GOBIN 的 binary target，防止 path traversal/任意文件删除。
+- [x] 将 core Go 收缩为 Config V1、`go_bin_dir` setting、model、progress 与 typed error wrapper，并更新 mixed registry。
+- [x] 增加 fake Go、temporary GOBIN、build-info/versions fixtures、module/binary collision、path safety、command/env、conversion、registration 与 public contracts。
+- [x] 执行显式 opt-in 宿主只读 smoke；不执行真实 install、update 或 binary removal。
 - [ ] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
 
 ## Identity 与安全边界
@@ -64,11 +64,19 @@
 - identity 冻结为 binary display name + `PackageOrigin.name=MODULE_PATH` + `PackageOrigin.reference=package:PACKAGE_PATH` + User scope。`cmd/stringer` 类 package path与module path不同，二者必须同时保留。
 - `go list -m -versions -json MODULE` 返回 typed module path与版本列表；latest update查询使用 `go list -m -json MODULE@latest` 的 `Version`，避免仅取文本最后一个 token。devel、replace、missing module version不产生可重放的registry update。
 - write 冻结为 command-local `GOBIN=RESOLVED_BIN_DIR go install PACKAGE_PATH@VERSION|latest`；scoped uninstall只允许validated binary basename且必须位于resolved GOBIN内，拒绝路径分隔符、symlink与目录。
+- `managers/src/go.rs` 已完成 direct implementation，read path统一使用 `go env -json`、`go version -m -json`、`go list -m ... -json` typed schema，不再保留 regex/text parser。
+- installed inventory只枚举GOBIN直接 regular files并排序；明确的 `not a Go executable` 可跳过，其他command/timeout/JSON/filesystem failure均传播typed error。
+- updates使用 `MODULE@latest` typed response与 semver 1.x比较，只在available大于installed时产生update；devel与replacement build只读展示，不产生可能降级或错误来源的update。
+- direct target使用binary display name、module origin与 `package:PACKAGE_PATH` reference；legacy binary update会先通过inventory唯一解析真实package path，不再生成错误的 `go install BINARY@latest`。
+- uninstall在删除前重新解析当前inventory、核对typed origin、basename、regular file、canonical GOBIN parent与symlink边界；Unknown短名同样不能绕过inventory。
+- core Go已删除regex、directory traversal与command副本，只保留Config V1、`go_bin_dir` setting、legacy model/progress和typed error转换；mixed registry当前为8个direct manager、3个legacy adapter。
+- 本机opt-in smoke已通过Go availability、真实GOBIN的gopls/gup/kind build-info与installed/count parity，未执行network query或任何写操作。
 
 ## Git 提交
 
 - Cargo回归修复检查点：`3d9be46 fix: decode crates.io package metadata`。
-- Go CLI/identity审计检查点：待提交。
+- Go CLI/identity审计检查点：`787fd0d docs: audit Go manager contracts`。
+- Go direct/core migration检查点：`4d92ba2 feat: migrate Go to direct manager`。
 
 ## 验证记录
 
@@ -81,6 +89,12 @@
 - `go env GOBIN GOPATH GOMODCACHE GOPROXY`：只读成功。
 - `go version -m -json`：对本机 gopls/gup/kind只读成功，确认 package/module/version schema。
 - `go list -m -versions -json github.com/nao1215/gup` 与 `go list -m -json github.com/nao1215/gup@latest`：只读成功。
+- `cargo test -p updater-managers --test go_contract --jobs 1 -- --test-threads=1`：7 passed，1 ignored。
+- `cargo test -p updater-managers --lib --jobs 1 -- --test-threads=1`：41 passed。
+- `cargo test -p updater-managers --test go_contract host_go_read_only_smoke_is_explicitly_opt_in --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：1 passed。
+- `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：61 passed。
+- `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：9 passed。
+- `cargo clippy -p updater-managers -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 
