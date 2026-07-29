@@ -11,8 +11,8 @@
 
 ## 实施计划
 
-- [ ] 分别审计当前stable npm与pnpm的availability、global root/prefix、installed、outdated、search及write命令；允许sub agent并行收集只读证据，集成改动保持线性提交。
-- [ ] 冻结`builtin:npm`与`builtin:pnpm` descriptor、平台、capabilities、User scope、registry origin和scoped package name grammar。
+- [x] 分别审计当前stable npm与pnpm的availability、global root/prefix、installed、outdated、search及write命令；允许sub agent并行收集只读证据，集成改动保持线性提交。
+- [x] 冻结`builtin:npm`与`builtin:pnpm` descriptor、平台、capabilities、User scope、registry origin和scoped package name grammar。
 - [ ] 为npm建立typed installed/outdated/search schema、退出码边界、deterministic ordering与malformed/empty response契约。
 - [ ] 为pnpm建立独立typed installed/outdated/search schema，明确object/array差异、global virtual store/path字段和非零退出行为。
 - [ ] 明确global package size只从validated package path读取；filesystem error、symlink和package path越界不能静默伪造size。
@@ -56,14 +56,22 @@
 - 当前legacy `core/src/pm/npm.rs`同时实现npm/pnpm，并使用宽泛`serde_json::Value`接受object/array；search JSON解析失败会被转换为空结果，协议错误边界需要收紧。
 - 当前outdated逻辑在stdout可解析时可能忽略非零status；新实现必须分别冻结npm/pnpm的no-update与failure contract。
 - 当前write已区分npm `install/uninstall -g`和pnpm `add/remove -g`，但target仍只有字符串；本轮补齐scoped name、origin、version与option-like input validation。
+- 本机只读审计确认npm global inventory为单个root object加package-name keyed dependencies；pnpm为root array加dependencies map。两者都必须保留完整`@scope/name`，不能继续用宽泛object/array猜测同一schema。
+- npm无更新为exit 0加`{}`，存在更新时为exit 1加严格outdated object，且同名项可能是one-or-many；只有这两种组合可视为成功。pnpm无更新为exit 0加`{}`，其他非零status不能因stdout可解析而放行。
+- npm/pnpm search均返回array且是宽匹配；query必须使用各自明确的参数边界，invalid JSON不能转为空结果。不可达registry会阻塞，所有network read command必须使用kill-on-drop的固定timeout。
+- installed path只作为size和local-link证据：npm path必须匹配global root下由完整package name推导的路径；pnpm path可包含global instance/virtual-store布局。path不得进入identity或write target，symlink/link package不得被跟随计算size。
+- identity冻结为完整registry package name加User scope。installed origin标记manager global inventory，不武断声称registry；outdated/search origin记录当前配置registry，并使用`package:FULL_NAME` reference。
+- write只接受validated registry package name和可选version/tag：拒绝空值、option-like name、额外slash、path/git/file/url/alias spec。scoped name的首个`@`属于scope，版本suffix只能在完整name之后构造。
 
 ## Git 提交
 
 - Iteration 012计划检查点：本次提交（`docs: complete Go iteration and plan npm pnpm`）。
+- npm/pnpm CLI与identity审计检查点：待提交。
 
 ## 验证记录
 
-- 待实施后填写。
+- npm只读审计：`npm --version`、`node --version`、`npm prefix -g`、`npm root -g`、`npm config get registry`、global list/outdated/search均完成；版本仅为本次宿主证据，不写入最低版本约束。
+- pnpm只读审计：`pnpm --version`、resolved global root/bin/store、registry、global list/outdated/search均完成；未执行install、update、remove或配置变更。
 
 ## 遗留项 / 下一轮
 
