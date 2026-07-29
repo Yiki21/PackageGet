@@ -1,7 +1,7 @@
 # Iteration 005：DNF 直接迁移与 Progress Parity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -18,7 +18,7 @@
 - [x] 更新 mixed built-in 注册：APT、DNF 使用直接实现，其余 9 个 manager 继续使用 legacy adapter。
 - [x] 增加纯离线 fixture/parser、command construction、progress phase、conversion 与 registration contract tests。
 - [x] 在本机 DNF 可用时执行只读 availability/listing smoke test，不运行安装、升级、删除或 privileged transaction。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
 
@@ -49,7 +49,8 @@
 - 根据本机编辑器反馈，将仓库 toolchain override 与 GitHub Actions 统一改为不写死 patch 版本的 `stable` channel，并在本地声明 `rust-analyzer` 组件。
 - direct DNF integration contract 已覆盖 descriptor/elevation、离线 missing executable、空批次边界事件及错配 config/target 拒绝路径。
 - 本机 DNF5/RPM 只读 smoke 已通过 direct manager 的 availability、installed 与 count 路径；未执行 refresh、search、check-upgrade、`pkexec` 或写事务。
-- 全工作区已在 `stable` toolchain 下串行通过 format、all-targets check、确定性测试、clippy 与 build；等待 GitHub Actions 对相同门禁复验。
+- 全工作区已在 `stable` toolchain 下串行通过 format、all-targets check、确定性测试、clippy 与 build。
+- GitHub Actions CI `30430676230` 复验全绿，用时 16m58s；stable toolchain、确定性测试及最终 build 均通过。
 
 ## Git 提交
 
@@ -61,7 +62,7 @@
 | `7d9caaa` | 改用 stable channel 并补齐本地 rust-analyzer component | `rustup show active-toolchain`；`rust-analyzer --version`；`cargo check -p updater-managers --jobs 1` |
 | `4a8af32` | 增加 direct DNF 离线 integration contracts | `cargo test -p updater-managers --all-targets --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
 | `c2f1087` | 增加默认 ignored 的本机 DNF 只读 smoke test | `cargo test -p updater-managers --test dnf_contract local_dnf_availability_and_installed_listing_smoke --jobs 1 -- --ignored --test-threads=1` |
-| 待提交 | 记录 Iteration 005 全工作区本地门禁 | format、check、116 passed / 12 ignored、clippy、build |
+| `3591dca` | 记录 Iteration 005 全工作区本地门禁 | format、check、116 passed / 12 ignored、clippy、build；GitHub Actions `30430676230` |
 
 ## 验证记录
 
@@ -81,4 +82,5 @@
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮进入 [Iteration 006：Pacman 直接迁移与 Arch Transaction Parity](006-pacman-direct-migration.md)。
+- DNF 的真实安装、升级、删除及 privileged transaction 仍未执行；本轮验收明确限定为离线 contract 与只读本机 smoke。
