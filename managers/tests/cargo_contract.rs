@@ -90,6 +90,45 @@ async fn serve_once(status: &str, body: &str) -> (String, JoinHandle<String>) {
     (format!("http://{address}/api/v1/"), task)
 }
 
+async fn serve_truncated_then(body: &str) -> (String, JoinHandle<usize>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind retry registry");
+    let address = listener.local_addr().expect("retry registry address");
+    let body = body.to_owned();
+    let task = tokio::spawn(async move {
+        for attempt in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("accept retry request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1_024];
+            loop {
+                let read = stream.read(&mut buffer).await.expect("read retry request");
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            if attempt == 0 {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{")
+                    .await
+                    .expect("write truncated response");
+            } else {
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write retry response");
+            }
+        }
+        2
+    });
+    (format!("http://{address}/api/v1/"), task)
+}
+
 fn config_with_api(manager: &CargoManager, executable: &PathBuf, api: &str) -> ManagerConfig {
     let mut config =
         ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
@@ -185,7 +224,7 @@ async fn updates_query_only_crates_io_and_freeze_registry_origin() {
     let (_directory, executable) = inventory_cargo();
     let (api, request_task) = serve_once(
         "200 OK",
-        r#"{"crate":{"id":"ripgrep","max_version":"15.0.0-beta.1","max_stable_version":"14.2.0","description":"search","homepage":null,"repository":"https://example.test/rg"}}"#,
+        r#"{"crate":{"name":"ripgrep","max_version":"15.0.0-beta.1","max_stable_version":"14.2.0","description":"search","homepage":null,"repository":"https://example.test/rg"}}"#,
     )
     .await;
     let config = config_with_api(&manager, &executable, &api);
@@ -218,7 +257,7 @@ async fn search_uses_structured_query_encoding_and_typed_schema() {
     let (_directory, executable) = inventory_cargo();
     let (api, request_task) = serve_once(
         "200 OK",
-        r#"{"crates":[{"id":"cargo-edit","max_version":"0.14.0-beta.1","max_stable_version":"0.13.7","description":"edit Cargo.toml","homepage":null,"repository":"https://example.test/edit"}]}"#,
+        r#"{"crates":[{"name":"cargo-edit","max_version":"0.14.0-beta.1","max_stable_version":"0.13.7","description":"edit Cargo.toml","homepage":null,"repository":"https://example.test/edit"}]}"#,
     )
     .await;
     let config = config_with_api(&manager, &executable, &api);
@@ -270,7 +309,7 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
 
     let (schema_api, schema_task) = serve_once(
         "200 OK",
-        r#"{"crates":[{"id":"cargo-edit","description":"missing version"}]}"#,
+        r#"{"crates":[{"name":"cargo-edit","description":"missing version"}]}"#,
     )
     .await;
     let schema = manager
@@ -282,6 +321,26 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
         .expect_err("surface invalid registry schema");
     assert_eq!(schema.kind(), ManagerErrorKind::Protocol);
     schema_task.await.expect("schema request task");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn transient_response_body_failure_is_retried_once() {
+    let manager = CargoManager::new();
+    let (_directory, executable) = inventory_cargo();
+    let (api, request_task) = serve_truncated_then(
+        r#"{"crates":[{"name":"bluetui","max_version":"0.8.0","max_stable_version":"0.8.0"}]}"#,
+    )
+    .await;
+    let config = config_with_api(&manager, &executable, &api);
+
+    let packages = manager
+        .search(&config, "bluetui")
+        .await
+        .expect("retry transient response body failure");
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].name, "bluetui");
+    assert_eq!(request_task.await.expect("retry request task"), 2);
 }
 
 #[cfg(unix)]
@@ -417,5 +476,27 @@ async fn host_cargo_read_only_smoke() -> Result<(), updater_manager_api::Manager
             package.version
         );
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires read-only access to the live crates.io API"]
+async fn crates_io_bluetui_detail_read_only_smoke() -> Result<(), updater_manager_api::ManagerError>
+{
+    let manager = CargoManager::new();
+    let (_directory, executable) = fake_cargo(
+        r#"#!/bin/sh
+if [ "$1" = "install" ] && [ "$2" = "--list" ]; then
+  printf 'bluetui v0.8.0:\n    bluetui\n'
+  exit 0
+fi
+exit 2
+"#,
+    );
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+
+    let updates = manager.updates(&config, false).await?;
+    assert!(updates.is_empty());
     Ok(())
 }

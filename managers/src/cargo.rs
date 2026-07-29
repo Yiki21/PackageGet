@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use updater_manager_api::{
     AuthorizationHint, ManagerAvailability, ManagerCapabilities, ManagerCapability,
     ManagerCategory, ManagerConfig, ManagerDescriptor, ManagerError, ManagerErrorKind, ManagerId,
@@ -31,6 +31,7 @@ const CRATES_IO_INDEX: &str = "https://github.com/rust-lang/crates.io-index";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Direct `updater-manager-api` implementation for Cargo-installed binaries.
 #[derive(Debug, Clone)]
@@ -605,6 +606,26 @@ impl CargoRegistryClient {
         &self,
         request: reqwest::RequestBuilder,
     ) -> ManagerResult<T> {
+        let retry = request.try_clone();
+        match self.request_once(request).await {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ManagerErrorKind::Network | ManagerErrorKind::Timeout
+                ) && retry.is_some() =>
+            {
+                sleep(TRANSIENT_RETRY_DELAY).await;
+                self.request_once(retry.expect("retry request was checked above"))
+                    .await
+            }
+            result => result,
+        }
+    }
+
+    async fn request_once<T: for<'de> Deserialize<'de>>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> ManagerResult<T> {
         let response = request
             .send()
             .await
@@ -634,12 +655,17 @@ impl CargoRegistryClient {
                     .with_detail(format!("HTTP {status}{retry}: {}", bounded_detail(&detail))),
             );
         }
-        response.json().await.map_err(|error| {
+        let url = response.url().clone();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| network_error("failed to read cargo registry response body", error))?;
+        serde_json::from_slice(&body).map_err(|error| {
             ManagerError::new(
                 ManagerErrorKind::Protocol,
-                "cargo registry response is invalid",
+                "cargo registry response JSON is invalid",
             )
-            .with_detail(error.to_string())
+            .with_detail(format!("{url}: {error}"))
         })
     }
 }
@@ -658,7 +684,6 @@ struct CrateResponse {
 
 #[derive(Debug, Deserialize)]
 struct CrateMetadata {
-    #[serde(alias = "id")]
     name: String,
     max_version: String,
     #[serde(default)]

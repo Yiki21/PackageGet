@@ -56,14 +56,21 @@
 - Iteration 010 已完成 direct Cargo、source identity、typed crates.io client、宿主只读 smoke、本地完整门禁；等待 GitHub Actions 最终复验。
 - 初步代码审阅确认旧 Go 会吞掉单个 `go version -m` 与 version query failure，GOBIN directory read/entry/file-type error也被转换为空或跳过。
 - 旧 uninstall 通过短 name 拼接 GOBIN 后直接删除文件；本轮必须先冻结 typed target并验证 containment与文件边界。
+- 开始 Go 审计时收到 Cargo 实际回归：`bluetui` detail endpoint 返回 `cargo registry response is invalid`。live response确认 schema 同时包含 `id` 和 `name`，而 Cargo typed struct 将 `id` alias 到 `name`，Serde 因 duplicate field拒绝官方响应。
+- Cargo hotfix 已移除错误 alias，mock fixtures 改为官方 `name` 字段；HTTP client 将 body transport读取与 JSON protocol解析拆开，并对幂等 GET 的瞬时 body failure执行一次100ms有界重试。
+- `bluetui` exact detail live smoke、Cargo离线 contracts、workspace check与全部默认 tests均通过；修复不把 malformed JSON重试成成功，也不吞掉非成功 HTTP status。
 
 ## Git 提交
 
-本轮实施后逐项记录。
+- Cargo回归修复检查点：待提交。
 
 ## 验证记录
 
-本轮实施后逐项记录。
+- `cargo test -p updater-managers --test cargo_contract --jobs 1 -- --test-threads=1`：9 passed，2 ignored。
+- `cargo test -p updater-managers --test cargo_contract crates_io_bluetui_detail_read_only_smoke --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：1 passed。
+- `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过。
 
 ## 遗留项 / 下一轮
 
