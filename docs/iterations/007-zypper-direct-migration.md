@@ -73,6 +73,7 @@
 - mixed built-in registry 现在直接注册 APT、DNF、Pacman、Zypper；其余 7 个 manager 继续使用 legacy adapter，并增加 direct Zypper duplicate contract。
 - public API fake executable contracts 已实际验证 `LC_ALL=C` 子进程环境、reordered table、duplicate first-wins、104 search no-match、106 partial-result rejection，以及完整 status/fallback error matrix。
 - Podman `registry.opensuse.org/opensuse/tumbleweed:latest`（digest `sha256:cb29ab2b3c1a47859ac491f105319ed03b6334121ef815c1bab3de0825178f11`）在 rootfs/workspace 只读且 `--network none` 下通过 direct API smoke。
+- 完整 workspace 本地门禁已串行通过；等待最新提交的 GitHub Actions 复验后关闭 Iteration 007。
 
 ## Git 提交
 
@@ -92,6 +93,11 @@
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
 - `cargo test -p updater-managers --test zypper_contract --jobs 1 -- --test-threads=1`：7 项通过，1 项容器 smoke 保持 ignored。
 - Podman Tumbleweed 显式运行 `tumbleweed_container_zypper_read_only_smoke`：1 项通过；容器无网络且没有执行 refresh、search、updates 或写事务。
+- `cargo fmt --all -- --check` 通过。
+- `cargo check --workspace --all-targets --locked --jobs 1` 通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：145 项通过，15 项环境或网络测试保持 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings` 通过。
+- `cargo build --workspace --locked --jobs 1` 通过。
 
 ## 遗留项 / 下一轮
 
