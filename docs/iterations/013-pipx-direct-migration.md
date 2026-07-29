@@ -12,18 +12,18 @@
 ## 实施计划
 
 - [x] 审计当前stable pipx的availability、`list --json`、environment paths、upgrade/install/uninstall参数与exit behavior；只读检查本机真实venv inventory。
-- [ ] 冻结`builtin:pipx` descriptor、Linux/macOS平台、六项capabilities、User scope与legacy Unknown兼容边界。
-- [ ] 冻结venv name、distribution name、normalized PyPI name和`package_or_url`来源identity；同名、case、hyphen/underscore/dot不能无条件折叠。
-- [ ] 建立typed `pipx list --json` schema，缺失main package/name/version、duplicate identity与unknown shape不伪造`unknown` package。
-- [ ] 解析并验证`PIPX_HOME`与venvs root；size traversal不跟随symlink，path escape、permission和filesystem errors不静默转`None`。
-- [ ] 建立typed PyPI JSON client与结构化URL；只将明确404映射为exact lookup无结果，network/status/body/protocol failure必须传播。
-- [ ] updates仅查询可重放PyPI distribution；git/path/url/editable来源只读，不因PyPI同名package生成错误update。
-- [ ] search明确为PyPI exact identifier lookup，保留canonical distribution name、installed/Not Installed语义、homepage与typed registry origin。
-- [ ] 冻结write target：upgrade/uninstall使用validated venv identity，registry install使用distribution加可选exact version；拒绝option/path/url/spec注入。
-- [ ] 实现availability、installed/count/current version、updates/search与统一execute，所有read/write固定timeout且整组target预验证后串行执行。
-- [ ] 将core pipx收缩为Config V1、model/progress与typed error wrapper；built-in registry全部使用direct managers，不再注册任何legacy adapter。
-- [ ] 增加fake pipx、mock PyPI、temporary venv root、source/identity collision、404/status/malformed body、path safety、argv、conversion和registration contracts。
-- [ ] 执行显式opt-in宿主与PyPI只读smoke；不执行真实pipx install、upgrade、uninstall或environment修改。
+- [x] 冻结`builtin:pipx` descriptor、Linux/macOS平台、六项capabilities、User scope与legacy Unknown兼容边界。
+- [x] 冻结venv name、distribution name、normalized PyPI name和`package_or_url`来源identity；同名、case、hyphen/underscore/dot不能无条件折叠。
+- [x] 建立typed `pipx list --json` schema，缺失main package/name/version、duplicate identity与unknown shape不伪造`unknown` package。
+- [x] 解析并验证`PIPX_HOME`与venvs root；size traversal不跟随symlink，path escape、permission和filesystem errors不静默转`None`。
+- [x] 建立typed PyPI JSON client与结构化URL；只将明确404映射为exact lookup无结果，network/status/body/protocol failure必须传播。
+- [x] updates仅查询可重放PyPI distribution；git/path/url/editable来源只读，不因PyPI同名package生成错误update。
+- [x] search明确为PyPI exact identifier lookup，保留canonical distribution name、installed/Not Installed语义、homepage与typed registry origin。
+- [x] 冻结write target：upgrade/uninstall使用validated venv identity，registry install使用distribution加可选exact version；拒绝option/path/url/spec注入。
+- [x] 实现availability、installed/count/current version、updates/search与统一execute，所有read/write固定timeout且整组target预验证后串行执行。
+- [x] 将core pipx收缩为Config V1、model/progress与typed error wrapper；built-in registry全部使用direct managers，不再注册任何legacy adapter。
+- [x] 增加fake pipx、mock PyPI、temporary venv root、source/identity collision、404/status/malformed body、path safety、argv、conversion和registration contracts。
+- [x] 执行显式opt-in宿主与PyPI只读smoke；不执行真实pipx install、upgrade、uninstall或environment修改。
 - [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity 与安全边界
@@ -61,16 +61,28 @@
 - 本机只读初检确认pipx可用，`PIPX_HOME`与`PIPX_BIN_DIR`可解析，真实inventory包含多个venv；版本只作为审计证据，不进入最低版本约束。
 - 完成Iteration 013正式只读审计：本机`pipx list --json`顶层包含`pipx_spec_version`与`venvs`，当前7个venv；抽样venv明确提供`metadata.main_package.package`、`package_or_url`与`package_version`。
 - 确认本机`PIPX_HOME=/home/ayi/.local/share/pipx`、`PIPX_BIN_DIR=/home/ayi/.local/bin`；只记录当前pipx版本作为审计证据，不建立版本门槛。
+- 新增平铺的`managers/src/pipx.rs`：installed公开venv write identity，typed origin保存distribution/source；PyPI exact search保留canonical distribution display。
+- suffix venv允许共存；按distribution反查多个venv时返回ambiguity，不再把合法suffix安装误判为损坏inventory。
+- pinned registry以及git、URL、path、editable和unknown来源保持只读；updates只查询可重放且未pinned的PyPI来源。
+- PyPI client使用结构化path segment、20秒timeout与2 MiB响应上限，分别映射404、permission、busy、server/network和malformed body。
+- core pipx已收缩为Config V1/model/progress/error bridge；builtin registry的全部现有manager现在都注册direct implementation。
+- 删除最后一个legacy manager迁移后不再使用的core目录统计和命令progress执行器，只保留UI兼容层需要的progress event模型。
 
 ## Git 提交
 
 - Iteration 013计划检查点：本次提交（`docs: complete npm pnpm iteration and plan pipx`）。
 - pipx只读契约审计检查点：本次提交。
+- pipx直接迁移实现检查点：`e281b6e`（`feat: migrate pipx to direct manager`）。
 
 ## 验证记录
 
 - pipx初步只读检查：availability、environment path和`list --json`成功；未执行install、upgrade或uninstall。
 - `pipx list --json | jq ...`确认顶层、venv metadata与main package字段形状；只输出schema和计数，不修改pipx环境。
+- pipx离线contract：9 passed，2 ignored；覆盖typed inventory/source、suffix ambiguity、filesystem、mock PyPI与安全argv。
+- pipx宿主只读smoke：1 passed；availability、installed/count与current version成功。
+- live PyPI只读smoke：1 passed；`docx2txt` exact lookup成功。
+- core lib：56 passed；builtin registry：12 passed。
+- focused managers/core clippy：通过，`-D warnings`下无警告。
 
 ## 遗留项 / 下一轮
 
