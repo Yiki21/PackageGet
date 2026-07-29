@@ -1,7 +1,7 @@
 # Iteration 010：Cargo 直接迁移与 Registry/Local Source Identity
 
 - 日期：2026-07-29
-- 状态：验证中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -23,7 +23,7 @@
 - [x] 将 core Cargo 收缩为 Config V1、model、progress 与 typed error wrapper，并更新 mixed registry。
 - [x] 增加 install-list fixtures、registry/local collision、binary size、HTTP mock、status/schema、search/update、command construction、conversion、registration 与 public API contracts。
 - [x] 在当前宿主执行显式 opt-in 只读 Cargo smoke；真实 crates.io 查询保持单独 opt-in，不执行 install/update/uninstall。
-- [ ] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
+- [x] 串行通过 workspace format、check、test、clippy 与 build完整门禁，并由 GitHub Actions 复验。
 
 ## 审计重点
 
@@ -99,6 +99,7 @@
 - `cargo test --workspace --jobs 1 -- --test-threads=1`：通过。
 - `cargo clippy --workspace --all-targets --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --jobs 1`：通过。
+- GitHub Actions CI run `30443368401`：通过，耗时 3 分 15 秒；format、check、deterministic tests、clippy 与 build 全部成功。
 
 ## 遗留项 / 下一轮
 

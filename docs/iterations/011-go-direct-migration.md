@@ -1,7 +1,7 @@
 # Iteration 011：Go 直接迁移与 Module/Binary Identity
 
 - 日期：2026-07-29
-- 状态：已计划
+- 状态：进行中
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 

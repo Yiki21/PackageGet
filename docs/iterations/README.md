@@ -23,5 +23,5 @@
 | 007 | 已完成 | 阶段 2：Zypper 直接迁移与 Exit-Code/Locale Parity | [007-zypper-direct-migration.md](007-zypper-direct-migration.md) |
 | 008 | 已完成 | 阶段 2：Flatpak 直接迁移与 User/System Scope Parity | [008-flatpak-direct-migration.md](008-flatpak-direct-migration.md) |
 | 009 | 已完成 | 阶段 2：Homebrew 直接迁移与 Formula/Cask Identity | [009-homebrew-direct-migration.md](009-homebrew-direct-migration.md) |
-| 010 | 验证中 | 阶段 2：Cargo 直接迁移与 Registry/Local Source Identity | [010-cargo-direct-migration.md](010-cargo-direct-migration.md) |
-| 011 | 已计划 | 阶段 2：Go 直接迁移与 Module/Binary Identity | [011-go-direct-migration.md](011-go-direct-migration.md) |
+| 010 | 已完成 | 阶段 2：Cargo 直接迁移与 Registry/Local Source Identity | [010-cargo-direct-migration.md](010-cargo-direct-migration.md) |
+| 011 | 进行中 | 阶段 2：Go 直接迁移与 Module/Binary Identity | [011-go-direct-migration.md](011-go-direct-migration.md) |
