@@ -1,169 +1,49 @@
-use std::collections::{HashMap, HashSet};
-
 use async_trait::async_trait;
-use tokio::process::Command;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::ZypperManager as DirectZypperManager;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError,
-    pm::{
-        common::manager_command_path,
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct ZypperManager;
 
-fn command_path(config: &Config) -> String {
-    manager_command_path(config, PackageManagerType::Zypper)
-}
-
 #[async_trait]
 impl PackageManager for ZypperManager {
-    async fn get_current_version(_config: &Config, package_name: &str) -> CoreResult<String> {
-        let output = Command::new("rpm")
-            .arg("-q")
-            .arg("--queryformat")
-            .arg("%{VERSION}-%{RELEASE}")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(String::from_utf8(output.stdout)?.trim().to_owned())
-        } else {
-            Err(CoreError::ParseError(format!(
-                "Package {} not found",
-                package_name
-            )))
-        }
+    async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
+        DirectZypperManager::new()
+            .current_version(&manager_config(config), package_name)
+            .await
+            .map_err(convert_manager_error)
     }
 
-    async fn list_installed(_config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let output = Command::new("rpm")
-            .arg("-qa")
-            .arg("--queryformat")
-            .arg("%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\t%{INSTALLTIME}\t%{URL}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(CoreError::UnknownError("rpm -qa failed".to_owned()));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let packages = stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() < 2 {
-                    return None;
-                }
-
-                let description = parts
-                    .get(2)
-                    .filter(|value| !value.trim().is_empty() && value.trim() != "(none)")
-                    .map(|value| value.trim().to_owned());
-
-                let size = parts
-                    .get(3)
-                    .map(|value| value.trim())
-                    .and_then(|value| value.parse::<u64>().ok());
-
-                let install_date = parts
-                    .get(4)
-                    .map(|value| value.trim())
-                    .filter(|value| !value.is_empty() && *value != "(none)")
-                    .and_then(|timestamp| {
-                        timestamp.parse::<i64>().ok().and_then(|ts| {
-                            let datetime = chrono::DateTime::from_timestamp(ts, 0)?;
-                            Some(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
-                        })
-                    });
-
-                let homepage = parts
-                    .get(5)
-                    .map(|value| value.trim())
-                    .filter(|value| !value.is_empty() && *value != "(none)")
-                    .map(ToOwned::to_owned);
-
-                Some(PackageInfo {
-                    name: parts[0].trim().to_owned(),
-                    version: parts[1].trim().to_owned(),
-                    source: PackageManagerType::Zypper,
-                    description,
-                    size,
-                    install_date,
-                    homepage,
-                })
-            })
-            .collect();
-
-        Ok(packages)
+    async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
+        DirectZypperManager::new()
+            .installed(&manager_config(config))
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 
-    async fn count_installed(_config: &Config) -> CoreResult<usize> {
-        let output = Command::new("rpm").arg("-qa").output().await?;
-        if !output.status.success() {
-            return Ok(Self::list_installed(_config).await?.len());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        Ok(stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count())
+    async fn count_installed(config: &Config) -> CoreResult<usize> {
+        DirectZypperManager::new()
+            .count_installed(&manager_config(config))
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = command_path(config);
-
-        let output = Command::new(&path)
-            .arg("--non-interactive")
-            .arg("search")
-            .arg("--details")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let installed_versions = Self::installed_version_map().await?;
-        let search_rows = parse_table_rows(&stdout, &search_headers());
-
-        let mut packages = Vec::new();
-        let mut seen = HashSet::new();
-
-        for row in search_rows {
-            let Some(name) = row.get("name") else {
-                continue;
-            };
-
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-
-            let version = installed_versions
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| "Not Installed".to_owned());
-
-            packages.push(PackageInfo {
-                name: name.clone(),
-                version,
-                source: PackageManagerType::Zypper,
-                description: None,
-                size: None,
-                install_date: None,
-                homepage: None,
-            });
-        }
-
-        Ok(packages)
+        DirectZypperManager::new()
+            .search(&manager_config(config), package_name)
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 }
 
@@ -172,64 +52,11 @@ impl ZypperManager {
         config: &Config,
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
-        let path = command_path(config);
-
-        if refresh {
-            let args = vec![
-                path.clone(),
-                "--non-interactive".to_owned(),
-                "refresh".to_owned(),
-            ];
-            run_command_with_progress("pkexec", &args, |_| {}).await?;
-        }
-
-        let output = Command::new(&path)
-            .arg("--non-interactive")
-            .arg("list-updates")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(CoreError::from_command_failure(format!(
-                "zypper list-updates failed: {}",
-                stderr.trim()
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let rows = parse_table_rows(&stdout, &update_headers());
-
-        let mut updates = Vec::new();
-        let mut seen = HashSet::new();
-
-        for row in rows {
-            let Some(name) = row.get("name") else {
-                continue;
-            };
-            let Some(current_version) = row.get("current_version") else {
-                continue;
-            };
-            let Some(new_version) = row.get("available_version") else {
-                continue;
-            };
-
-            if name.is_empty()
-                || current_version.is_empty()
-                || new_version.is_empty()
-                || !seen.insert(name.clone())
-            {
-                continue;
-            }
-
-            updates.push(PackageUpdate {
-                name: name.clone(),
-                current_version: current_version.clone(),
-                new_version: new_version.clone(),
-            });
-        }
-
-        Ok(updates)
+        DirectZypperManager::new()
+            .updates(&manager_config(config), refresh)
+            .await
+            .map(|updates| updates.into_iter().map(convert_package_update).collect())
+            .map_err(convert_manager_error)
     }
 
     pub async fn uninstall_packages_with_progress(
@@ -237,20 +64,13 @@ impl ZypperManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![
-            path,
-            "--non-interactive".to_owned(),
-            "remove".to_owned(),
-            "-y".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Uninstall,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 
     pub async fn update_packages_with_progress(
@@ -258,20 +78,8 @@ impl ZypperManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![
-            path,
-            "--non-interactive".to_owned(),
-            "update".to_owned(),
-            "-y".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(config, ApiPackageAction::Update, package_names, on_progress)
+            .await
     }
 
     pub async fn install_packages_with_progress(
@@ -279,192 +87,191 @@ impl ZypperManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-        let mut args = vec![
-            path,
-            "--non-interactive".to_owned(),
-            "install".to_owned(),
-            "-y".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
-    }
-
-    async fn installed_version_map() -> CoreResult<HashMap<String, String>> {
-        let output = Command::new("rpm")
-            .arg("-qa")
-            .arg("--queryformat")
-            .arg("%{NAME}\t%{VERSION}-%{RELEASE}\n")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut map = HashMap::new();
-
-        for line in stdout.lines() {
-            let Some((name, version)) = line.split_once('\t') else {
-                continue;
-            };
-
-            let name = name.trim();
-            let version = version.trim();
-            if !name.is_empty() && !version.is_empty() {
-                map.insert(name.to_owned(), version.to_owned());
-            }
-        }
-
-        Ok(map)
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Install,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 }
 
-fn update_headers() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("name", "name"),
-        ("currentversion", "current_version"),
-        ("availableversion", "available_version"),
-    ]
+async fn run_packages_with_progress(
+    config: &Config,
+    action: ApiPackageAction,
+    package_names: &[String],
+    mut on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    DirectZypperManager::new()
+        .execute_packages_with_progress(&manager_config(config), action, package_names, |event| {
+            let (progress, command_message) = event.into_parts();
+            on_progress(CommandProgressEvent {
+                progress,
+                command_message,
+            });
+        })
+        .await
+        .map_err(convert_manager_error)
 }
 
-fn search_headers() -> Vec<(&'static str, &'static str)> {
-    vec![("name", "name"), ("version", "version")]
-}
-
-fn parse_table_rows(
-    output: &str,
-    required_headers: &[(&'static str, &'static str)],
-) -> Vec<HashMap<String, String>> {
-    let mut rows = Vec::new();
-    let mut header_mapping: Option<HashMap<usize, String>> = None;
-
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("Loading repository data")
-            || trimmed.starts_with("Reading installed packages")
-            || is_separator_line(trimmed)
-            || !trimmed.contains('|')
-        {
-            continue;
-        }
-
-        let columns = split_table_row(trimmed);
-        if columns.is_empty() {
-            continue;
-        }
-
-        if header_mapping.is_none() {
-            let normalized_headers = columns
-                .iter()
-                .enumerate()
-                .map(|(idx, value)| (idx, normalize_header(value)))
-                .collect::<Vec<_>>();
-
-            let mut mapping = HashMap::new();
-            for (header_name, key_name) in required_headers {
-                if let Some((idx, _)) = normalized_headers
-                    .iter()
-                    .find(|(_, normalized)| normalized == header_name)
-                {
-                    mapping.insert(*idx, (*key_name).to_owned());
-                }
-            }
-
-            if mapping.len() == required_headers.len() {
-                header_mapping = Some(mapping);
-                continue;
-            }
-        }
-
-        let Some(mapping) = header_mapping.as_ref() else {
-            continue;
-        };
-
-        let mut row = HashMap::new();
-        for (idx, key_name) in mapping {
-            let value = columns
-                .get(*idx)
-                .map(|value| value.trim().to_owned())
-                .unwrap_or_default();
-            row.insert(key_name.clone(), value);
-        }
-
-        if row.values().all(|value| value.is_empty()) {
-            continue;
-        }
-
-        rows.push(row);
+fn manager_config(config: &Config) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(PackageManagerType::Zypper.manager_id());
+    if let Some(path) = config.get_package_path(PackageManagerType::Zypper) {
+        manager_config.with_executable(path)
+    } else {
+        manager_config
     }
-
-    rows
 }
 
-fn split_table_row(line: &str) -> Vec<String> {
-    line.split('|').map(|part| part.trim().to_owned()).collect()
+fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source: PackageManagerType::Zypper,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
+    }
 }
 
-fn normalize_header(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
-        .flat_map(char::to_lowercase)
-        .collect()
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
+    }
 }
 
-fn is_separator_line(line: &str) -> bool {
-    line.chars()
-        .all(|ch| ch == '-' || ch == '+' || ch == '=' || ch == '|')
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired
+        | ManagerErrorKind::Cancelled => CoreError::from_command_failure(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Other => CoreError::UnknownError(detail),
+        _ => CoreError::UnknownError(detail),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
+
     use super::*;
+    use crate::PackageManagerConfig;
 
     #[test]
-    fn parse_table_rows_extracts_updates_from_list_updates_table() {
-        let output = r#"
-S | Repository      | Name  | Current Version | Available Version | Arch
---+-----------------+-------+-----------------+-------------------+------
-v | repo-update     | bash  | 5.2-3.1         | 5.2-4.1           | x86_64
-v | repo-update     | vim   | 9.1-2.1         | 9.1-3.1           | x86_64
-"#;
+    fn legacy_config_bridge_preserves_custom_zypper_path() {
+        let config = Config {
+            system_manager: Some(PackageManagerConfig {
+                manager_type: PackageManagerType::Zypper,
+                custom_path: Some("/custom/zypper".to_owned()),
+            }),
+            ..Config::default()
+        };
 
-        let rows = parse_table_rows(output, &update_headers());
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].get("name"), Some(&"bash".to_owned()));
-        assert_eq!(rows[0].get("current_version"), Some(&"5.2-3.1".to_owned()));
+        let converted = manager_config(&config);
+        assert_eq!(converted.id, PackageManagerType::Zypper.manager_id());
         assert_eq!(
-            rows[0].get("available_version"),
-            Some(&"5.2-4.1".to_owned())
+            converted.executable(),
+            Some(std::path::Path::new("/custom/zypper"))
         );
     }
 
     #[test]
-    fn parse_table_rows_extracts_search_rows() {
-        let output = r#"
-S | Name      | Type    | Version  | Arch   | Repository
---+-----------+---------+----------+--------+-----------
-  | ripgrep   | package | 14.1.0-1 | x86_64 | repo-oss
-  | fd        | package | 9.0.0-1  | x86_64 | repo-oss
-"#;
+    fn legacy_model_bridge_preserves_zypper_metadata() {
+        let id = ManagerId::parse("builtin:zypper").expect("valid Zypper ID");
+        let mut package = ApiPackageInfo::new(id.clone(), "bash", "5.2-3.1");
+        package.description = Some("GNU shell".to_owned());
+        package.size = Some(42);
+        package.install_date = Some("2026-07-29".to_owned());
+        package.homepage = Some("https://www.gnu.org/software/bash/".to_owned());
 
-        let rows = parse_table_rows(output, &search_headers());
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1].get("name"), Some(&"fd".to_owned()));
-        assert_eq!(rows[1].get("version"), Some(&"9.0.0-1".to_owned()));
+        let converted = convert_package_info(package);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.version, "5.2-3.1");
+        assert_eq!(converted.source, PackageManagerType::Zypper);
+        assert_eq!(converted.description.as_deref(), Some("GNU shell"));
+        assert_eq!(converted.size, Some(42));
+        assert_eq!(converted.install_date.as_deref(), Some("2026-07-29"));
+        assert_eq!(
+            converted.homepage.as_deref(),
+            Some("https://www.gnu.org/software/bash/")
+        );
+
+        let update = ApiPackageUpdate::new(PackageTarget::new(id, "bash"), "5.1", "5.2");
+        let converted = convert_package_update(update);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.current_version, "5.1");
+        assert_eq!(converted.new_version, "5.2");
     }
 
     #[test]
-    fn normalize_header_removes_spaces_and_hyphens() {
-        assert_eq!(normalize_header("Current Version"), "currentversion");
-        assert_eq!(normalize_header("Available-Version"), "availableversion");
+    fn typed_manager_errors_map_back_to_legacy_categories() {
+        for (kind, expected) in [
+            (ManagerErrorKind::Network, "request"),
+            (ManagerErrorKind::Protocol, "parse"),
+            (ManagerErrorKind::Permission, "command"),
+            (ManagerErrorKind::Busy, "command"),
+            (ManagerErrorKind::RebootRequired, "command"),
+            (ManagerErrorKind::Cancelled, "command"),
+            (ManagerErrorKind::Other, "unknown"),
+        ] {
+            let error = convert_manager_error(
+                ManagerError::new(kind, "operation failed").with_detail("diagnostic"),
+            );
+            let category = match error {
+                CoreError::RequestError(_) => "request",
+                CoreError::ParseError(_) => "parse",
+                CoreError::CommandError(_) => "command",
+                CoreError::UnknownError(_) => "unknown",
+                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+            };
+            assert_eq!(category, expected);
+        }
+    }
+
+    #[test]
+    fn command_errors_preserve_legacy_lock_and_cancellation_guidance() {
+        let lock = convert_manager_error(
+            ManagerError::new(ManagerErrorKind::Busy, "zypper failed")
+                .with_detail("system management is locked"),
+        );
+        assert!(matches!(
+            lock,
+            CoreError::CommandError(message) if message.contains("package database is locked")
+        ));
+
+        let cancellation = convert_manager_error(
+            ManagerError::new(ManagerErrorKind::Cancelled, "pkexec failed")
+                .with_detail("operation was cancelled"),
+        );
+        assert!(matches!(
+            cancellation,
+            CoreError::CommandError(message) if message.contains("authorization was cancelled")
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_legacy_execution_does_not_run_zypper() {
+        let mut events = Vec::new();
+        ZypperManager::install_packages_with_progress(&Config::default(), &[], |event| {
+            events.push(event);
+        })
+        .await
+        .expect("execute empty legacy Zypper group");
+
+        assert!(events.is_empty());
     }
 }

@@ -4,7 +4,7 @@ use updater_core::{
     ALL_PACKAGE_MANAGERS, ManagerRegistry, PackageManagerType, RegistryError,
     register_builtin_managers,
 };
-use updater_managers::{AptManager, DnfManager, PacmanManager};
+use updater_managers::{AptManager, DnfManager, PacmanManager, ZypperManager};
 
 #[test]
 fn mixed_builtin_registration_preserves_all_stable_ids() {
@@ -59,5 +59,19 @@ fn mixed_registration_rejects_a_preexisting_direct_pacman_manager() {
         register_builtin_managers(&mut registry),
         Err(RegistryError::DuplicateManager { id })
             if id == PackageManagerType::Pacman.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_zypper_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(ZypperManager::new()))
+        .expect("register direct Zypper manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Zypper.manager_id()
     ));
 }

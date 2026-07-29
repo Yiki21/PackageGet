@@ -10,7 +10,7 @@ use updater_manager_api::{
 };
 use updater_managers::{
     AptManager as DirectAptManager, DnfManager as DirectDnfManager,
-    PacmanManager as DirectPacmanManager,
+    PacmanManager as DirectPacmanManager, ZypperManager as DirectZypperManager,
 };
 
 use crate::{
@@ -267,7 +267,7 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 
 /// Registers the current mixed set of direct and legacy built-in managers.
 ///
-/// APT, DNF, and Pacman are registered through their direct
+/// APT, DNF, Pacman, and Zypper are registered through their direct
 /// `updater-managers` implementations. Managers that have not migrated yet
 /// remain wrapped by [`LegacyPackageManagerAdapter`].
 ///
@@ -279,11 +279,15 @@ pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), R
     registry.register(Arc::new(DirectAptManager::new()))?;
     registry.register(Arc::new(DirectDnfManager::new()))?;
     registry.register(Arc::new(DirectPacmanManager::new()))?;
+    registry.register(Arc::new(DirectZypperManager::new()))?;
 
     for manager_type in ALL_PACKAGE_MANAGERS {
         if !matches!(
             manager_type,
-            PackageManagerType::Apt | PackageManagerType::Dnf | PackageManagerType::Pacman
+            PackageManagerType::Apt
+                | PackageManagerType::Dnf
+                | PackageManagerType::Pacman
+                | PackageManagerType::Zypper
         ) {
             registry.register(Arc::new(LegacyPackageManagerAdapter::new(*manager_type)))?;
         }
