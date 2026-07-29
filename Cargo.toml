@@ -6,7 +6,7 @@ description = "A GUI application for checking and downloading updates."
 
 [workspace]
 resolver = "3"
-members = ["ui", "core", "crates/manager-api"]
+members = ["ui", "core", "manager-api"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -39,7 +39,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 updater_core = { path = "core" }
-updater_manager_api = { package = "updater-manager-api", path = "crates/manager-api" }
+updater_manager_api = { package = "updater-manager-api", path = "manager-api" }
 url = "2"
 
 [profile.dev]

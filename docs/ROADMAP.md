@@ -44,9 +44,9 @@
 
 工作区调整为四个职责清晰、不过度碎片化的 crate：
 
-- crates/manager-api（package updater-manager-api）：无 Iced、无具体命令实现的公共扩展契约。
+- manager-api（package updater-manager-api）：无 Iced、无具体命令实现的公共扩展契约。
 - core（updater_core）：registry、配置/迁移、检测策略、操作计划和串行执行引擎。
-- crates/managers（package updater-managers）：所有内置 APT/DNF/Pacman/Zypper/Flatpak/Homebrew/Cargo/Go/npm/pnpm/pipx/Winget 实现及共享命令工具。
+- managers（package updater-managers）：所有内置 APT/DNF/Pacman/Zypper/Flatpak/Homebrew/Cargo/Go/npm/pnpm/pipx/Winget 实现及共享命令工具。
 - ui（updater）：Iced 展示、桌面集成和最终发行包。
 
 公共接口
@@ -79,7 +79,7 @@
 4.  所有 built-in 都通过 registry 后，再删除闭合枚举、宏生成的 match dispatcher 和旧静态 PackageManager trait。
 
 关键文件：core/src/lib.rs 的 define_package_managers!、PackageManagerType 和旧 PackageManager；core/src/pm/\*；ui/src/content/workflows.rs；新增
-crates/manager-api/**、crates/managers/**、docs/manager-authoring.md。
+manager-api/**、managers/**、docs/manager-authoring.md。
 
 ### 阶段 3：迁移配置、UI identity 和 manager 设置
 
@@ -124,7 +124,7 @@ GUI/桌面层
 5.  扩展错误分类为跨平台 typed error：command missing、permission/elevation、network、lock/busy、timeout、installer reboot required、parse/protocol
     failure；UI 通过通用 error kind 给出平台相关建议。
 
-关键文件：ui/src/main.rs、ui/Cargo.toml、crates/managers/src/\*\*、原 core/src/pm/common.rs/error.rs、registry builtin registration。
+关键文件：ui/src/main.rs、ui/Cargo.toml、managers/src/\*\*、原 core/src/pm/common.rs/error.rs、registry builtin registration。
 
 ### 阶段 5：统一视觉与核心用户工作流
 

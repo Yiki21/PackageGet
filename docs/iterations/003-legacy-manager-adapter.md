@@ -42,13 +42,15 @@
 - 为 11 个现有 manager 增加唯一 `builtin:*` ID 和 descriptor，系统 manager 声明授权提示。
 - 平台 metadata 当前按已实现能力保守声明：Linux managers、Homebrew 与便携开发 manager 的 macOS 支持；Windows 留待平台层完成后开放。
 - 公共 `PackageInfo` 补齐旧模型已有的 size 与 install date，避免 adapter 迁移丢失 UI 元数据。
+- 按仓库的扁平 workspace 结构将公共 crate 放在根目录 `manager-api/`，不增加无实际分组意义的 `crates/` 层。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
 | `0bade6c` | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
-| 待提交 | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
+| `ad798ec` | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
+| 待提交 | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
 
 ## 验证记录
 
