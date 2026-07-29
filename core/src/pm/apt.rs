@@ -164,3 +164,91 @@ fn convert_manager_error(error: ManagerError) -> CoreError {
         _ => CoreError::UnknownError(detail),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
+
+    use super::*;
+    use crate::PackageManagerConfig;
+
+    #[test]
+    fn legacy_config_bridge_preserves_custom_apt_path() {
+        let config = Config {
+            system_manager: Some(PackageManagerConfig {
+                manager_type: PackageManagerType::Apt,
+                custom_path: Some("/custom/apt".to_owned()),
+            }),
+            ..Config::default()
+        };
+
+        let converted = manager_config(&config);
+        assert_eq!(converted.id, PackageManagerType::Apt.manager_id());
+        assert_eq!(
+            converted.executable(),
+            Some(std::path::Path::new("/custom/apt"))
+        );
+    }
+
+    #[test]
+    fn legacy_model_bridge_preserves_apt_metadata() {
+        let id = ManagerId::parse("builtin:apt").expect("valid APT ID");
+        let mut package = ApiPackageInfo::new(id.clone(), "bash", "5.2");
+        package.description = Some("GNU shell".to_owned());
+        package.size = Some(42);
+        package.install_date = Some("2026-07-29".to_owned());
+        package.homepage = Some("https://www.gnu.org/software/bash/".to_owned());
+
+        let converted = convert_package_info(package);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.version, "5.2");
+        assert_eq!(converted.source, PackageManagerType::Apt);
+        assert_eq!(converted.description.as_deref(), Some("GNU shell"));
+        assert_eq!(converted.size, Some(42));
+        assert_eq!(converted.install_date.as_deref(), Some("2026-07-29"));
+        assert_eq!(
+            converted.homepage.as_deref(),
+            Some("https://www.gnu.org/software/bash/")
+        );
+
+        let update = ApiPackageUpdate::new(PackageTarget::new(id, "bash"), "5.1", "5.2");
+        let converted = convert_package_update(update);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.current_version, "5.1");
+        assert_eq!(converted.new_version, "5.2");
+    }
+
+    #[test]
+    fn typed_manager_errors_map_back_to_legacy_categories() {
+        for (kind, expected) in [
+            (ManagerErrorKind::Network, "request"),
+            (ManagerErrorKind::Protocol, "parse"),
+            (ManagerErrorKind::Permission, "command"),
+            (ManagerErrorKind::Other, "unknown"),
+        ] {
+            let error = convert_manager_error(
+                ManagerError::new(kind, "operation failed").with_detail("diagnostic"),
+            );
+            let category = match error {
+                CoreError::RequestError(_) => "request",
+                CoreError::ParseError(_) => "parse",
+                CoreError::CommandError(_) => "command",
+                CoreError::UnknownError(_) => "unknown",
+                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+            };
+            assert_eq!(category, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_legacy_execution_does_not_run_apt() {
+        let mut events = Vec::new();
+        AptManager::install_packages_with_progress(&Config::default(), &[], |event| {
+            events.push(event);
+        })
+        .await
+        .expect("execute empty legacy APT group");
+
+        assert!(events.is_empty());
+    }
+}

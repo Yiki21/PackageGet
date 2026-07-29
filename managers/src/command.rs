@@ -367,3 +367,89 @@ fn is_executable(metadata: &std::fs::Metadata) -> bool {
 fn is_executable(_metadata: &std::fs::Metadata) -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn finds_the_first_executable_candidate() {
+        let first = tempdir().expect("create first directory");
+        let second = tempdir().expect("create second directory");
+        let first_command = first.path().join("apt");
+        let second_command = second.path().join("apt");
+        fs::write(&first_command, "#!/bin/sh\n").expect("write first executable");
+        fs::write(&second_command, "#!/bin/sh\n").expect("write second executable");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&first_command, fs::Permissions::from_mode(0o755))
+                .expect("mark first executable");
+            fs::set_permissions(&second_command, fs::Permissions::from_mode(0o755))
+                .expect("mark second executable");
+        }
+
+        assert_eq!(
+            find_executable(
+                "apt",
+                &[first.path().to_path_buf(), second.path().to_path_buf()]
+            ),
+            Some(first_command)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_non_executable_candidates() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().expect("create directory");
+        let command = directory.path().join("apt");
+        fs::write(&command, "#!/bin/sh\n").expect("write candidate");
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o644))
+            .expect("mark candidate non-executable");
+
+        assert_eq!(
+            find_executable("apt", &[directory.path().to_path_buf()]),
+            None
+        );
+    }
+
+    #[test]
+    fn classifies_command_failures_without_treating_every_pkexec_error_as_permission() {
+        for (detail, expected) in [
+            ("command not found", ManagerErrorKind::CommandMissing),
+            ("pkexec: not authorized", ManagerErrorKind::Permission),
+            ("could not get lock", ManagerErrorKind::Busy),
+            ("operation timed out", ManagerErrorKind::Timeout),
+            ("reboot required", ManagerErrorKind::RebootRequired),
+            (
+                "pkexec apt install failed: broken package",
+                ManagerErrorKind::Other,
+            ),
+        ] {
+            assert_eq!(classify_command_failure(detail), expected, "{detail}");
+        }
+    }
+
+    #[test]
+    fn command_specs_preserve_non_utf8_safe_os_arguments() {
+        let spec = CommandSpec::new("pkexec")
+            .arg(Path::new("/custom/apt").as_os_str())
+            .args(["install", "-y"]);
+
+        assert_eq!(spec.program(), Path::new("pkexec"));
+        assert_eq!(
+            spec.arguments(),
+            ["/custom/apt", "install", "-y"]
+                .map(OsString::from)
+                .as_slice()
+        );
+    }
+}

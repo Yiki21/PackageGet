@@ -544,4 +544,18 @@ mod tests {
             ("bash".to_owned(), "5.2".to_owned(), "5.2.1".to_owned())
         );
     }
+
+    #[test]
+    fn update_parser_handles_missing_current_version_and_headers() {
+        assert_eq!(
+            parse_upgradable_line("vim/stable 2:9.1.1234 amd64"),
+            Some((
+                "vim".to_owned(),
+                "unknown".to_owned(),
+                "2:9.1.1234".to_owned(),
+            ))
+        );
+        assert_eq!(parse_upgradable_line("Listing... Done"), None);
+        assert_eq!(parse_upgradable_line("malformed"), None);
+    }
 }

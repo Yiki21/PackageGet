@@ -168,3 +168,43 @@ fn join_reader(result: Result<(), tokio::task::JoinError>) -> ManagerResult<()> 
         .with_detail(error.to_string())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncWriteExt, duplex};
+
+    use super::*;
+
+    #[test]
+    fn percent_parser_uses_the_last_bounded_value() {
+        assert_eq!(parse_percent("download 10% verify 42.5%"), Some(0.425));
+        assert_eq!(parse_percent("unexpected 125%"), Some(1.0));
+        assert_eq!(parse_percent("no progress"), None);
+    }
+
+    #[test]
+    fn command_progress_clamps_fraction_and_preserves_message() {
+        let progress = CommandProgress::new(1.5, Some("done".to_owned()));
+        assert_eq!(progress.fraction(), 1.0);
+        assert_eq!(progress.message(), Some("done"));
+        assert_eq!(progress.into_parts(), (1.0, Some("done".to_owned())));
+    }
+
+    #[tokio::test]
+    async fn line_forwarding_bounds_long_command_output() {
+        let (reader, mut writer) = duplex(MAX_LINE_BYTES * 2);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let task = tokio::spawn(forward_lines(reader, sender));
+
+        writer
+            .write_all(&vec![b'x'; MAX_LINE_BYTES + 512])
+            .await
+            .expect("write long command line");
+        writer.write_all(b"\n").await.expect("finish command line");
+        drop(writer);
+
+        let line = receiver.recv().await.expect("receive bounded line");
+        assert_eq!(line.len(), MAX_LINE_BYTES);
+        task.await.expect("line forwarding task");
+    }
+}
