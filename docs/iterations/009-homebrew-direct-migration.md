@@ -1,7 +1,7 @@
 # Iteration 009：Homebrew 直接迁移与 Formula/Cask Identity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -23,7 +23,7 @@
 - [x] 增加 JSON/text fixtures、formula/cask collision、tap/origin、refresh/no-refresh、timeout、command construction、conversion、registration 与 public API contracts。
 - [x] 在可用的 Linuxbrew 宿主或容器执行显式 opt-in 只读 smoke；macOS 命令差异以 fixture/CI 可验证边界记录，不执行真实写事务。
 - [x] 串行通过 workspace format、check、test、clippy 与 build 完整门禁。
-- [ ] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
+- [x] 由 GitHub Actions 复验相同的 locked 单 job 门禁。
 
 ## 审计重点
 
@@ -86,6 +86,9 @@
 - `0ee3cbf docs: record Homebrew command audit`
 - `6903f89 feat: add typed Homebrew manager`
 - `bc0292e refactor: route Homebrew through direct manager`
+- `8f88ebb docs: record Homebrew migration progress`
+- `a3ab2a2 docs: record Homebrew workspace validation`
+- `7de00dc fix: make Homebrew refresh environment deterministic`
 
 ## 验证记录
 
@@ -109,7 +112,11 @@
 - `cargo build --workspace --locked --jobs 1`：通过。
 - GitHub Actions runs `30440505954`、`30440689740`、`30440752308`：在 deterministic tests 的 Homebrew refresh environment contract 失败，根因已定位并修复。
 - `HOMEBREW_NO_AUTO_UPDATE=1 cargo test -p updater-managers --test homebrew_contract refresh_is_explicit_and_precedes_inventory_and_outdated --jobs 1 -- --exact --test-threads=1`：修复后通过。
+- 修复后重新串行执行 workspace format、check、test、clippy 与 build：全部通过。
+- GitHub Actions CI run `30441088683`：通过，耗时 3 分 30 秒；format、check、deterministic tests、clippy 与 build 全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮进入 [Iteration 010：Cargo 直接迁移与 Registry/Local Source Identity](010-cargo-direct-migration.md)。
+- Config V1/UI 仍只能保存 Homebrew 短 name，formula/cask/tap identity 的完整保留留待阶段 3；direct registry 路径已经输出 typed reference。
+- Homebrew search 真实宿主 smoke 未纳入默认验收，因为本机存在会触发 repository failure 的 untrusted tap；离线 public contracts 已覆盖 formula/cask discovery、metadata 和错误传播。

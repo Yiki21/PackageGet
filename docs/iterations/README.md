@@ -22,4 +22,5 @@
 | 006 | 已完成 | 阶段 2：Pacman 直接迁移与 Arch Transaction Parity | [006-pacman-direct-migration.md](006-pacman-direct-migration.md) |
 | 007 | 已完成 | 阶段 2：Zypper 直接迁移与 Exit-Code/Locale Parity | [007-zypper-direct-migration.md](007-zypper-direct-migration.md) |
 | 008 | 已完成 | 阶段 2：Flatpak 直接迁移与 User/System Scope Parity | [008-flatpak-direct-migration.md](008-flatpak-direct-migration.md) |
-| 009 | 进行中 | 阶段 2：Homebrew 直接迁移与 Formula/Cask Identity | [009-homebrew-direct-migration.md](009-homebrew-direct-migration.md) |
+| 009 | 已完成 | 阶段 2：Homebrew 直接迁移与 Formula/Cask Identity | [009-homebrew-direct-migration.md](009-homebrew-direct-migration.md) |
+| 010 | 进行中 | 阶段 2：Cargo 直接迁移与 Registry/Local Source Identity | [010-cargo-direct-migration.md](010-cargo-direct-migration.md) |
