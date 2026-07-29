@@ -1,7 +1,7 @@
 # Iteration 013：pipx 直接迁移与 Venv/Source Identity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -24,13 +24,13 @@
 - [x] 将core pipx收缩为Config V1、model/progress与typed error wrapper；built-in registry全部使用direct managers，不再注册任何legacy adapter。
 - [x] 增加fake pipx、mock PyPI、temporary venv root、source/identity collision、404/status/malformed body、path safety、argv、conversion和registration contracts。
 - [x] 执行显式opt-in宿主与PyPI只读smoke；不执行真实pipx install、upgrade、uninstall或environment修改。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity 与安全边界
 
 - venv name是pipx upgrade/uninstall target；distribution name是PyPI query与registry install identity。二者可能相同，但不能由实现假定永远相同。
 - `package_or_url`必须分类为PyPI distribution、git、URL、path或unknown source；non-registry source不得借同名PyPI metadata伪装为可更新registry package。
-- PyPI名称比较遵守Python distribution normalization语义，但保留CLI与registry返回的canonical display name；ambiguous collision返回protocol error。
+- PyPI名称比较遵守Python distribution normalization语义，但保留CLI与registry返回的canonical display name；合法suffix venv可以共存，按distribution反查产生歧义时返回protocol error。
 - `PackageOrigin.reference`使用typed grammar同时保存source kind和必要的venv/distribution identity；不得把本机venv path作为write target。
 - uninstall始终调用pipx CLI；本轮不直接删除venv、shared libraries或bin links。
 
@@ -83,7 +83,11 @@
 - live PyPI只读smoke：1 passed；`docx2txt` exact lookup成功。
 - core lib：56 passed；builtin registry：12 passed。
 - focused managers/core clippy：通过，`-D warnings`下无警告。
+- workspace完整门禁通过：format、all-target check、all-target test、clippy `-D warnings`与build全部成功。
+- GitHub Actions：实现提交run `30453943206`成功；进度文档run `30454015232`成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- pipx已成为direct built-in，当前全部内置manager均由`register_builtin_managers`注册direct implementation。
+- Config V1、`PackageManagerType`、静态wrapper与`LegacyPackageManagerAdapter`仍存在；Iteration 014先移除已无生产调用的legacy adapter并收敛direct registry入口。
+- Config V2与UI `ManagerId`迁移继续作为后续独立迭代，避免把配置持久化、UI key和执行引擎同时重写。
