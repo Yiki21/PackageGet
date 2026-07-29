@@ -15,8 +15,8 @@
 - [x] 保留自定义 Zypper executable、RPM query metadata、refresh/no-explicit-refresh 和批量 install/update/remove 命令语义。
 - [x] 为 Zypper 表格命令固定 `LC_ALL=C`，避免用户桌面 locale 改变 header 与 parser contract。
 - [x] 增加 Zypper 专属退出码映射：permission、busy、reboot required、search no-match、cancelled、network/incomplete result 与其他事务失败。
-- [ ] 将 core 的旧 Zypper 入口收缩为 Config V1、model、progress 与 typed error compatibility wrapper。
-- [ ] 更新 mixed built-in registry：四个 system manager 使用直接实现，其余 7 个 manager 继续使用 legacy adapter。
+- [x] 将 core 的旧 Zypper 入口收缩为 Config V1、model、progress 与 typed error compatibility wrapper。
+- [x] 更新 mixed built-in registry：四个 system manager 使用直接实现，其余 7 个 manager 继续使用 legacy adapter。
 - [ ] 增加离线 RPM/table fixtures、command construction、exit-code、conversion、registration 与 public API contract tests。
 - [ ] 在 openSUSE Tumbleweed 容器中执行 direct API 的无网络、只读 availability/installed/count/current-version smoke。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
@@ -69,18 +69,24 @@
 - shared command boundary 已增加 command-local environment，且仅 search/list-updates 设置 `LC_ALL=C`；refresh/write 不依赖 locale-sensitive parser。
 - shared progress runner 已允许 manager 注入 status mapper；Zypper 5/7/102/105/106 映射到 typed error，103/104/107 保留 `Other` detail，未知状态继续回退通用 stderr classifier。
 - search 仅将退出码 104 解释为无匹配；106 等失败即使带有 partial stdout 也不会被解析成成功结果。
+- `core/src/pm/zypper.rs` 已删除旧 command construction、RPM/table parser 与执行副本，只保留 Config V1、model、progress 和 typed error 转换。
+- mixed built-in registry 现在直接注册 APT、DNF、Pacman、Zypper；其余 7 个 manager 继续使用 legacy adapter，并增加 direct Zypper duplicate contract。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
 | `a48fb14` | 实现 direct Zypper、command-local locale 与专属退出码 | managers 41 项通过、3 项 ignored；check/clippy 通过 |
+| `80d20f0` | 将 legacy Zypper 路由到 direct manager 并更新 mixed registry | core 74 项通过、11 项 ignored；check/clippy 通过 |
 
 ## 验证记录
 
 - `cargo check -p updater-managers --jobs 1` 通过。
 - `cargo test -p updater-managers --jobs 1 -- --test-threads=1`：41 项通过，3 项环境 smoke 保持 ignored。
 - `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` 通过。
+- `cargo check -p updater_core --jobs 1` 通过。
+- `cargo test -p updater_core --jobs 1 -- --test-threads=1`：74 项通过，11 项环境或网络测试保持 ignored。
+- `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
 
 ## 遗留项 / 下一轮
 
