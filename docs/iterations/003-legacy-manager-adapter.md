@@ -1,7 +1,7 @@
 # Iteration 003：Legacy Manager Adapter
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——渐进迁移现有 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -17,7 +17,7 @@
 - [x] 将旧 package model、progress event 和 `CoreError` 转换为新公共 API 类型。
 - [x] 提供 `register_legacy_managers`，通过新 registry 注册全部现有 built-in adapter。
 - [x] 增加纯离线 identity、注册、转换、capability 与 progress contract tests。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
 
@@ -49,6 +49,7 @@
 - `register_legacy_managers` 可将现有 11 个 built-in adapter 显式注册到 `ManagerRegistry`。
 - 新增 11 个纯离线 adapter 测试，覆盖 system/app/Go 配置桥接、ID 防串用、metadata、availability、typed errors、progress、完整注册和空操作执行。
 - workspace 完整本地门禁通过；慢速全量复验交由 GitHub Actions，避免使用 `act` 重复构建整套容器环境。
+- GitHub Actions run 30425952526 在 2 分 45 秒内通过 format、check、deterministic tests、Clippy 与 build，本轮完成。
 
 ## Git 提交
 
@@ -59,7 +60,8 @@
 | `6b31606` | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
 | `dd0f718` | 实现 Config V1 桥接、legacy adapter、类型转换与 built-in 注册 | core check、clippy |
 | `7598c6c` | 补齐 adapter 配置、转换、注册、错误与 progress 离线测试 | focused test、clippy |
-| 待提交 | 记录 Iteration 003 完整本地验证 | format、check、test、clippy、build |
+| `133e9b9` | 记录 Iteration 003 完整本地验证 | format、check、test、clippy、build |
+| 待提交 | 完成本轮报告并建立 Iteration 004 计划 | 文档检查 |
 
 ## 验证记录
 
@@ -73,7 +75,10 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 --quiet -- --test-threads=1`：91 个测试通过，13 个环境测试 ignored。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：adapter 完成后通过。
 - `cargo build --workspace --locked --jobs 1 --quiet`：通过。
+- [GitHub Actions CI run 30425952526](https://github.com/Yiki21/PackageGet/actions/runs/30425952526)：完整质量门禁通过。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- 下一轮在 workspace 根目录新增平铺的 `managers/` crate，不引入无实际分组意义的目录层。
+- 先将 APT 直接实现到新对象安全 API，并让旧 UI 兼容入口复用同一实现，避免长期保留两份命令逻辑。
+- 具体计划见 [Iteration 004](004-managers-crate-apt-migration.md)。
