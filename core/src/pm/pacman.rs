@@ -1,131 +1,49 @@
-use std::collections::{HashMap, HashSet};
-
 use async_trait::async_trait;
-use tokio::process::Command;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::PacmanManager as DirectPacmanManager;
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    error::CoreError,
-    pm::{
-        common::manager_command_path,
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct PacmanManager;
 
-fn command_path(config: &Config) -> String {
-    manager_command_path(config, PackageManagerType::Pacman)
-}
-
 #[async_trait]
 impl PackageManager for PacmanManager {
     async fn get_current_version(config: &Config, package_name: &str) -> CoreResult<String> {
-        let path = command_path(config);
-
-        let output = Command::new(&path)
-            .arg("-Q")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(CoreError::ParseError(format!(
-                "Package {} not found",
-                package_name
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut parts = stdout.split_whitespace();
-        let _name = parts.next();
-        let version = parts.next();
-
-        version
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| CoreError::ParseError("Failed to parse pacman version".to_owned()))
+        DirectPacmanManager::new()
+            .current_version(&manager_config(config), package_name)
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-        let path = command_path(config);
-
-        let output = Command::new(&path).arg("-Q").output().await?;
-        if !output.status.success() {
-            return Err(CoreError::UnknownError("pacman -Q failed".to_owned()));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let packages = stdout
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split_whitespace();
-                let name = parts.next()?;
-                let version = parts.next()?;
-
-                Some(PackageInfo {
-                    name: name.to_owned(),
-                    version: version.to_owned(),
-                    source: PackageManagerType::Pacman,
-                    description: None,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
-                })
-            })
-            .collect();
-
-        Ok(packages)
+        DirectPacmanManager::new()
+            .installed(&manager_config(config))
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 
     async fn count_installed(config: &Config) -> CoreResult<usize> {
-        let path = command_path(config);
-
-        let output = Command::new(&path).arg("-Qq").output().await?;
-        if !output.status.success() {
-            return Ok(Self::list_installed(config).await?.len());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        Ok(stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count())
+        DirectPacmanManager::new()
+            .count_installed(&manager_config(config))
+            .await
+            .map_err(convert_manager_error)
     }
 
     async fn search_package(config: &Config, package_name: &str) -> CoreResult<Vec<PackageInfo>> {
-        let path = command_path(config);
-
-        let output = Command::new(&path)
-            .arg("-Ss")
-            .arg(package_name)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let installed_versions = Self::installed_version_map(config).await?;
-
-        let packages = parse_search_results(&stdout)
-            .into_iter()
-            .map(|(name, _available_version, description)| PackageInfo {
-                version: installed_versions
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or_else(|| "Not Installed".to_owned()),
-                name,
-                source: PackageManagerType::Pacman,
-                description,
-                size: None,
-                install_date: None,
-                homepage: None,
-            })
-            .collect();
-
-        Ok(packages)
+        DirectPacmanManager::new()
+            .search(&manager_config(config), package_name)
+            .await
+            .map(|packages| packages.into_iter().map(convert_package_info).collect())
+            .map_err(convert_manager_error)
     }
 }
 
@@ -134,35 +52,11 @@ impl PacmanManager {
         config: &Config,
         refresh: bool,
     ) -> CoreResult<Vec<PackageUpdate>> {
-        let path = command_path(config);
-
-        if refresh {
-            let args = vec![path.clone(), "-Sy".to_owned(), "--noconfirm".to_owned()];
-            run_command_with_progress("pkexec", &args, |_| {}).await?;
-        }
-
-        let output = Command::new(&path).arg("-Qu").output().await?;
-
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stdout.trim().is_empty() && stderr.trim().is_empty() {
-                return Ok(Vec::new());
-            }
-
-            return Err(CoreError::from_command_failure(format!(
-                "pacman -Qu failed: {}",
-                stderr.trim()
-            )));
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let updates = stdout
-            .lines()
-            .filter_map(parse_update_line)
-            .collect::<Vec<_>>();
-
-        Ok(updates)
+        DirectPacmanManager::new()
+            .updates(&manager_config(config), refresh)
+            .await
+            .map(|updates| updates.into_iter().map(convert_package_update).collect())
+            .map_err(convert_manager_error)
     }
 
     pub async fn uninstall_packages_with_progress(
@@ -170,16 +64,13 @@ impl PacmanManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-
-        let mut args = vec![path, "-R".to_owned(), "--noconfirm".to_owned()];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Uninstall,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 
     pub async fn update_packages_with_progress(
@@ -187,21 +78,8 @@ impl PacmanManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-
-        let mut args = vec![
-            path,
-            "-S".to_owned(),
-            "--needed".to_owned(),
-            "--noconfirm".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
+        run_packages_with_progress(config, ApiPackageAction::Update, package_names, on_progress)
+            .await
     }
 
     pub async fn install_packages_with_progress(
@@ -209,132 +87,168 @@ impl PacmanManager {
         package_names: &[String],
         on_progress: impl FnMut(CommandProgressEvent),
     ) -> CoreResult<()> {
-        if package_names.is_empty() {
-            return Ok(());
-        }
-
-        let path = command_path(config);
-
-        let mut args = vec![
-            path,
-            "-S".to_owned(),
-            "--needed".to_owned(),
-            "--noconfirm".to_owned(),
-        ];
-        args.extend(package_names.iter().cloned());
-
-        run_command_with_progress("pkexec", &args, on_progress).await
-    }
-
-    async fn installed_version_map(config: &Config) -> CoreResult<HashMap<String, String>> {
-        let path = command_path(config);
-
-        let output = Command::new(&path).arg("-Q").output().await?;
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut map = HashMap::new();
-
-        for line in stdout.lines() {
-            let mut parts = line.split_whitespace();
-            let Some(name) = parts.next() else {
-                continue;
-            };
-            let Some(version) = parts.next() else {
-                continue;
-            };
-
-            map.insert(name.to_owned(), version.to_owned());
-        }
-
-        Ok(map)
+        run_packages_with_progress(
+            config,
+            ApiPackageAction::Install,
+            package_names,
+            on_progress,
+        )
+        .await
     }
 }
 
-fn parse_update_line(line: &str) -> Option<PackageUpdate> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 4 || parts[2] != "->" {
-        return None;
-    }
-
-    Some(PackageUpdate {
-        name: parts[0].to_owned(),
-        current_version: parts[1].to_owned(),
-        new_version: parts[3].to_owned(),
-    })
+async fn run_packages_with_progress(
+    config: &Config,
+    action: ApiPackageAction,
+    package_names: &[String],
+    mut on_progress: impl FnMut(CommandProgressEvent),
+) -> CoreResult<()> {
+    DirectPacmanManager::new()
+        .execute_packages_with_progress(&manager_config(config), action, package_names, |event| {
+            let (progress, command_message) = event.into_parts();
+            on_progress(CommandProgressEvent {
+                progress,
+                command_message,
+            });
+        })
+        .await
+        .map_err(convert_manager_error)
 }
 
-fn parse_search_results(output: &str) -> Vec<(String, String, Option<String>)> {
-    let mut packages = Vec::new();
-    let mut seen = HashSet::new();
-    let mut lines = output.lines().peekable();
-
-    while let Some(line) = lines.next() {
-        let line = line.trim_end();
-        if line.trim().is_empty() || line.starts_with(' ') || line.starts_with('\t') {
-            continue;
-        }
-
-        let mut parts = line.split_whitespace();
-        let Some(repo_and_name) = parts.next() else {
-            continue;
-        };
-        let Some(available_version) = parts.next() else {
-            continue;
-        };
-
-        let Some((_, name)) = repo_and_name.split_once('/') else {
-            continue;
-        };
-
-        if !seen.insert(name.to_owned()) {
-            continue;
-        }
-
-        let description = lines
-            .next_if(|next| next.starts_with(' ') || next.starts_with('\t'))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-
-        packages.push((name.to_owned(), available_version.to_owned(), description));
+fn manager_config(config: &Config) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(PackageManagerType::Pacman.manager_id());
+    if let Some(path) = config.get_package_path(PackageManagerType::Pacman) {
+        manager_config.with_executable(path)
+    } else {
+        manager_config
     }
+}
 
-    packages
+fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source: PackageManagerType::Pacman,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
+    }
+}
+
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
+    }
+}
+
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired => CoreError::CommandError(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Cancelled | ManagerErrorKind::Other => {
+            CoreError::UnknownError(detail)
+        }
+        _ => CoreError::UnknownError(detail),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
+
     use super::*;
+    use crate::PackageManagerConfig;
 
     #[test]
-    fn parse_update_line_accepts_standard_pacman_format() {
-        let line = "linux 6.8.9.arch1-1 -> 6.8.10.arch1-1";
-        let parsed = parse_update_line(line).expect("line should parse");
+    fn legacy_config_bridge_preserves_custom_pacman_path() {
+        let config = Config {
+            system_manager: Some(PackageManagerConfig {
+                manager_type: PackageManagerType::Pacman,
+                custom_path: Some("/custom/pacman".to_owned()),
+            }),
+            ..Config::default()
+        };
 
-        assert_eq!(parsed.name, "linux");
-        assert_eq!(parsed.current_version, "6.8.9.arch1-1");
-        assert_eq!(parsed.new_version, "6.8.10.arch1-1");
+        let converted = manager_config(&config);
+        assert_eq!(converted.id, PackageManagerType::Pacman.manager_id());
+        assert_eq!(
+            converted.executable(),
+            Some(std::path::Path::new("/custom/pacman"))
+        );
     }
 
     #[test]
-    fn parse_update_line_rejects_unexpected_lines() {
-        assert!(parse_update_line("warning: database file for 'core' does not exist").is_none());
-        assert!(parse_update_line("linux 6.8.9.arch1-1 6.8.10.arch1-1").is_none());
+    fn legacy_model_bridge_preserves_pacman_metadata() {
+        let id = ManagerId::parse("builtin:pacman").expect("valid Pacman ID");
+        let mut package = ApiPackageInfo::new(id.clone(), "bash", "5.2.037-1");
+        package.description = Some("GNU shell".to_owned());
+        package.size = Some(42);
+        package.install_date = Some("2026-07-29".to_owned());
+        package.homepage = Some("https://www.gnu.org/software/bash/".to_owned());
+
+        let converted = convert_package_info(package);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.version, "5.2.037-1");
+        assert_eq!(converted.source, PackageManagerType::Pacman);
+        assert_eq!(converted.description.as_deref(), Some("GNU shell"));
+        assert_eq!(converted.size, Some(42));
+        assert_eq!(converted.install_date.as_deref(), Some("2026-07-29"));
+        assert_eq!(
+            converted.homepage.as_deref(),
+            Some("https://www.gnu.org/software/bash/")
+        );
+
+        let update = ApiPackageUpdate::new(PackageTarget::new(id, "bash"), "5.1", "5.2");
+        let converted = convert_package_update(update);
+        assert_eq!(converted.name, "bash");
+        assert_eq!(converted.current_version, "5.1");
+        assert_eq!(converted.new_version, "5.2");
     }
 
     #[test]
-    fn parse_search_results_reads_description_line() {
-        let output = "core/bash 5.2.026-2\n    The GNU Bourne Again shell\nextra/fzf 0.58.0-1\n    Command-line fuzzy finder\n";
+    fn typed_manager_errors_map_back_to_legacy_categories() {
+        for (kind, expected) in [
+            (ManagerErrorKind::Network, "request"),
+            (ManagerErrorKind::Protocol, "parse"),
+            (ManagerErrorKind::Permission, "command"),
+            (ManagerErrorKind::Other, "unknown"),
+        ] {
+            let error = convert_manager_error(
+                ManagerError::new(kind, "operation failed").with_detail("diagnostic"),
+            );
+            let category = match error {
+                CoreError::RequestError(_) => "request",
+                CoreError::ParseError(_) => "parse",
+                CoreError::CommandError(_) => "command",
+                CoreError::UnknownError(_) => "unknown",
+                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+            };
+            assert_eq!(category, expected);
+        }
+    }
 
-        let parsed = parse_search_results(output);
+    #[tokio::test]
+    async fn empty_legacy_execution_does_not_run_pacman() {
+        let mut events = Vec::new();
+        PacmanManager::install_packages_with_progress(&Config::default(), &[], |event| {
+            events.push(event);
+        })
+        .await
+        .expect("execute empty legacy Pacman group");
 
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].0, "bash");
-        assert_eq!(parsed[0].1, "5.2.026-2");
-        assert_eq!(parsed[0].2.as_deref(), Some("The GNU Bourne Again shell"));
-        assert_eq!(parsed[1].0, "fzf");
+        assert!(events.is_empty());
     }
 }

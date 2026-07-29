@@ -8,7 +8,10 @@ use updater_manager_api::{
     PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager, PackageScope,
     PackageTarget, PackageUpdate as ApiPackageUpdate, Platform, ProgressEvent, ProgressSink,
 };
-use updater_managers::{AptManager as DirectAptManager, DnfManager as DirectDnfManager};
+use updater_managers::{
+    AptManager as DirectAptManager, DnfManager as DirectDnfManager,
+    PacmanManager as DirectPacmanManager,
+};
 
 use crate::{
     ALL_PACKAGE_MANAGERS, Config, InstallProgress, ManagerRegistry, PackageInfo,
@@ -264,9 +267,9 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 
 /// Registers the current mixed set of direct and legacy built-in managers.
 ///
-/// APT and DNF are registered through their direct `updater-managers`
-/// implementations. Managers that have not migrated yet remain wrapped by
-/// [`LegacyPackageManagerAdapter`].
+/// APT, DNF, and Pacman are registered through their direct
+/// `updater-managers` implementations. Managers that have not migrated yet
+/// remain wrapped by [`LegacyPackageManagerAdapter`].
 ///
 /// # Errors
 ///
@@ -275,11 +278,12 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), RegistryError> {
     registry.register(Arc::new(DirectAptManager::new()))?;
     registry.register(Arc::new(DirectDnfManager::new()))?;
+    registry.register(Arc::new(DirectPacmanManager::new()))?;
 
     for manager_type in ALL_PACKAGE_MANAGERS {
         if !matches!(
             manager_type,
-            PackageManagerType::Apt | PackageManagerType::Dnf
+            PackageManagerType::Apt | PackageManagerType::Dnf | PackageManagerType::Pacman
         ) {
             registry.register(Arc::new(LegacyPackageManagerAdapter::new(*manager_type)))?;
         }
