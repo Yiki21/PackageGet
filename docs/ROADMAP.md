@@ -4,8 +4,8 @@
 - 工作区目前只有 ui、core 两个 crate，core/src/lib.rs 同时承担领域模型、配置、硬编码枚举分发和所有内置 PackageManager，现有 PackageManager trait
   是静态关联函数集合，不能作为 dyn PackageManager 注册，也无法让外部 crate 真正接入。
 - GUI 在 ui/src/main.rs 强制检查 Wayland，ui/Cargo.toml 仅启用 Iced Wayland feature；系统管理器、pkexec、打包和 CI 都是 Linux 专用。
-- Cargo manifest 里的普通版本字符串是 caret 兼容范围，并非 = 精确锁死；真正固定可复现依赖图的是 Cargo.lock。本轮要把 manifest
-  的兼容下限提升到实施时审查过的最新稳定发行线，同时保留并提交 lockfile，而不是删除锁文件或使用不受控的通配版本。
+- Cargo manifest 里的普通版本字符串是 caret 兼容范围，并非 = 精确锁死；真正固定可复现依赖图的是 Cargo.lock。manifest 对 1.x 以上 crate
+  使用主版本兼容线，对 0.x crate 保留兼容 minor 线，不写死类似 3.27.0 的最低 patch/minor；同时保留并提交 lockfile，而不是删除锁文件或使用不受控的通配版本。
 
 目标是分阶段完成：先稳定依赖与扩展边界，再迁移内置管理器和平台层，随后交付 X11、Windows、macOS 以及统一的视觉/功能改进。每个阶段都保持可编译、可回滚，避免同时重写 UI、执行引擎和所有管理器。
 
@@ -26,7 +26,7 @@
 1.  在根 Cargo.toml 集中全部直接依赖及版本，子 crate 改用 workspace = true；消除 core/Cargo.toml 中重复的 Tokio/Serde 等独立版本声明。
 2.  制定依赖策略：
 
-- manifest 使用实施时审查过的最新稳定发行线和 Cargo 默认 caret 语义，不使用 \*，非必要不使用 =x.y.z；
+- manifest 对 1.x 以上 crate 使用主版本线、对 0.x crate 使用兼容 minor 线，并采用 Cargo 默认 caret 语义；不使用 \*，非必要不使用 =x.y.z；
 - 依次更新基础库、网络/序列化库、平台集成库，最后单独升级 Iced 及其窗口/渲染依赖；
 - 每组更新后审阅 Cargo.lock、重复依赖、MSRV/API 变化并串行验证；
 - 为 Cargo 和 GitHub Actions 增加 Dependabot 分组更新，防止版本再次长期滞后。

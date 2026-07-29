@@ -9,13 +9,13 @@ resolver = "3"
 members = ["ui", "core"]
 
 [workspace.dependencies]
-anyhow = "1.0"
-async-trait = "0.1.89"
+anyhow = "1"
+async-trait = "0.1"
 chrono = "0.4"
 directories-next = "2"
 env_logger = "0.11"
-futures = "0.3.32"
-iced = { version = "0.14.0", default-features = false, features = [
+futures = "0.3"
+iced = { version = "0.14", default-features = false, features = [
   "advanced",
   "crisp",
   "linux-theme-detection",
@@ -27,19 +27,19 @@ iced = { version = "0.14.0", default-features = false, features = [
   "web-colors",
   "wgpu",
 ] }
-log = "0.4.29"
-mimalloc = "0.1.48"
-notify-rust = "4.12"
-regex = "1.12.2"
+log = "0.4"
+mimalloc = "0.1"
+notify-rust = "4"
+regex = "1"
 reqwest = { version = "0.13", features = ["json"] }
-rfd = "0.17.2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
-thiserror = "2.0.18"
-tokio = { version = "1.50", features = ["full"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
 updater_core = { path = "core" }
-url = "2.5"
+url = "2"
 
 [profile.dev]
 opt-level = 1
