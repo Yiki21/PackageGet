@@ -1,7 +1,7 @@
 # Iteration 012：npm/pnpm 直接迁移与 Global Package Identity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -22,7 +22,7 @@
 - [x] 将core npm/pnpm收缩为Config V1、model/progress与typed error wrapper，mixed registry改为direct npm/pnpm且只保留pipx legacy adapter。
 - [x] 增加fake npm/pnpm executables、offline JSON fixtures、exit-code、timeout、scope/version、command argv、size boundary、conversion和duplicate registration contracts。
 - [x] 执行显式opt-in宿主只读smoke；不执行真实global install、update或remove，也不修改Node.js全局配置。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity 与协议边界
 
@@ -69,12 +69,15 @@
 - 首次pnpm宿主smoke暴露真实global dependency path是symlink；实现已改为保留identity但不跟随计算size，普通目录仍执行canonical containment和fallible deterministic traversal，并增加离线symlink contract。
 - npm与pnpm宿主只读smoke最终均通过availability、inventory/count、outdated与search；未执行任何global write或配置修改。
 - npm/pnpm direct migration后的完整本地门禁已串行通过；format、locked workspace check、全部targets tests、workspace clippy `-D warnings`与build均无失败。
+- GitHub Actions在direct实现提交与最终验证提交上均通过完整CI；Iteration 012可以关闭。
 
 ## Git 提交
 
 - Iteration 012计划检查点：本次提交（`docs: complete Go iteration and plan npm pnpm`）。
 - npm/pnpm CLI与identity审计检查点：`b6f705c docs: audit npm pnpm manager contracts`。
 - npm/pnpm direct/core migration检查点：`aa8b393 feat: migrate npm pnpm to direct managers`。
+- npm/pnpm迁移进度检查点：`6330408 docs: record npm pnpm migration progress`。
+- npm/pnpm本地验证检查点：`3c826a1 docs: record npm pnpm migration validation`。
 
 ## 验证记录
 
@@ -93,7 +96,10 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：全部通过；默认忽略需要宿主工具、容器或live network的显式opt-in smoke。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions `30448205891`（npm/pnpm实现提交）：通过。
+- GitHub Actions `30448448820`（最终验证提交）：通过，format、check、deterministic tests、clippy与build全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- npm/pnpm已成为第九和第十个direct manager；mixed registry只剩pipx使用legacy adapter。
+- 下一轮进入 [Iteration 013：pipx直接迁移与Venv/Source Identity](013-pipx-direct-migration.md)。

@@ -25,4 +25,5 @@
 | 009 | 已完成 | 阶段 2：Homebrew 直接迁移与 Formula/Cask Identity | [009-homebrew-direct-migration.md](009-homebrew-direct-migration.md) |
 | 010 | 已完成 | 阶段 2：Cargo 直接迁移与 Registry/Local Source Identity | [010-cargo-direct-migration.md](010-cargo-direct-migration.md) |
 | 011 | 已完成 | 阶段 2：Go 直接迁移与 Module/Binary Identity | [011-go-direct-migration.md](011-go-direct-migration.md) |
-| 012 | 进行中 | 阶段 2：npm/pnpm 直接迁移与 Global Package Identity | [012-node-global-direct-migration.md](012-node-global-direct-migration.md) |
+| 012 | 已完成 | 阶段 2：npm/pnpm 直接迁移与 Global Package Identity | [012-node-global-direct-migration.md](012-node-global-direct-migration.md) |
+| 013 | 进行中 | 阶段 2：pipx 直接迁移与 Venv/Source Identity | [013-pipx-direct-migration.md](013-pipx-direct-migration.md) |
