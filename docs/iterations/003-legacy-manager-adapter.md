@@ -16,7 +16,7 @@
 - [x] 实现 `LegacyPackageManagerAdapter`，映射 availability、installed/count、updates、search 和 execute。
 - [x] 将旧 package model、progress event 和 `CoreError` 转换为新公共 API 类型。
 - [x] 提供 `register_legacy_managers`，通过新 registry 注册全部现有 built-in adapter。
-- [ ] 增加纯离线 identity、注册、转换、capability 与 progress contract tests。
+- [x] 增加纯离线 identity、注册、转换、capability 与 progress contract tests。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
@@ -47,6 +47,7 @@
 - 新 `ManagerConfig` 在调用边界校验 stable ID，并桥接 custom executable；Go 的 `go_bin_dir` 从 typed JSON settings 解析。
 - availability、package/update metadata、write progress 与 `CoreError` 已转换为公共 API 的结构化模型和 typed error kind。
 - `register_legacy_managers` 可将现有 11 个 built-in adapter 显式注册到 `ManagerRegistry`。
+- 新增 11 个纯离线 adapter 测试，覆盖 system/app/Go 配置桥接、ID 防串用、metadata、availability、typed errors、progress、完整注册和空操作执行。
 
 ## Git 提交
 
@@ -55,11 +56,13 @@
 | `0bade6c` | 完成 Iteration 002 并建立 Iteration 003 计划 | 文档检查 |
 | `ad798ec` | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
 | `6b31606` | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
-| 待提交 | 实现 Config V1 桥接、legacy adapter、类型转换与 built-in 注册 | core check、clippy |
+| `dd0f718` | 实现 Config V1 桥接、legacy adapter、类型转换与 built-in 注册 | core check、clippy |
+| 待提交 | 补齐 adapter 配置、转换、注册、错误与 progress 离线测试 | focused test、clippy |
 
 ## 验证记录
 
 - `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`：54 个测试通过，12 个环境测试 ignored。
+- `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`（adapter checkpoint）：65 个测试通过，12 个环境测试 ignored。
 - `cargo test -p updater-manager-api --all-targets --locked --jobs 1 -- --test-threads=1`：4 个测试通过。
 - `cargo check --workspace --all-targets --locked --jobs 1`：扁平化 workspace 路径后通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。

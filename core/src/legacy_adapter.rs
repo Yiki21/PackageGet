@@ -441,3 +441,327 @@ fn classify_command_error(detail: &str) -> ManagerErrorKind {
 fn contains_any(value: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|pattern| value.contains(pattern))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use serde_json::json;
+    use updater_manager_api::{ManagerCapability, ManagerId, PackageManager as _};
+
+    use super::*;
+
+    #[test]
+    fn bridges_system_manager_config_and_custom_executable() {
+        let adapter = LegacyPackageManagerAdapter::new(PackageManagerType::Apt);
+        let config =
+            ManagerConfig::new(PackageManagerType::Apt.manager_id()).with_executable("custom-apt");
+
+        let legacy = adapter.legacy_config(&config).expect("bridge APT config");
+
+        assert_eq!(
+            legacy.system_manager,
+            Some(PackageManagerConfig {
+                manager_type: PackageManagerType::Apt,
+                custom_path: Some("custom-apt".to_owned()),
+            })
+        );
+        assert!(legacy.app_managers.is_empty());
+    }
+
+    #[test]
+    fn bridges_app_manager_and_typed_go_settings() {
+        let adapter = LegacyPackageManagerAdapter::new(PackageManagerType::Go);
+        let mut config = ManagerConfig::new(PackageManagerType::Go.manager_id());
+        config.settings = json!({"go_bin_dir": "/tmp/updater-go-bin"});
+
+        let legacy = adapter.legacy_config(&config).expect("bridge Go config");
+
+        assert!(legacy.system_manager.is_none());
+        assert_eq!(
+            legacy.app_managers,
+            vec![PackageManagerConfig {
+                manager_type: PackageManagerType::Go,
+                custom_path: None,
+            }]
+        );
+        assert_eq!(legacy.go_bin_dir.as_deref(), Some("/tmp/updater-go-bin"));
+    }
+
+    #[test]
+    fn rejects_mismatched_ids_and_invalid_go_settings() {
+        let adapter = LegacyPackageManagerAdapter::new(PackageManagerType::Go);
+        let wrong_id = ManagerConfig::new(PackageManagerType::Cargo.manager_id());
+        let mismatch = adapter
+            .legacy_config(&wrong_id)
+            .expect_err("reject mismatched manager ID");
+        assert_eq!(mismatch.kind(), ManagerErrorKind::Protocol);
+
+        let mut invalid = ManagerConfig::new(PackageManagerType::Go.manager_id());
+        invalid.settings = json!({"go_bin_dir": 42});
+        let error = adapter
+            .legacy_config(&invalid)
+            .expect_err("reject invalid Go settings");
+        assert_eq!(error.kind(), ManagerErrorKind::Protocol);
+        assert_eq!(error.message(), "Go manager settings are invalid");
+    }
+
+    #[test]
+    fn converts_legacy_package_and_update_metadata_without_loss() {
+        let package = convert_package_info(PackageInfo {
+            name: "ripgrep".to_owned(),
+            version: "14.1.1".to_owned(),
+            source: PackageManagerType::Cargo,
+            description: Some("Fast recursive search".to_owned()),
+            size: Some(12_345),
+            install_date: Some("2026-07-29".to_owned()),
+            homepage: Some("https://github.com/BurntSushi/ripgrep".to_owned()),
+        });
+
+        assert_eq!(package.manager_id, PackageManagerType::Cargo.manager_id());
+        assert_eq!(package.name, "ripgrep");
+        assert_eq!(package.version, "14.1.1");
+        assert_eq!(
+            package.description.as_deref(),
+            Some("Fast recursive search")
+        );
+        assert_eq!(package.size, Some(12_345));
+        assert_eq!(package.install_date.as_deref(), Some("2026-07-29"));
+        assert_eq!(
+            package.homepage.as_deref(),
+            Some("https://github.com/BurntSushi/ripgrep")
+        );
+        assert_eq!(package.scope, PackageScope::Unknown);
+        assert!(package.origin.is_none());
+
+        let update = convert_package_update(
+            PackageManagerType::Cargo,
+            PackageUpdate {
+                name: "ripgrep".to_owned(),
+                current_version: "14.1.0".to_owned(),
+                new_version: "14.1.1".to_owned(),
+            },
+        );
+        assert_eq!(
+            update.target.manager_id,
+            PackageManagerType::Cargo.manager_id()
+        );
+        assert_eq!(update.target.name, "ripgrep");
+        assert_eq!(update.current_version, "14.1.0");
+        assert_eq!(update.available_version, "14.1.1");
+    }
+
+    #[test]
+    fn converts_all_legacy_availability_states() {
+        assert_eq!(
+            convert_availability(PackageManagerAvailability::Available),
+            ManagerAvailability::Available { version: None }
+        );
+        assert_eq!(
+            convert_availability(PackageManagerAvailability::NotFound {
+                command: "missing-manager".to_owned(),
+            }),
+            ManagerAvailability::Unavailable {
+                reason: AvailabilityReason::CommandMissing {
+                    command: "missing-manager".to_owned(),
+                },
+            }
+        );
+        assert_eq!(
+            convert_availability(PackageManagerAvailability::NotExecutable {
+                path: "/tmp/manager".to_owned(),
+            }),
+            ManagerAvailability::Unavailable {
+                reason: AvailabilityReason::NotExecutable {
+                    path: PathBuf::from("/tmp/manager"),
+                },
+            }
+        );
+        assert_eq!(
+            convert_availability(PackageManagerAvailability::VersionCheckFailed {
+                command: "manager".to_owned(),
+                detail: "exit status 1".to_owned(),
+            }),
+            ManagerAvailability::Unavailable {
+                reason: AvailabilityReason::VersionCheckFailed {
+                    detail: "manager: exit status 1".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_legacy_errors_and_preserves_diagnostic_detail() {
+        let cases = [
+            (
+                CoreError::CommandError("command not found".to_owned()),
+                ManagerErrorKind::CommandMissing,
+            ),
+            (
+                CoreError::CommandError("pkexec: not authorized".to_owned()),
+                ManagerErrorKind::Permission,
+            ),
+            (
+                CoreError::CommandError("could not get lock".to_owned()),
+                ManagerErrorKind::Busy,
+            ),
+            (
+                CoreError::CommandError("operation timed out".to_owned()),
+                ManagerErrorKind::Timeout,
+            ),
+            (
+                CoreError::CommandError("reboot required".to_owned()),
+                ManagerErrorKind::RebootRequired,
+            ),
+            (
+                CoreError::ParseError("unexpected column".to_owned()),
+                ManagerErrorKind::Protocol,
+            ),
+            (
+                CoreError::RequestError("offline".to_owned()),
+                ManagerErrorKind::Network,
+            ),
+            (
+                CoreError::UnknownError("unexpected".to_owned()),
+                ManagerErrorKind::Other,
+            ),
+        ];
+
+        for (legacy, expected_kind) in cases {
+            let expected_detail = match &legacy {
+                CoreError::CommandError(detail)
+                | CoreError::Utf8Error(detail)
+                | CoreError::ParseError(detail)
+                | CoreError::UnknownError(detail)
+                | CoreError::SerializationError(detail)
+                | CoreError::RequestError(detail) => detail.clone(),
+            };
+            let converted = convert_core_error(legacy);
+            assert_eq!(converted.kind(), expected_kind);
+            assert_eq!(converted.detail(), Some(expected_detail.as_str()));
+        }
+    }
+
+    #[test]
+    fn maps_legacy_progress_to_message_and_advanced_events() {
+        let events = Mutex::new(Vec::new());
+        let sink = |event| events.lock().expect("progress lock").push(event);
+
+        emit_progress(
+            &sink,
+            InstallProgress {
+                manager: PackageManagerType::Cargo,
+                current_package: "ripgrep".to_owned(),
+                completed: 1,
+                total: 2,
+                command_message: Some("downloading crate".to_owned()),
+            },
+        );
+
+        assert_eq!(
+            *events.lock().expect("progress lock"),
+            vec![
+                ProgressEvent::Message {
+                    message: "downloading crate".to_owned(),
+                },
+                ProgressEvent::Advanced {
+                    completed: 1,
+                    total: 2,
+                    current_package: Some("ripgrep".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn registers_every_legacy_manager_with_all_current_capabilities() {
+        let mut registry = ManagerRegistry::new();
+        register_legacy_managers(&mut registry).expect("register legacy managers");
+
+        assert_eq!(registry.len(), ALL_PACKAGE_MANAGERS.len());
+        for manager_type in ALL_PACKAGE_MANAGERS {
+            let manager = registry
+                .get(&manager_type.manager_id())
+                .expect("registered built-in manager");
+            assert_eq!(manager.descriptor().id(), &manager_type.manager_id());
+            for capability in [
+                ManagerCapability::Installed,
+                ManagerCapability::Updates,
+                ManagerCapability::Search,
+                ManagerCapability::Install,
+                ManagerCapability::Update,
+                ManagerCapability::Uninstall,
+            ] {
+                assert!(manager.descriptor().capabilities().contains(capability));
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_legacy_registration_returns_the_stable_id() {
+        let mut registry = ManagerRegistry::new();
+        registry
+            .register(Arc::new(LegacyPackageManagerAdapter::new(
+                PackageManagerType::Apt,
+            )))
+            .expect("register initial APT adapter");
+
+        assert!(matches!(
+            register_legacy_managers(&mut registry),
+            Err(RegistryError::DuplicateManager { id })
+                if id == PackageManagerType::Apt.manager_id()
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_execute_emits_started_and_finished_without_running_a_command() {
+        let adapter = LegacyPackageManagerAdapter::new(PackageManagerType::Cargo);
+        let config = ManagerConfig::new(PackageManagerType::Cargo.manager_id());
+        let events = Mutex::new(Vec::new());
+        let sink = |event| events.lock().expect("progress lock").push(event);
+
+        adapter
+            .execute(&config, ApiPackageAction::Install, &[], &sink)
+            .await
+            .expect("execute empty group");
+
+        assert_eq!(
+            *events.lock().expect("progress lock"),
+            vec![
+                ProgressEvent::Started {
+                    action: ApiPackageAction::Install,
+                    total: 0,
+                },
+                ProgressEvent::Finished {
+                    completed: 0,
+                    total: 0,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_targets_from_another_manager_before_progress() {
+        let adapter = LegacyPackageManagerAdapter::new(PackageManagerType::Cargo);
+        let config = ManagerConfig::new(PackageManagerType::Cargo.manager_id());
+        let target = PackageTarget::new(
+            ManagerId::parse("org.example:other").expect("valid external manager ID"),
+            "ripgrep",
+        );
+        let events = Mutex::new(Vec::new());
+        let sink = |event| events.lock().expect("progress lock").push(event);
+
+        let error = adapter
+            .execute(
+                &config,
+                ApiPackageAction::Install,
+                std::slice::from_ref(&target),
+                &sink,
+            )
+            .await
+            .expect_err("reject mismatched package target");
+
+        assert_eq!(error.kind(), ManagerErrorKind::Protocol);
+        assert!(events.lock().expect("progress lock").is_empty());
+    }
+}
