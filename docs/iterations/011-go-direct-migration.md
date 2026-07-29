@@ -71,6 +71,7 @@
 - uninstall在删除前重新解析当前inventory、核对typed origin、basename、regular file、canonical GOBIN parent与symlink边界；Unknown短名同样不能绕过inventory。
 - core Go已删除regex、directory traversal与command副本，只保留Config V1、`go_bin_dir` setting、legacy model/progress和typed error转换；mixed registry当前为8个direct manager、3个legacy adapter。
 - 本机opt-in smoke已通过Go availability、真实GOBIN的gopls/gup/kind build-info与installed/count parity，未执行network query或任何写操作。
+- Go direct migration后的本地完整门禁已串行通过；format、locked workspace check、全部targets tests、workspace clippy `-D warnings`与build均无失败。
 
 ## Git 提交
 
@@ -95,6 +96,11 @@
 - `cargo test -p updater_core --lib --jobs 1 -- --test-threads=1`：61 passed。
 - `cargo test -p updater_core --test builtin_registry --jobs 1 -- --test-threads=1`：9 passed。
 - `cargo clippy -p updater-managers -p updater_core --all-targets --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：全部通过；默认忽略需要宿主工具、容器或live network的显式opt-in smoke。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
