@@ -9,9 +9,10 @@ use updater_manager_api::{
     PackageTarget, PackageUpdate as ApiPackageUpdate, Platform, ProgressEvent, ProgressSink,
 };
 use updater_managers::{
-    AptManager as DirectAptManager, DnfManager as DirectDnfManager,
-    FlatpakManager as DirectFlatpakManager, HomebrewManager as DirectHomebrewManager,
-    PacmanManager as DirectPacmanManager, ZypperManager as DirectZypperManager,
+    AptManager as DirectAptManager, CargoManager as DirectCargoManager,
+    DnfManager as DirectDnfManager, FlatpakManager as DirectFlatpakManager,
+    HomebrewManager as DirectHomebrewManager, PacmanManager as DirectPacmanManager,
+    ZypperManager as DirectZypperManager,
 };
 
 use crate::{
@@ -268,7 +269,7 @@ pub fn register_legacy_managers(registry: &mut ManagerRegistry) -> Result<(), Re
 
 /// Registers the current mixed set of direct and legacy built-in managers.
 ///
-/// APT, DNF, Pacman, Zypper, Flatpak, and Homebrew are registered through their direct
+/// APT, DNF, Pacman, Zypper, Flatpak, Homebrew, and Cargo are registered through their direct
 /// `updater-managers` implementations. Managers that have not migrated yet
 /// remain wrapped by [`LegacyPackageManagerAdapter`].
 ///
@@ -283,6 +284,7 @@ pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), R
     registry.register(Arc::new(DirectZypperManager::new()))?;
     registry.register(Arc::new(DirectFlatpakManager::new()))?;
     registry.register(Arc::new(DirectHomebrewManager::new()))?;
+    registry.register(Arc::new(DirectCargoManager::new()))?;
 
     for manager_type in ALL_PACKAGE_MANAGERS {
         if !matches!(
@@ -293,6 +295,7 @@ pub fn register_builtin_managers(registry: &mut ManagerRegistry) -> Result<(), R
                 | PackageManagerType::Zypper
                 | PackageManagerType::Flatpak
                 | PackageManagerType::Homebrew
+                | PackageManagerType::Cargo
         ) {
             registry.register(Arc::new(LegacyPackageManagerAdapter::new(*manager_type)))?;
         }

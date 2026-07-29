@@ -5,7 +5,8 @@ use updater_core::{
     register_builtin_managers,
 };
 use updater_managers::{
-    AptManager, DnfManager, FlatpakManager, HomebrewManager, PacmanManager, ZypperManager,
+    AptManager, CargoManager, DnfManager, FlatpakManager, HomebrewManager, PacmanManager,
+    ZypperManager,
 };
 
 #[test]
@@ -103,5 +104,19 @@ fn mixed_registration_rejects_a_preexisting_direct_homebrew_manager() {
         register_builtin_managers(&mut registry),
         Err(RegistryError::DuplicateManager { id })
             if id == PackageManagerType::Homebrew.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_cargo_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(CargoManager::new()))
+        .expect("register direct Cargo manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Cargo.manager_id()
     ));
 }

@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 mod apt;
+mod cargo;
 mod command;
 mod dnf;
 mod flatpak;
@@ -16,6 +17,7 @@ mod progress;
 mod zypper;
 
 pub use apt::AptManager;
+pub use cargo::CargoManager;
 pub use dnf::DnfManager;
 pub use flatpak::FlatpakManager;
 pub use homebrew::HomebrewManager;
