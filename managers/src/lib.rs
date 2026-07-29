@@ -5,3 +5,10 @@
 //! from `updater-manager-api` and migrate here incrementally.
 
 #![deny(missing_docs)]
+
+mod apt;
+mod command;
+mod progress;
+
+pub use apt::AptManager;
+pub use progress::CommandProgress;
