@@ -4356,6 +4356,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "updater-manager-api"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "updater_core"
 version = "0.2.4"
 dependencies = [
@@ -4373,6 +4383,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "updater-manager-api",
 ]
 
 [[package]]
