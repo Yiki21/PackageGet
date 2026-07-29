@@ -49,6 +49,7 @@
 - 根据本机编辑器反馈，将仓库 toolchain override 与 GitHub Actions 统一改为不写死 patch 版本的 `stable` channel，并在本地声明 `rust-analyzer` 组件。
 - direct DNF integration contract 已覆盖 descriptor/elevation、离线 missing executable、空批次边界事件及错配 config/target 拒绝路径。
 - 本机 DNF5/RPM 只读 smoke 已通过 direct manager 的 availability、installed 与 count 路径；未执行 refresh、search、check-upgrade、`pkexec` 或写事务。
+- 全工作区已在 `stable` toolchain 下串行通过 format、all-targets check、确定性测试、clippy 与 build；等待 GitHub Actions 对相同门禁复验。
 
 ## Git 提交
 
@@ -60,6 +61,7 @@
 | `7d9caaa` | 改用 stable channel 并补齐本地 rust-analyzer component | `rustup show active-toolchain`；`rust-analyzer --version`；`cargo check -p updater-managers --jobs 1` |
 | `4a8af32` | 增加 direct DNF 离线 integration contracts | `cargo test -p updater-managers --all-targets --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
 | `c2f1087` | 增加默认 ignored 的本机 DNF 只读 smoke test | `cargo test -p updater-managers --test dnf_contract local_dnf_availability_and_installed_listing_smoke --jobs 1 -- --ignored --test-threads=1` |
+| 待提交 | 记录 Iteration 005 全工作区本地门禁 | format、check、116 passed / 12 ignored、clippy、build |
 
 ## 验证记录
 
@@ -71,6 +73,11 @@
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
 - 仓库 override 已解析为本机 `stable` toolchain，`rust-analyzer` 可从该 toolchain 正常启动；CI 与 package workflow 不再固定 patch 版本。
 - direct DNF offline contract：4 项通过；本机只读 DNF smoke：1 项通过。
+- `cargo fmt --all -- --check` 通过。
+- `cargo check --workspace --all-targets --locked --jobs 1` 通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：116 项通过、12 项 ignored、0 失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings` 通过。
+- `cargo build --workspace --locked --jobs 1` 通过。
 
 ## 遗留项 / 下一轮
 
