@@ -96,8 +96,10 @@ fn resolve_default_manager_command(manager_type: PackageManagerType) -> String {
 }
 
 pub(crate) fn manager_command_path(config: &Config, manager_type: PackageManagerType) -> String {
+    let id = manager_type.manager_id();
     config
-        .get_package_path(manager_type)
+        .manager_executable(&id)
+        .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| resolve_default_manager_command(manager_type))
 }
 

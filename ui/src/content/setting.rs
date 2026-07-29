@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use iced::Task;
 use rfd::FileHandle;
 use updater_core::{
-    ALL_APP_PACKAGE_MANAGERS, ALL_PACKAGE_MANAGERS, PackageManagerAvailability,
-    PackageManagerConfig, PackageManagerType,
+    ALL_APP_PACKAGE_MANAGERS, ALL_PACKAGE_MANAGERS, ManagerConfig, PackageManagerAvailability,
+    PackageManagerType,
 };
 
 use crate::{
@@ -198,28 +198,17 @@ impl Settings {
                 Action::None
             }
             Message::AddDetectedManager(manager_type) => {
-                let exists = self
-                    .draft
-                    .app_managers
-                    .iter()
-                    .any(|manager| manager.manager_type == manager_type);
+                let id = manager_type.manager_id();
+                let exists = self.draft.manager(&id).is_some();
 
                 if !exists {
-                    self.draft.app_managers.push(PackageManagerConfig {
-                        manager_type,
-                        custom_path: None,
-                    });
+                    self.draft.managers.push(ManagerConfig::new(id));
                 }
                 Action::None
             }
             Message::UnloadManager(manager_type) => {
-                self.draft
-                    .app_managers
-                    .retain(|manager| manager.manager_type != manager_type);
-
-                if manager_type == PackageManagerType::Go {
-                    self.draft.go_bin_dir = None;
-                }
+                let id = manager_type.manager_id();
+                self.draft.managers.retain(|manager| manager.id != id);
                 Action::None
             }
             Message::SaveConfig => {
@@ -263,21 +252,16 @@ impl Settings {
             }
             Message::SelectedPath(file_handle) => {
                 if let Some(manager_type) = self.selecting_manager {
-                    let path = file_handle.path().to_string_lossy().to_string();
+                    let path = file_handle.path().to_path_buf();
                     self.availability.remove(&manager_type);
+                    let id = manager_type.manager_id();
 
-                    if let Some(existing) = self
-                        .draft
-                        .app_managers
-                        .iter_mut()
-                        .find(|manager| manager.manager_type == manager_type)
-                    {
-                        existing.custom_path = Some(path);
+                    if let Some(existing) = self.draft.manager_mut(&id) {
+                        existing.executable = Some(path);
                     } else {
-                        self.draft.app_managers.push(PackageManagerConfig {
-                            manager_type,
-                            custom_path: Some(path),
-                        });
+                        self.draft
+                            .managers
+                            .push(ManagerConfig::new(id).with_executable(path));
                     }
                 } else {
                     log::error!("No package manager type selected when handling SelectedPath");
@@ -305,11 +289,15 @@ impl Settings {
             }
             Message::SelectedGoBinDir(file_handle) => {
                 let path = file_handle.path().to_string_lossy().to_string();
-                self.draft.go_bin_dir = Some(path);
+                if let Err(error) = self.draft.set_go_bin_dir(Some(path)) {
+                    self.save_status = Some(SaveStatus::Error(error.to_string()));
+                }
                 Action::None
             }
             Message::ClearGoBinDir => {
-                self.draft.go_bin_dir = None;
+                if let Err(error) = self.draft.set_go_bin_dir(None) {
+                    self.save_status = Some(SaveStatus::Error(error.to_string()));
+                }
                 Action::None
             }
             Message::RevertChanges => {
@@ -338,13 +326,10 @@ impl Settings {
         let content = column![
             SharedUi::page_header(
                 "Settings",
-                format!(
-                    "{} application package managers configured",
-                    pm_config.app_managers.len()
-                ),
+                format!("{} package managers configured", pm_config.managers.len()),
                 theme::colors::SETTINGS,
             ),
-            self.view_system_manager_section(pm_config.system_manager.as_ref()),
+            self.view_system_manager_section(pm_config),
             self.view_appearance_section(pm_config),
             self.view_app_manager_section(pm_config),
             self.view_selection_list(pm_config),
@@ -382,20 +367,27 @@ impl Settings {
 
     fn view_system_manager_section(
         &self,
-        system_manager: Option<&PackageManagerConfig>,
+        pm_config: &updater_core::Config,
     ) -> iced::Element<'static, Message> {
         use iced::widget::{column, row, text};
 
-        let content = if let Some(manager) = system_manager {
+        let system_manager = pm_config.managers.iter().find_map(|manager| {
+            let manager_type = PackageManagerType::from_manager_id(&manager.id)?;
+            manager_type
+                .is_system_manager()
+                .then_some((manager_type, manager))
+        });
+
+        let content = if let Some((manager_type, manager)) = system_manager {
             let path_info = manager
-                .custom_path
+                .executable()
                 .as_ref()
-                .map(|p| format!("Path: {}", p))
+                .map(|path| format!("Path: {}", path.display()))
                 .unwrap_or_else(|| "Path: $PATH (System Default)".to_string());
 
             column![
                 row![
-                    text(manager.manager_type.name()).size(16),
+                    text(manager_type.name()).size(16),
                     text("✓").size(16).style(theme::text_success),
                 ]
                 .spacing(10),
@@ -403,7 +395,7 @@ impl Settings {
                     .size(13)
                     .font(theme::FONT_MONO)
                     .style(theme::text_on_surface_muted),
-                self.availability_text(manager.manager_type),
+                self.availability_text(manager_type),
             ]
             .spacing(8)
         } else {
@@ -459,7 +451,7 @@ impl Settings {
         .into()
     }
 
-    /// App package manager section.
+    /// Application and development package manager section.
     fn view_app_manager_section(
         &self,
         pm_config: &updater_core::Config,
@@ -467,27 +459,40 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, text};
 
-        let managers_list = if pm_config.app_managers.is_empty() {
+        let configured_managers = pm_config
+            .managers
+            .iter()
+            .filter_map(|manager| {
+                let manager_type = PackageManagerType::from_manager_id(&manager.id)?;
+                (!manager_type.is_system_manager()).then_some((manager_type, manager))
+            })
+            .collect::<Vec<_>>();
+
+        let managers_list = if configured_managers.is_empty() {
             column![
-                text("No application package managers in UI management")
+                text("No application or development package managers configured")
                     .size(16)
                     .style(theme::text_on_surface_muted)
             ]
         } else {
             column(
-                pm_config
-                    .app_managers
+                configured_managers
                     .iter()
-                    .map(|manager| {
+                    .map(|(manager_type, manager)| {
                         let unload_btn = Self::secondary_button(
                             "Unload",
                             14.0,
-                            Some(Message::UnloadManager(manager.manager_type)),
+                            Some(Message::UnloadManager(*manager_type)),
                         );
 
                         row![
-                            container(self.view_manager_item(manager, true, false, pm_config))
-                                .width(iced::Length::Fill),
+                            container(self.view_manager_item(
+                                *manager_type,
+                                Some(manager),
+                                false,
+                                pm_config,
+                            ))
+                            .width(iced::Length::Fill),
                             unload_btn
                         ]
                         .spacing(12)
@@ -500,10 +505,13 @@ impl Settings {
             .spacing(12)
         };
 
-        column![Self::section_title("App Package Manager"), managers_list]
-            .spacing(12)
-            .width(iced::Length::Fill)
-            .into()
+        column![
+            Self::section_title("Application & Development Package Managers"),
+            managers_list
+        ]
+        .spacing(12)
+        .width(iced::Length::Fill)
+        .into()
     }
 
     fn view_selection_list(
@@ -513,18 +521,15 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
 
-        let selection_list: Vec<PackageManagerConfig> = ALL_APP_PACKAGE_MANAGERS
+        let selection_list: Vec<PackageManagerType> = ALL_APP_PACKAGE_MANAGERS
             .iter()
-            .filter(|t| !pm_config.app_managers.iter().any(|m| m.manager_type == **t))
-            .map(|t| PackageManagerConfig {
-                manager_type: *t,
-                custom_path: None,
-            })
+            .copied()
+            .filter(|manager_type| pm_config.manager(&manager_type.manager_id()).is_none())
             .collect();
 
         let detected_count = selection_list
             .iter()
-            .filter(|manager| self.detected_in_path.contains(&manager.manager_type))
+            .filter(|manager_type| self.detected_in_path.contains(manager_type))
             .count();
 
         let detect_tip = if self.is_detecting {
@@ -549,14 +554,13 @@ impl Settings {
             column(
                 selection_list
                     .iter()
-                    .map(|manager| {
-                        let detected_in_path =
-                            self.detected_in_path.contains(&manager.manager_type);
+                    .map(|manager_type| {
+                        let detected_in_path = self.detected_in_path.contains(manager_type);
 
                         let action_message = if detected_in_path {
-                            Message::AddDetectedManager(manager.manager_type)
+                            Message::AddDetectedManager(*manager_type)
                         } else {
-                            Message::OpenDialog(manager.manager_type)
+                            Message::OpenDialog(*manager_type)
                         };
 
                         let action_label = if detected_in_path {
@@ -574,8 +578,8 @@ impl Settings {
 
                         row![
                             container(self.view_manager_item(
-                                manager,
-                                false,
+                                *manager_type,
+                                None,
                                 detected_in_path,
                                 pm_config
                             ))
@@ -607,33 +611,33 @@ impl Settings {
 
     fn view_manager_item(
         &self,
-        manager: &PackageManagerConfig,
-        is_configured: bool,
+        manager_type: PackageManagerType,
+        config: Option<&ManagerConfig>,
         detected_in_path: bool,
         pm_config: &updater_core::Config,
     ) -> iced::Element<'static, Message> {
         use iced::widget::{column, row, text};
 
+        let is_configured = config.is_some();
         let name_row = if is_configured {
             row![
-                text(manager.manager_type.name()).size(16),
+                text(manager_type.name()).size(16),
                 text("✓").size(16).style(theme::text_success)
             ]
             .spacing(10)
         } else {
-            row![text(manager.manager_type.name()).size(16)].spacing(10)
+            row![text(manager_type.name()).size(16)].spacing(10)
         };
 
-        let info_text = if is_configured {
-            manager
-                .custom_path
-                .as_ref()
-                .map(|p| format!("Path: {}", p))
+        let info_text = if let Some(config) = config {
+            config
+                .executable()
+                .map(|path| format!("Path: {}", path.display()))
                 .unwrap_or_else(|| "Path: $PATH (System Default)".to_string())
         } else if detected_in_path {
             "Detected in $PATH. Click Add to use system default path.".to_string()
         } else {
-            manager.manager_type.description().to_string()
+            manager_type.description().to_string()
         };
 
         let mut content_items = vec![
@@ -649,15 +653,12 @@ impl Settings {
                 .into(),
         ];
 
-        if is_configured
-            || detected_in_path
-            || self.availability.contains_key(&manager.manager_type)
-        {
-            content_items.push(self.availability_text(manager.manager_type));
+        if is_configured || detected_in_path || self.availability.contains_key(&manager_type) {
+            content_items.push(self.availability_text(manager_type));
         }
 
         // Go binary configuration.
-        if is_configured && manager.manager_type == PackageManagerType::Go {
+        if is_configured && manager_type == PackageManagerType::Go {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
 
@@ -696,8 +697,7 @@ impl Settings {
         use iced::widget::{row, text};
 
         let go_bin_info = pm_config
-            .go_bin_dir
-            .as_ref()
+            .go_bin_dir()
             .map(|dir| format!("Binary Dir: {}", dir))
             .unwrap_or_else(|| {
                 "Binary Dir: Auto Detect (go env GOBIN > go env GOPATH/bin)".to_string()
@@ -712,7 +712,7 @@ impl Settings {
         let change_btn =
             Self::secondary_button("Choose Binary Dir", 13.0, Some(Message::OpenGoBinDirDialog));
 
-        let buttons = if pm_config.go_bin_dir.is_some() {
+        let buttons = if pm_config.go_bin_dir().is_some() {
             row![
                 change_btn,
                 Self::secondary_button("Reset As Auto Detect", 13.0, Some(Message::ClearGoBinDir))
@@ -852,11 +852,7 @@ mod tests {
 
     fn config_with_manager(manager_type: PackageManagerType) -> updater_core::Config {
         updater_core::Config {
-            system_manager: None,
-            app_managers: vec![PackageManagerConfig {
-                manager_type,
-                custom_path: None,
-            }],
+            managers: vec![ManagerConfig::new(manager_type.manager_id())],
             ..updater_core::Config::default()
         }
     }
@@ -867,14 +863,14 @@ mod tests {
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
 
-        settings.draft.app_managers.push(PackageManagerConfig {
-            manager_type: PackageManagerType::Flatpak,
-            custom_path: None,
-        });
+        settings
+            .draft
+            .managers
+            .push(ManagerConfig::new(PackageManagerType::Flatpak.manager_id()));
 
         assert!(settings.is_dirty());
-        assert_eq!(active.app_managers.len(), 1);
-        assert_eq!(settings.draft.app_managers.len(), 2);
+        assert_eq!(active.managers.len(), 1);
+        assert_eq!(settings.draft.managers.len(), 2);
     }
 
     #[test]
@@ -882,7 +878,7 @@ mod tests {
         let active = config_with_manager(PackageManagerType::Cargo);
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
-        settings.draft.go_bin_dir = Some("/tmp/bin".to_owned());
+        settings.draft.managers[0].executable = Some("/tmp/cargo".into());
 
         settings.discard_changes();
 
@@ -896,12 +892,15 @@ mod tests {
         let replacement = config_with_manager(PackageManagerType::Flatpak);
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
-        settings.draft.go_bin_dir = Some("/tmp/bin".to_owned());
+        settings.draft.managers[0].executable = Some("/tmp/cargo".into());
 
         settings.sync_from_config(&replacement);
 
         assert!(settings.is_dirty());
         assert_eq!(settings.baseline, active);
-        assert_eq!(settings.draft.go_bin_dir.as_deref(), Some("/tmp/bin"));
+        assert_eq!(
+            settings.draft.managers[0].executable(),
+            Some(std::path::Path::new("/tmp/cargo"))
+        );
     }
 }

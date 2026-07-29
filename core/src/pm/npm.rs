@@ -157,12 +157,11 @@ impl_js_manager_bridge!(NpmManager, DirectNpmManager, PackageManagerType::Npm);
 impl_js_manager_bridge!(PnpmManager, DirectPnpmManager, PackageManagerType::Pnpm);
 
 fn manager_config(config: &Config, manager_type: PackageManagerType) -> ManagerConfig {
-    let manager_config = ManagerConfig::new(manager_type.manager_id());
-    if let Some(path) = config.get_package_path(manager_type) {
-        manager_config.with_executable(path)
-    } else {
-        manager_config
-    }
+    let id = manager_type.manager_id();
+    config
+        .manager(&id)
+        .cloned()
+        .unwrap_or_else(|| ManagerConfig::new(id))
 }
 
 fn convert_package_info(package: ApiPackageInfo, source: PackageManagerType) -> PackageInfo {
@@ -207,19 +206,14 @@ fn convert_manager_error(error: ManagerError) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PackageManagerConfig;
-
     #[test]
-    fn legacy_config_bridge_preserves_custom_js_manager_paths() {
+    fn config_preserves_custom_js_manager_paths() {
         for (manager_type, path) in [
             (PackageManagerType::Npm, "/custom/npm"),
             (PackageManagerType::Pnpm, "/custom/pnpm"),
         ] {
             let config = Config {
-                app_managers: vec![PackageManagerConfig {
-                    manager_type,
-                    custom_path: Some(path.to_owned()),
-                }],
+                managers: vec![ManagerConfig::new(manager_type.manager_id()).with_executable(path)],
                 ..Config::default()
             };
             assert_eq!(
@@ -230,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_model_bridge_preserves_js_manager_identity() {
+    fn direct_model_conversion_preserves_js_manager_identity() {
         for manager_type in [PackageManagerType::Npm, PackageManagerType::Pnpm] {
             let id = manager_type.manager_id();
             let mut package = ApiPackageInfo::new(id.clone(), "typescript", "5.9.0");

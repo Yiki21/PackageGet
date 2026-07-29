@@ -115,12 +115,11 @@ async fn run_package_with_progress(
 }
 
 fn manager_config(config: &Config) -> ManagerConfig {
-    let manager_config = ManagerConfig::new(PackageManagerType::Pipx.manager_id());
-    if let Some(path) = config.get_package_path(PackageManagerType::Pipx) {
-        manager_config.with_executable(path)
-    } else {
-        manager_config
-    }
+    let id = PackageManagerType::Pipx.manager_id();
+    config
+        .manager(&id)
+        .cloned()
+        .unwrap_or_else(|| ManagerConfig::new(id))
 }
 
 fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
@@ -167,15 +166,13 @@ mod tests {
     use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
 
     use super::*;
-    use crate::PackageManagerConfig;
-
     #[test]
-    fn legacy_config_bridge_preserves_custom_pipx_path() {
+    fn config_preserves_custom_pipx_path() {
         let config = Config {
-            app_managers: vec![PackageManagerConfig {
-                manager_type: PackageManagerType::Pipx,
-                custom_path: Some("/custom/pipx".to_owned()),
-            }],
+            managers: vec![
+                ManagerConfig::new(PackageManagerType::Pipx.manager_id())
+                    .with_executable("/custom/pipx"),
+            ],
             ..Config::default()
         };
         assert_eq!(
@@ -185,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_model_bridge_preserves_pipx_metadata() {
+    fn direct_model_conversion_preserves_pipx_metadata() {
         let id = ManagerId::parse("builtin:pipx").expect("valid pipx ID");
         let mut package = ApiPackageInfo::new(id.clone(), "black", "25.0");
         package.description = Some("Python formatter".to_owned());

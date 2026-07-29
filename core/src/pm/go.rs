@@ -115,14 +115,11 @@ async fn run_package_with_progress(
 }
 
 fn manager_config(config: &Config) -> ManagerConfig {
-    let mut manager_config = ManagerConfig::new(PackageManagerType::Go.manager_id());
-    if let Some(path) = config.get_package_path(PackageManagerType::Go) {
-        manager_config = manager_config.with_executable(path);
-    }
-    if let Some(go_bin_dir) = &config.go_bin_dir {
-        manager_config.settings = serde_json::json!({ "go_bin_dir": go_bin_dir });
-    }
-    manager_config
+    let id = PackageManagerType::Go.manager_id();
+    config
+        .manager(&id)
+        .cloned()
+        .unwrap_or_else(|| ManagerConfig::new(id))
 }
 
 fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
@@ -167,16 +164,13 @@ fn convert_manager_error(error: ManagerError) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PackageManagerConfig;
-
     #[test]
-    fn legacy_config_bridge_preserves_go_paths_and_bin_dir() {
+    fn config_preserves_go_paths_and_bin_dir() {
+        let mut go =
+            ManagerConfig::new(PackageManagerType::Go.manager_id()).with_executable("/custom/go");
+        go.settings = serde_json::json!({ "go_bin_dir": "/custom/gobin" });
         let config = Config {
-            app_managers: vec![PackageManagerConfig {
-                manager_type: PackageManagerType::Go,
-                custom_path: Some("/custom/go".to_owned()),
-            }],
-            go_bin_dir: Some("/custom/gobin".to_owned()),
+            managers: vec![go],
             ..Config::default()
         };
         let converted = manager_config(&config);
@@ -188,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_model_bridge_preserves_go_metadata() {
+    fn direct_model_conversion_preserves_go_metadata() {
         let id = PackageManagerType::Go.manager_id();
         let mut package = ApiPackageInfo::new(id.clone(), "stringer", "v0.30.0");
         package.size = Some(1024);

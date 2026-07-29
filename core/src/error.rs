@@ -17,6 +17,9 @@ pub enum CoreError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
     #[error("request error: {0}")]
     RequestError(String),
 }

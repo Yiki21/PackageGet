@@ -1083,10 +1083,9 @@ impl App {
 
     fn configured_managers(config: &updater_core::Config) -> Vec<PackageManagerType> {
         config
-            .system_manager
+            .managers
             .iter()
-            .map(|pm| pm.manager_type)
-            .chain(config.app_managers.iter().map(|pm| pm.manager_type))
+            .filter_map(|manager| PackageManagerType::from_manager_id(&manager.id))
             .collect()
     }
 

@@ -115,12 +115,11 @@ async fn run_package_with_progress(
 }
 
 fn manager_config(config: &Config) -> ManagerConfig {
-    let manager_config = ManagerConfig::new(PackageManagerType::Flatpak.manager_id());
-    if let Some(path) = config.get_package_path(PackageManagerType::Flatpak) {
-        manager_config.with_executable(path)
-    } else {
-        manager_config
-    }
+    let id = PackageManagerType::Flatpak.manager_id();
+    config
+        .manager(&id)
+        .cloned()
+        .unwrap_or_else(|| ManagerConfig::new(id))
 }
 
 fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
@@ -168,15 +167,13 @@ mod tests {
     use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
 
     use super::*;
-    use crate::PackageManagerConfig;
-
     #[test]
-    fn legacy_config_bridge_preserves_custom_flatpak_path() {
+    fn config_preserves_custom_flatpak_path() {
         let config = Config {
-            app_managers: vec![PackageManagerConfig {
-                manager_type: PackageManagerType::Flatpak,
-                custom_path: Some("/custom/flatpak".to_owned()),
-            }],
+            managers: vec![
+                ManagerConfig::new(PackageManagerType::Flatpak.manager_id())
+                    .with_executable("/custom/flatpak"),
+            ],
             ..Config::default()
         };
 
@@ -189,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_model_bridge_preserves_flatpak_metadata() {
+    fn direct_model_conversion_preserves_flatpak_metadata() {
         let id = ManagerId::parse("builtin:flatpak").expect("valid Flatpak ID");
         let mut package = ApiPackageInfo::new(id.clone(), "org.example.App", "1.2 (stable)");
         package.description = Some("Example application".to_owned());
@@ -232,7 +229,9 @@ mod tests {
                 CoreError::ParseError(_) => "parse",
                 CoreError::CommandError(_) => "command",
                 CoreError::UnknownError(_) => "unknown",
-                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+                CoreError::Utf8Error(_)
+                | CoreError::SerializationError(_)
+                | CoreError::ConfigError(_) => "unexpected",
             };
             assert_eq!(category, expected);
         }

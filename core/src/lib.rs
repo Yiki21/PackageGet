@@ -2,6 +2,7 @@ use std::{fmt::Debug, path::Path, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+pub use updater_manager_api::ManagerConfig;
 use updater_manager_api::{
     AuthorizationHint, ManagerCapabilities, ManagerCapability, ManagerCategory, ManagerDescriptor,
     ManagerId, Platform, SupportedPlatforms,
@@ -33,7 +34,7 @@ mod storage;
 
 pub use builtin_managers::register_builtin_managers;
 pub use registry::{ManagerRegistry, RegistryError};
-pub use storage::{Config, PackageManagerConfig};
+pub use storage::Config;
 
 #[derive(Debug, Clone)]
 pub struct PackageUpdate {
@@ -203,7 +204,10 @@ macro_rules! define_package_managers {
                 &self,
                 config: &Config,
             ) -> PackageManagerAvailability {
-                let custom_path = config.get_package_path(*self).is_some();
+                let manager_id = self.manager_id();
+                let custom_path = config
+                    .manager(&manager_id)
+                    .is_some_and(|manager| manager.executable().is_some());
                 let command = manager_command_path(config, *self);
                 let validate_path = custom_path || Path::new(&command).components().count() > 1;
 
@@ -484,6 +488,25 @@ impl PackageManagerType {
             Self::Pipx => "builtin:pipx",
         })
         .expect("built-in manager IDs must be valid")
+    }
+
+    /// Resolves a built-in runtime manager from its stable ID.
+    #[must_use]
+    pub fn from_manager_id(id: &ManagerId) -> Option<Self> {
+        match id.as_str() {
+            "builtin:apt" => Some(Self::Apt),
+            "builtin:dnf" => Some(Self::Dnf),
+            "builtin:pacman" => Some(Self::Pacman),
+            "builtin:zypper" => Some(Self::Zypper),
+            "builtin:flatpak" => Some(Self::Flatpak),
+            "builtin:homebrew" => Some(Self::Homebrew),
+            "builtin:cargo" => Some(Self::Cargo),
+            "builtin:go" => Some(Self::Go),
+            "builtin:npm" => Some(Self::Npm),
+            "builtin:pnpm" => Some(Self::Pnpm),
+            "builtin:pipx" => Some(Self::Pipx),
+            _ => None,
+        }
     }
 
     /// Returns the object-safe API descriptor for this built-in manager.

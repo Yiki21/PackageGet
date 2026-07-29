@@ -116,12 +116,11 @@ async fn run_packages_with_progress(
 }
 
 fn manager_config(config: &Config) -> ManagerConfig {
-    let manager_config = ManagerConfig::new(PackageManagerType::Zypper.manager_id());
-    if let Some(path) = config.get_package_path(PackageManagerType::Zypper) {
-        manager_config.with_executable(path)
-    } else {
-        manager_config
-    }
+    let id = PackageManagerType::Zypper.manager_id();
+    config
+        .manager(&id)
+        .cloned()
+        .unwrap_or_else(|| ManagerConfig::new(id))
 }
 
 fn convert_package_info(package: ApiPackageInfo) -> PackageInfo {
@@ -169,15 +168,13 @@ mod tests {
     use updater_manager_api::{ManagerId, PackageInfo as ApiPackageInfo, PackageTarget};
 
     use super::*;
-    use crate::PackageManagerConfig;
-
     #[test]
-    fn legacy_config_bridge_preserves_custom_zypper_path() {
+    fn config_preserves_custom_zypper_path() {
         let config = Config {
-            system_manager: Some(PackageManagerConfig {
-                manager_type: PackageManagerType::Zypper,
-                custom_path: Some("/custom/zypper".to_owned()),
-            }),
+            managers: vec![
+                ManagerConfig::new(PackageManagerType::Zypper.manager_id())
+                    .with_executable("/custom/zypper"),
+            ],
             ..Config::default()
         };
 
@@ -190,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_model_bridge_preserves_zypper_metadata() {
+    fn direct_model_conversion_preserves_zypper_metadata() {
         let id = ManagerId::parse("builtin:zypper").expect("valid Zypper ID");
         let mut package = ApiPackageInfo::new(id.clone(), "bash", "5.2-3.1");
         package.description = Some("GNU shell".to_owned());
@@ -236,7 +233,9 @@ mod tests {
                 CoreError::ParseError(_) => "parse",
                 CoreError::CommandError(_) => "command",
                 CoreError::UnknownError(_) => "unknown",
-                CoreError::Utf8Error(_) | CoreError::SerializationError(_) => "unexpected",
+                CoreError::Utf8Error(_)
+                | CoreError::SerializationError(_)
+                | CoreError::ConfigError(_) => "unexpected",
             };
             assert_eq!(category, expected);
         }

@@ -177,10 +177,9 @@ impl SharedUi {
 
     pub fn configured_managers(pm_config: &Config) -> Vec<PackageManagerType> {
         pm_config
-            .system_manager
+            .managers
             .iter()
-            .map(|pm| pm.manager_type)
-            .chain(pm_config.app_managers.iter().map(|pm| pm.manager_type))
+            .filter_map(|manager| PackageManagerType::from_manager_id(&manager.id))
             .collect()
     }
 
