@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 directories-next.workspace = true
 regex.workspace = true
 tokio.workspace = true

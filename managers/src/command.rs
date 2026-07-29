@@ -238,6 +238,9 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
             "database is locked",
             "holding the apt lock",
             "dpkg frontend lock",
+            "holding the yum lock",
+            "holding the dnf lock",
+            "system management is locked",
         ],
     ) {
         ManagerErrorKind::Busy
@@ -427,6 +430,10 @@ mod tests {
             ("command not found", ManagerErrorKind::CommandMissing),
             ("pkexec: not authorized", ManagerErrorKind::Permission),
             ("could not get lock", ManagerErrorKind::Busy),
+            (
+                "another app is currently holding the dnf lock",
+                ManagerErrorKind::Busy,
+            ),
             ("operation timed out", ManagerErrorKind::Timeout),
             ("reboot required", ManagerErrorKind::RebootRequired),
             (

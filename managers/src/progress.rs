@@ -50,6 +50,26 @@ impl CommandProgress {
 
 pub(crate) async fn run_command_with_progress(
     spec: &CommandSpec,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(spec, ProgressParser::Percent, on_progress).await
+}
+
+pub(crate) async fn run_dnf_command_with_progress(
+    spec: &CommandSpec,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(
+        spec,
+        ProgressParser::Dnf(DnfProgressState::default()),
+        on_progress,
+    )
+    .await
+}
+
+async fn run_command_with_parser(
+    spec: &CommandSpec,
+    mut parser: ProgressParser,
     mut on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
     let mut child = piped_command(spec)
@@ -84,7 +104,7 @@ pub(crate) async fn run_command_with_progress(
         tail_logs.push_back(line.clone());
 
         on_progress(CommandProgress::new(max_progress, Some(line.clone())));
-        if let Some(progress) = parse_percent(&line)
+        if let Some(progress) = parser.parse(&line)
             && progress > max_progress
         {
             max_progress = progress.min(0.99);
@@ -106,6 +126,65 @@ pub(crate) async fn run_command_with_progress(
 
     on_progress(CommandProgress::new(1.0, None));
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ProgressParser {
+    Percent,
+    Dnf(DnfProgressState),
+}
+
+impl ProgressParser {
+    fn parse(&mut self, line: &str) -> Option<f32> {
+        match self {
+            Self::Percent => parse_percent(line),
+            Self::Dnf(state) => state.parse(line),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DnfPhase {
+    #[default]
+    Download,
+    Transaction,
+}
+
+impl DnfPhase {
+    fn scale(self, ratio: f32) -> f32 {
+        match self {
+            Self::Download => ratio * 0.60,
+            Self::Transaction => 0.60 + (ratio * 0.39),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct DnfProgressState {
+    phase: DnfPhase,
+    previous_step_ratio: Option<f32>,
+}
+
+impl DnfProgressState {
+    fn parse(&mut self, line: &str) -> Option<f32> {
+        if is_dnf_transaction_marker(line) {
+            self.phase = DnfPhase::Transaction;
+        }
+
+        if let Some(step_ratio) = parse_step_ratio(line) {
+            if self.phase == DnfPhase::Download
+                && self
+                    .previous_step_ratio
+                    .is_some_and(|previous| previous >= 0.9 && step_ratio < previous - 0.2)
+            {
+                self.phase = DnfPhase::Transaction;
+            }
+            self.previous_step_ratio = Some(step_ratio);
+            return Some(self.phase.scale(step_ratio));
+        }
+
+        parse_percent(line).map(|ratio| self.phase.scale(ratio))
+    }
 }
 
 async fn forward_lines<R>(mut reader: R, sender: mpsc::Sender<String>)
@@ -159,6 +238,27 @@ fn parse_percent(line: &str) -> Option<f32> {
         .last()
 }
 
+fn parse_step_ratio(line: &str) -> Option<f32> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        Regex::new(r"(?:[\[(]\s*)?([0-9]+)\s*/\s*([0-9]+)(?:\s*[\])])?")
+            .expect("DNF step progress regex must remain valid")
+    });
+
+    pattern
+        .captures_iter(line)
+        .filter_map(|capture| {
+            let current = capture.get(1)?.as_str().parse::<usize>().ok()?;
+            let total = capture.get(2)?.as_str().parse::<usize>().ok()?;
+            (total > 0 && current > 0 && current <= total).then_some(current as f32 / total as f32)
+        })
+        .reduce(f32::max)
+}
+
+fn is_dnf_transaction_marker(line: &str) -> bool {
+    line.to_ascii_lowercase().contains("running transaction") || line.contains("运行事务")
+}
+
 fn join_reader(result: Result<(), tokio::task::JoinError>) -> ManagerResult<()> {
     result.map_err(|error| {
         ManagerError::new(
@@ -180,6 +280,42 @@ mod tests {
         assert_eq!(parse_percent("download 10% verify 42.5%"), Some(0.425));
         assert_eq!(parse_percent("unexpected 125%"), Some(1.0));
         assert_eq!(parse_percent("no progress"), None);
+    }
+
+    #[test]
+    fn step_parser_supports_common_dnf_formats_and_rejects_dates() {
+        assert_eq!(parse_step_ratio("[3/10] package"), Some(0.3));
+        assert_eq!(parse_step_ratio("(8 / 10) package"), Some(0.8));
+        assert_eq!(parse_step_ratio("step 2/5 then 4/5"), Some(0.8));
+        assert_eq!(parse_step_ratio("release 2026/03"), None);
+        assert_eq!(parse_step_ratio("invalid 0/10 12/10"), None);
+    }
+
+    #[test]
+    fn dnf_progress_maps_download_and_transaction_phases() {
+        let mut state = DnfProgressState::default();
+
+        assert_eq!(state.parse("[5/10] Downloading"), Some(0.3));
+        assert_eq!(state.phase, DnfPhase::Download);
+        assert_eq!(state.parse("Running transaction"), None);
+        assert_eq!(state.phase, DnfPhase::Transaction);
+        assert_eq!(state.parse("[5/10] Installing"), Some(0.795));
+        assert_eq!(state.parse("验证 50%"), Some(0.795));
+    }
+
+    #[test]
+    fn dnf_progress_detects_localized_marker_and_step_reset() {
+        let mut localized = DnfProgressState::default();
+        assert_eq!(localized.parse("开始运行事务"), None);
+        assert_eq!(localized.phase, DnfPhase::Transaction);
+
+        let mut reset = DnfProgressState::default();
+        assert_eq!(reset.parse("[10/10] Downloading"), Some(0.6));
+        let transaction_progress = reset
+            .parse("[1/5] Installing")
+            .expect("parse transaction progress after a step reset");
+        assert!((transaction_progress - 0.678).abs() < f32::EPSILON * 2.0);
+        assert_eq!(reset.phase, DnfPhase::Transaction);
     }
 
     #[test]

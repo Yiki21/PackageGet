@@ -8,7 +8,9 @@
 
 mod apt;
 mod command;
+mod dnf;
 mod progress;
 
 pub use apt::AptManager;
+pub use dnf::DnfManager;
 pub use progress::CommandProgress;
