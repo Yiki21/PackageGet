@@ -1,13 +1,14 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
-
 use async_trait::async_trait;
+use updater_manager_api::{
+    ManagerConfig, ManagerError, ManagerErrorKind, PackageAction as ApiPackageAction,
+    PackageInfo as ApiPackageInfo, PackageManager as ApiPackageManager, PackageTarget,
+    PackageUpdate as ApiPackageUpdate,
+};
+use updater_managers::{NpmManager as DirectNpmManager, PnpmManager as DirectPnpmManager};
 
 use crate::{
     Config, CoreResult, PackageInfo, PackageManager, PackageManagerType, PackageUpdate,
-    pm::{
-        common::{directory_size, manager_command, manager_command_path},
-        progress::{CommandProgressEvent, run_command_with_progress},
-    },
+    error::CoreError, pm::progress::CommandProgressEvent,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -16,704 +17,234 @@ pub struct NpmManager;
 #[derive(Debug, Clone, Copy)]
 pub struct PnpmManager;
 
-#[derive(Debug)]
-struct InstalledJsPackage {
-    info: PackageInfo,
-    path: Option<PathBuf>,
-}
-
-fn command_path(config: &Config, manager_type: PackageManagerType) -> String {
-    manager_command_path(config, manager_type)
-}
-
-macro_rules! impl_global_js_manager {
-    ($manager:ty, $manager_type:expr) => {
+macro_rules! impl_js_manager_bridge {
+    ($manager:ty, $direct:ty, $manager_type:expr) => {
         #[async_trait]
         impl PackageManager for $manager {
             async fn list_updates(config: &Config) -> CoreResult<Vec<PackageUpdate>> {
-                list_updates_by_manager(config, $manager_type).await
+                Self::list_updates_with_refresh(config, false).await
             }
 
             async fn get_current_version(
                 config: &Config,
                 package_name: &str,
             ) -> CoreResult<String> {
-                get_current_version_by_manager(config, $manager_type, package_name).await
+                <$direct>::new()
+                    .current_version(&manager_config(config, $manager_type), package_name)
+                    .await
+                    .map_err(convert_manager_error)
             }
 
             async fn list_installed(config: &Config) -> CoreResult<Vec<PackageInfo>> {
-                list_installed_by_manager(config, $manager_type).await
+                <$direct>::new()
+                    .installed(&manager_config(config, $manager_type))
+                    .await
+                    .map(|packages| {
+                        packages
+                            .into_iter()
+                            .map(|package| convert_package_info(package, $manager_type))
+                            .collect()
+                    })
+                    .map_err(convert_manager_error)
             }
 
             async fn count_installed(config: &Config) -> CoreResult<usize> {
-                count_installed_by_manager(config, $manager_type).await
+                <$direct>::new()
+                    .count_installed(&manager_config(config, $manager_type))
+                    .await
+                    .map_err(convert_manager_error)
             }
 
             async fn search_package(
                 config: &Config,
                 package_name: &str,
             ) -> CoreResult<Vec<PackageInfo>> {
-                search_package_by_manager(config, $manager_type, package_name).await
+                <$direct>::new()
+                    .search(&manager_config(config, $manager_type), package_name)
+                    .await
+                    .map(|packages| {
+                        packages
+                            .into_iter()
+                            .map(|package| convert_package_info(package, $manager_type))
+                            .collect()
+                    })
+                    .map_err(convert_manager_error)
+            }
+        }
+
+        impl $manager {
+            async fn run_package_with_progress(
+                config: &Config,
+                action: ApiPackageAction,
+                package_name: &str,
+                mut on_progress: impl FnMut(CommandProgressEvent),
+            ) -> CoreResult<()> {
+                let target = PackageTarget::new($manager_type.manager_id(), package_name);
+                <$direct>::new()
+                    .execute_target_with_progress(
+                        &manager_config(config, $manager_type),
+                        action,
+                        &target,
+                        |event| {
+                            let (progress, command_message) = event.into_parts();
+                            on_progress(CommandProgressEvent {
+                                progress,
+                                command_message,
+                            });
+                        },
+                    )
+                    .await
+                    .map_err(convert_manager_error)
+            }
+
+            pub async fn list_updates_with_refresh(
+                config: &Config,
+                refresh: bool,
+            ) -> CoreResult<Vec<PackageUpdate>> {
+                <$direct>::new()
+                    .updates(&manager_config(config, $manager_type), refresh)
+                    .await
+                    .map(|updates| updates.into_iter().map(convert_package_update).collect())
+                    .map_err(convert_manager_error)
+            }
+
+            pub async fn uninstall_package_with_progress(
+                config: &Config,
+                package_name: &str,
+                on_progress: impl FnMut(CommandProgressEvent),
+            ) -> CoreResult<()> {
+                Self::run_package_with_progress(
+                    config,
+                    ApiPackageAction::Uninstall,
+                    package_name,
+                    on_progress,
+                )
+                .await
+            }
+
+            pub async fn update_package_with_progress(
+                config: &Config,
+                package_name: &str,
+                on_progress: impl FnMut(CommandProgressEvent),
+            ) -> CoreResult<()> {
+                Self::run_package_with_progress(
+                    config,
+                    ApiPackageAction::Update,
+                    package_name,
+                    on_progress,
+                )
+                .await
+            }
+
+            pub async fn install_package_with_progress(
+                config: &Config,
+                package_name: &str,
+                on_progress: impl FnMut(CommandProgressEvent),
+            ) -> CoreResult<()> {
+                Self::run_package_with_progress(
+                    config,
+                    ApiPackageAction::Install,
+                    package_name,
+                    on_progress,
+                )
+                .await
             }
         }
     };
 }
 
-impl_global_js_manager!(NpmManager, PackageManagerType::Npm);
-impl_global_js_manager!(PnpmManager, PackageManagerType::Pnpm);
+impl_js_manager_bridge!(NpmManager, DirectNpmManager, PackageManagerType::Npm);
+impl_js_manager_bridge!(PnpmManager, DirectPnpmManager, PackageManagerType::Pnpm);
 
-impl NpmManager {
-    pub async fn uninstall_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Npm,
-            "uninstall",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-
-    pub async fn update_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Npm,
-            "update",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-
-    pub async fn install_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Npm,
-            "install",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-}
-
-impl PnpmManager {
-    pub async fn uninstall_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Pnpm,
-            "uninstall",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-
-    pub async fn update_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Pnpm,
-            "update",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-
-    pub async fn install_package_with_progress(
-        config: &Config,
-        package_name: &str,
-        on_progress: impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        run_global_package_command_with_progress(
-            config,
-            PackageManagerType::Pnpm,
-            "install",
-            package_name,
-            on_progress,
-        )
-        .await
-    }
-}
-
-fn parse_global_dependencies(
-    manager_type: PackageManagerType,
-    value: &serde_json::Value,
-) -> Vec<InstalledJsPackage> {
-    let mut items = Vec::new();
-    let mut add_package = |name: &str, detail: &serde_json::Value| {
-        let version = detail
-            .get("version")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown")
-            .to_owned();
-        let description = detail
-            .get("description")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_owned);
-        let homepage = detail
-            .get("homepage")
-            .and_then(|value| value.as_str())
-            .or_else(|| {
-                detail
-                    .get("repository")
-                    .and_then(|repository| repository.as_str())
-            })
-            .or_else(|| {
-                detail
-                    .get("repository")
-                    .and_then(|repository| repository.get("url"))
-                    .and_then(|value| value.as_str())
-            })
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| value.strip_prefix("git+").unwrap_or(value).to_owned());
-
-        items.push(InstalledJsPackage {
-            info: PackageInfo {
-                name: name.to_owned(),
-                version,
-                source: manager_type,
-                description,
-                size: None,
-                install_date: None,
-                homepage,
-            },
-            path: detail
-                .get("path")
-                .and_then(|value| value.as_str())
-                .map(PathBuf::from),
-        });
-    };
-
-    if let Some(dependencies) = value.get("dependencies") {
-        if let Some(map) = dependencies.as_object() {
-            for (name, detail) in map {
-                add_package(name, detail);
-            }
-        } else if let Some(array) = dependencies.as_array() {
-            for detail in array {
-                let Some(name) = detail.get("name").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                add_package(name, detail);
-            }
-        }
-    }
-
-    items
-}
-
-fn parse_installed_from_json(
-    manager_type: PackageManagerType,
-    stdout: &str,
-) -> CoreResult<Vec<InstalledJsPackage>> {
-    let json: serde_json::Value = serde_json::from_str(stdout)?;
-    let mut installed = Vec::new();
-
-    if let Some(nodes) = json.as_array() {
-        for node in nodes {
-            installed.extend(parse_global_dependencies(manager_type, node));
-        }
+fn manager_config(config: &Config, manager_type: PackageManagerType) -> ManagerConfig {
+    let manager_config = ManagerConfig::new(manager_type.manager_id());
+    if let Some(path) = config.get_package_path(manager_type) {
+        manager_config.with_executable(path)
     } else {
-        installed.extend(parse_global_dependencies(manager_type, &json));
+        manager_config
     }
-
-    installed.sort_by(|a, b| a.info.name.cmp(&b.info.name));
-    installed.dedup_by(|a, b| a.info.name == b.info.name);
-
-    Ok(installed)
 }
 
-async fn list_installed_by_manager(
-    config: &Config,
-    manager_type: PackageManagerType,
-) -> CoreResult<Vec<PackageInfo>> {
-    let path = command_path(config, manager_type);
-
-    let mut command = manager_command(&path);
-    command.arg("ls").arg("-g").arg("--depth=0").arg("--json");
-    if matches!(
-        manager_type,
-        PackageManagerType::Npm | PackageManagerType::Pnpm
-    ) {
-        command.arg("--long");
+fn convert_package_info(package: ApiPackageInfo, source: PackageManagerType) -> PackageInfo {
+    PackageInfo {
+        name: package.name,
+        version: package.version,
+        source,
+        description: package.description,
+        size: package.size,
+        install_date: package.install_date,
+        homepage: package.homepage,
     }
-    let output = command.output().await?;
-
-    if !output.status.success() {
-        return Err(crate::error::CoreError::UnknownError(format!(
-            "{} ls -g --depth=0 --json failed",
-            manager_type.name()
-        )));
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let mut installed = parse_installed_from_json(manager_type, &stdout)?;
-    if matches!(
-        manager_type,
-        PackageManagerType::Npm | PackageManagerType::Pnpm
-    ) {
-        for package in &mut installed {
-            if let Some(path) = package.path.as_deref() {
-                package.info.size = directory_size(path).await;
-            }
-        }
-    }
-
-    Ok(installed.into_iter().map(|package| package.info).collect())
 }
 
-async fn count_installed_by_manager(
-    config: &Config,
-    manager_type: PackageManagerType,
-) -> CoreResult<usize> {
-    Ok(list_installed_by_manager(config, manager_type).await?.len())
+fn convert_package_update(update: ApiPackageUpdate) -> PackageUpdate {
+    PackageUpdate {
+        name: update.target.name,
+        current_version: update.current_version,
+        new_version: update.available_version,
+    }
 }
 
-async fn get_current_version_by_manager(
-    config: &Config,
-    manager_type: PackageManagerType,
-    package_name: &str,
-) -> CoreResult<String> {
-    let installed = list_installed_by_manager(config, manager_type).await?;
-
-    installed
-        .into_iter()
-        .find(|pkg| pkg.name == package_name)
-        .map(|pkg| pkg.version)
-        .ok_or_else(|| {
-            crate::error::CoreError::UnknownError(format!("Package {} not installed", package_name))
-        })
-}
-
-fn parse_updates_from_json(stdout: &str) -> CoreResult<Vec<PackageUpdate>> {
-    let json: serde_json::Value = serde_json::from_str(stdout)?;
-    let mut updates = Vec::new();
-
-    if let Some(obj) = json.as_object() {
-        for (name, detail) in obj {
-            let current = detail
-                .get("current")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_owned();
-
-            let new_version = detail
-                .get("latest")
-                .and_then(|v| v.as_str())
-                .or_else(|| detail.get("wanted").and_then(|v| v.as_str()))
-                .unwrap_or("unknown")
-                .to_owned();
-
-            if current != new_version {
-                updates.push(PackageUpdate {
-                    name: name.clone(),
-                    current_version: current,
-                    new_version,
-                });
-            }
-        }
-    } else if let Some(arr) = json.as_array() {
-        for item in arr {
-            let Some(name) = item.get("name").and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            let current = item
-                .get("current")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_owned();
-
-            let new_version = item
-                .get("latest")
-                .and_then(|v| v.as_str())
-                .or_else(|| item.get("wanted").and_then(|v| v.as_str()))
-                .unwrap_or("unknown")
-                .to_owned();
-
-            if current != new_version {
-                updates.push(PackageUpdate {
-                    name: name.to_owned(),
-                    current_version: current,
-                    new_version,
-                });
-            }
-        }
-    }
-
-    Ok(updates)
-}
-
-async fn list_updates_by_manager(
-    config: &Config,
-    manager_type: PackageManagerType,
-) -> CoreResult<Vec<PackageUpdate>> {
-    let path = command_path(config, manager_type);
-
-    let mut command = manager_command(&path);
-    match manager_type {
-        PackageManagerType::Npm => {
-            command.arg("outdated").arg("-g").arg("--json");
-        }
-        PackageManagerType::Pnpm => {
-            command
-                .arg("outdated")
-                .arg("-g")
-                .arg("--format")
-                .arg("json");
-        }
-        _ => {}
-    }
-    command.kill_on_drop(true);
-
-    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
-        .await
-        .map_err(|_| {
-            crate::error::CoreError::CommandError(format!(
-                "{} outdated timed out after 30 seconds",
-                manager_type.name()
-            ))
-        })??;
-    let stdout = String::from_utf8(output.stdout)?;
-
-    if stdout.trim().is_empty() {
-        if output.status.success() {
-            return Ok(Vec::new());
-        }
-        return Err(crate::error::CoreError::from_command_failure(format!(
-            "{} outdated failed: {}",
-            manager_type.name(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let parsed = parse_updates_from_json(&stdout);
-    if parsed.is_ok() {
-        return parsed;
-    }
-
-    if !output.status.success() {
-        return Err(crate::error::CoreError::UnknownError(format!(
-            "{} outdated failed",
-            manager_type.name()
-        )));
-    }
-
-    parsed
-}
-
-async fn search_package_by_manager(
-    config: &Config,
-    manager_type: PackageManagerType,
-    package_name: &str,
-) -> CoreResult<Vec<PackageInfo>> {
-    let path = command_path(config, manager_type);
-    let mut command = manager_command(&path);
-    command
-        .arg("search")
-        .arg(package_name)
-        .arg("--json")
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(60), command.output())
-        .await
-        .map_err(|_| {
-            crate::error::CoreError::CommandError(format!(
-                "{} search timed out after 60 seconds",
-                manager_type.name()
-            ))
-        })??;
-
-    if !output.status.success() {
-        return Err(crate::error::CoreError::from_command_failure(format!(
-            "{} search failed: {}",
-            manager_type.name(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let json: serde_json::Value = match serde_json::from_str(&stdout) {
-        Ok(value) => value,
-        Err(_) => return Ok(Vec::new()),
-    };
-
-    let installed_versions: HashMap<String, String> =
-        list_installed_by_manager(config, manager_type)
-            .await?
-            .into_iter()
-            .map(|pkg| (pkg.name, pkg.version))
-            .collect();
-
-    let mut packages = Vec::new();
-
-    if let Some(results) = json.as_array() {
-        for item in results {
-            let Some(name) = item.get("name").and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            let description = item
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned());
-
-            let homepage = item
-                .get("links")
-                .and_then(|links| links.get("homepage"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned())
-                .or_else(|| {
-                    item.get("links")
-                        .and_then(|links| links.get("npm"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_owned())
-                });
-
-            packages.push(PackageInfo {
-                name: name.to_owned(),
-                version: installed_versions
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| "Not Installed".to_owned()),
-                source: manager_type,
-                description,
-                size: None,
-                install_date: None,
-                homepage,
-            });
-        }
-    }
-
-    Ok(packages)
-}
-
-async fn run_global_package_command_with_progress(
-    config: &Config,
-    manager_type: PackageManagerType,
-    action: &str,
-    package_name: &str,
-    on_progress: impl FnMut(CommandProgressEvent),
-) -> CoreResult<()> {
-    let path = command_path(config, manager_type);
-    let args = global_package_command_args(manager_type, action, package_name)?;
-
-    run_command_with_progress(&path, &args, on_progress).await
-}
-
-fn global_package_command_args(
-    manager_type: PackageManagerType,
-    action: &str,
-    package_name: &str,
-) -> CoreResult<Vec<String>> {
-    match manager_type {
-        PackageManagerType::Npm => match action {
-            "install" => Ok(vec![
-                "install".to_owned(),
-                "-g".to_owned(),
-                package_name.to_owned(),
-            ]),
-            "update" => Ok(vec![
-                "install".to_owned(),
-                "-g".to_owned(),
-                format!("{}@latest", package_name),
-            ]),
-            "uninstall" => Ok(vec![
-                "uninstall".to_owned(),
-                "-g".to_owned(),
-                package_name.to_owned(),
-            ]),
-            _ => Err(crate::error::CoreError::UnknownError(format!(
-                "Unsupported npm action: {}",
-                action
-            ))),
-        },
-        PackageManagerType::Pnpm => match action {
-            "install" => Ok(vec![
-                "add".to_owned(),
-                "-g".to_owned(),
-                package_name.to_owned(),
-            ]),
-            "update" => Ok(vec![
-                "add".to_owned(),
-                "-g".to_owned(),
-                format!("{}@latest", package_name),
-            ]),
-            "uninstall" => Ok(vec![
-                "remove".to_owned(),
-                "-g".to_owned(),
-                package_name.to_owned(),
-            ]),
-            _ => Err(crate::error::CoreError::UnknownError(format!(
-                "Unsupported pnpm action: {}",
-                action
-            ))),
-        },
-        _ => Err(crate::error::CoreError::UnknownError(format!(
-            "Unsupported manager for global command: {:?}",
-            manager_type
-        ))),
+fn convert_manager_error(error: ManagerError) -> CoreError {
+    let detail = error.detail().map_or_else(
+        || error.message().to_owned(),
+        |detail| format!("{}: {detail}", error.message()),
+    );
+    match error.kind() {
+        ManagerErrorKind::Network => CoreError::RequestError(detail),
+        ManagerErrorKind::Protocol => CoreError::ParseError(detail),
+        ManagerErrorKind::CommandMissing
+        | ManagerErrorKind::Permission
+        | ManagerErrorKind::Busy
+        | ManagerErrorKind::Timeout
+        | ManagerErrorKind::RebootRequired
+        | ManagerErrorKind::Cancelled => CoreError::from_command_failure(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Other => CoreError::UnknownError(detail),
+        _ => CoreError::UnknownError(detail),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PackageManagerConfig;
 
     #[test]
-    fn test_parse_installed_from_json_supports_object_and_array() {
-        let stdout = r#"[
-          {
-            "dependencies": {
-              "eslint": { "version": "8.57.0" },
-              "typescript": { "version": "5.8.2" }
-            }
-          },
-          {
-            "dependencies": [
-              { "name": "pnpm", "version": "10.6.5" },
-              { "name": "eslint", "version": "8.57.0" }
-            ]
-          }
-        ]"#;
-
-        let installed = parse_installed_from_json(PackageManagerType::Npm, stdout).unwrap();
-
-        assert_eq!(installed.len(), 3);
-        assert_eq!(installed[0].info.name, "eslint");
-        assert_eq!(installed[0].info.version, "8.57.0");
-        assert_eq!(installed[1].info.name, "pnpm");
-        assert_eq!(installed[2].info.name, "typescript");
+    fn legacy_config_bridge_preserves_custom_js_manager_paths() {
+        for (manager_type, path) in [
+            (PackageManagerType::Npm, "/custom/npm"),
+            (PackageManagerType::Pnpm, "/custom/pnpm"),
+        ] {
+            let config = Config {
+                app_managers: vec![PackageManagerConfig {
+                    manager_type,
+                    custom_path: Some(path.to_owned()),
+                }],
+                ..Config::default()
+            };
+            assert_eq!(
+                manager_config(&config, manager_type).executable(),
+                Some(std::path::Path::new(path))
+            );
+        }
     }
 
     #[test]
-    fn test_parse_installed_from_json_missing_version_is_unknown() {
-        let stdout = r#"{
-          "dependencies": {
-            "corepack": {}
-          }
-        }"#;
+    fn legacy_model_bridge_preserves_js_manager_identity() {
+        for manager_type in [PackageManagerType::Npm, PackageManagerType::Pnpm] {
+            let id = manager_type.manager_id();
+            let mut package = ApiPackageInfo::new(id.clone(), "typescript", "5.9.0");
+            package.size = Some(1024);
+            let converted = convert_package_info(package, manager_type);
+            assert_eq!(converted.source, manager_type);
+            assert_eq!(converted.size, Some(1024));
 
-        let installed = parse_installed_from_json(PackageManagerType::Npm, stdout).unwrap();
-        assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].info.name, "corepack");
-        assert_eq!(installed[0].info.version, "unknown");
-    }
-
-    #[test]
-    fn test_parse_pnpm_long_metadata() {
-        let stdout = r#"[{
-          "dependencies": {
-            "@playwright/cli": {
-              "version": "0.1.17",
-              "description": "Playwright CLI",
-              "homepage": "https://playwright.dev",
-              "path": "/pnpm/global/node_modules/@playwright/cli"
-            }
-          }
-        }]"#;
-
-        let installed = parse_installed_from_json(PackageManagerType::Pnpm, stdout).unwrap();
-        assert_eq!(installed.len(), 1);
-        assert_eq!(
-            installed[0].info.description.as_deref(),
-            Some("Playwright CLI")
-        );
-        assert_eq!(
-            installed[0].info.homepage.as_deref(),
-            Some("https://playwright.dev")
-        );
-        assert_eq!(
-            installed[0].path.as_deref(),
-            Some(std::path::Path::new(
-                "/pnpm/global/node_modules/@playwright/cli"
-            ))
-        );
-    }
-
-    #[test]
-    fn test_parse_updates_from_json_supports_object_and_array() {
-        let object_stdout = r#"{
-          "eslint": { "current": "8.57.0", "latest": "9.0.0" },
-          "typescript": { "current": "5.8.2", "wanted": "5.8.2" }
-        }"#;
-
-        let object_updates = parse_updates_from_json(object_stdout).unwrap();
-        assert_eq!(object_updates.len(), 1);
-        assert_eq!(object_updates[0].name, "eslint");
-        assert_eq!(object_updates[0].current_version, "8.57.0");
-        assert_eq!(object_updates[0].new_version, "9.0.0");
-
-        let array_stdout = r#"[
-          { "name": "pnpm", "current": "10.6.5", "latest": "10.7.0" },
-          { "name": "npm", "current": "10.9.2", "wanted": "10.9.2" }
-        ]"#;
-
-        let array_updates = parse_updates_from_json(array_stdout).unwrap();
-        assert_eq!(array_updates.len(), 1);
-        assert_eq!(array_updates[0].name, "pnpm");
-    }
-
-    #[test]
-    fn test_global_package_command_args_for_npm_and_pnpm() {
-        assert_eq!(
-            global_package_command_args(PackageManagerType::Npm, "install", "eslint").unwrap(),
-            vec!["install".to_owned(), "-g".to_owned(), "eslint".to_owned()]
-        );
-
-        assert_eq!(
-            global_package_command_args(PackageManagerType::Pnpm, "install", "eslint").unwrap(),
-            vec!["add".to_owned(), "-g".to_owned(), "eslint".to_owned()]
-        );
-    }
-
-    #[test]
-    fn test_global_package_update_args_force_latest() {
-        assert_eq!(
-            global_package_command_args(PackageManagerType::Npm, "update", "@google/gemini-cli")
-                .unwrap(),
-            vec![
-                "install".to_owned(),
-                "-g".to_owned(),
-                "@google/gemini-cli@latest".to_owned()
-            ]
-        );
-
-        assert_eq!(
-            global_package_command_args(PackageManagerType::Pnpm, "update", "@google/gemini-cli")
-                .unwrap(),
-            vec![
-                "add".to_owned(),
-                "-g".to_owned(),
-                "@google/gemini-cli@latest".to_owned()
-            ]
-        );
-    }
-
-    #[test]
-    fn test_global_package_command_args_rejects_unsupported_action() {
-        let result = global_package_command_args(PackageManagerType::Npm, "remove", "eslint");
-        assert!(result.is_err());
+            let converted = convert_package_update(ApiPackageUpdate::new(
+                PackageTarget::new(id, "typescript"),
+                "5.9.0",
+                "5.10.0",
+            ));
+            assert_eq!(converted.new_version, "5.10.0");
+        }
     }
 }

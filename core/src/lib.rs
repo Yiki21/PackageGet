@@ -550,8 +550,8 @@ impl PackageManagerType {
             Self::Homebrew => HomebrewManager::list_updates_with_refresh(config, refresh).await,
             Self::Cargo => CargoManager::list_updates_with_refresh(config, refresh).await,
             Self::Go => GoManager::list_updates_with_refresh(config, refresh).await,
-            Self::Npm => NpmManager::list_updates(config).await,
-            Self::Pnpm => PnpmManager::list_updates(config).await,
+            Self::Npm => NpmManager::list_updates_with_refresh(config, refresh).await,
+            Self::Pnpm => PnpmManager::list_updates_with_refresh(config, refresh).await,
             Self::Pipx => PipxManager::list_updates(config).await,
         }
     }

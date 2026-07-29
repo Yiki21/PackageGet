@@ -13,7 +13,9 @@ mod dnf;
 mod flatpak;
 mod go;
 mod homebrew;
+mod npm;
 mod pacman;
+mod pnpm;
 mod progress;
 mod zypper;
 
@@ -23,6 +25,8 @@ pub use dnf::DnfManager;
 pub use flatpak::FlatpakManager;
 pub use go::GoManager;
 pub use homebrew::HomebrewManager;
+pub use npm::NpmManager;
 pub use pacman::PacmanManager;
+pub use pnpm::PnpmManager;
 pub use progress::CommandProgress;
 pub use zypper::ZypperManager;

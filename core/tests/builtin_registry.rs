@@ -5,8 +5,8 @@ use updater_core::{
     register_builtin_managers,
 };
 use updater_managers::{
-    AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager,
-    PacmanManager, ZypperManager,
+    AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager, NpmManager,
+    PacmanManager, PnpmManager, ZypperManager,
 };
 
 #[test]
@@ -132,5 +132,33 @@ fn mixed_registration_rejects_a_preexisting_direct_go_manager() {
         register_builtin_managers(&mut registry),
         Err(RegistryError::DuplicateManager { id })
             if id == PackageManagerType::Go.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_npm_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(NpmManager::new()))
+        .expect("register direct npm manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Npm.manager_id()
+    ));
+}
+
+#[test]
+fn mixed_registration_rejects_a_preexisting_direct_pnpm_manager() {
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(PnpmManager::new()))
+        .expect("register direct pnpm manager");
+
+    assert!(matches!(
+        register_builtin_managers(&mut registry),
+        Err(RegistryError::DuplicateManager { id })
+            if id == PackageManagerType::Pnpm.manager_id()
     ));
 }
