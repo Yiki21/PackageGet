@@ -54,6 +54,7 @@
 - public API fake executable fixture 已直接覆盖 `--version`、`-Q`、`-Qq`、`-Qu` 与 `-Ss`，不再只依赖私有 parser 单元测试。
 - 当前 Fedora 宿主机未安装 Pacman；显式 availability smoke 验证其返回 `CommandMissing { command: "pacman" }`。
 - Podman 因本机 Docker Hub 失效凭据无法拉取镜像，因此在不改动登录配置的前提下改用 Docker；官方 `archlinux:base` 镜像（digest `sha256:3406a568f45d68f0bef35dc80b3eacec8bda59b0292b2e50d5932ba1667f20cf`）中的 direct API 只读 smoke 通过。
+- 修复后的完整 workspace 本地门禁已串行通过；等待本轮最新提交的 GitHub Actions 复验后关闭 Iteration 006。
 
 ## Git 提交
 
@@ -79,6 +80,11 @@
 - Docker `archlinux:base` 显式运行 `arch_container_pacman_read_only_smoke`：修复前后各 1 项通过，并断言版本行包含 `Pacman v`；未执行 refresh 或写事务。
 - `cargo test -p updater_core --jobs 1 -- --test-threads=1`：71 项通过，11 项环境或网络测试保持 ignored。
 - `cargo clippy -p updater-managers -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
+- `cargo fmt --all -- --check` 通过。
+- `cargo check --workspace --all-targets --locked --jobs 1` 通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：128 项通过，14 项环境或网络测试保持 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings` 通过。
+- `cargo build --workspace --locked --jobs 1` 通过。
 
 ## 遗留项 / 下一轮
 
