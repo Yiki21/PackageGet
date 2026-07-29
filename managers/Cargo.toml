@@ -1,0 +1,21 @@
+[package]
+name = "updater-managers"
+version.workspace = true
+edition.workspace = true
+description = "Built-in package manager implementations for Updater."
+license = "MIT"
+repository = "https://github.com/Yiki21/PackageGet"
+
+[lib]
+name = "updater_managers"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait.workspace = true
+directories-next.workspace = true
+regex.workspace = true
+tokio.workspace = true
+updater_manager_api.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

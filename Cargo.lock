@@ -4366,6 +4366,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "updater-managers"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "directories-next",
+ "regex",
+ "tempfile",
+ "tokio",
+ "updater-manager-api",
+]
+
+[[package]]
 name = "updater_core"
 version = "0.2.4"
 dependencies = [

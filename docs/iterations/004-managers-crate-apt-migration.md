@@ -11,7 +11,7 @@
 
 ## 实施计划
 
-- [ ] 新增根目录 `managers/`（package `updater-managers`），统一使用 workspace dependency 与宽 semver manifest 约束。
+- [x] 新增根目录 `managers/`（package `updater-managers`），统一使用 workspace dependency 与宽 semver manifest 约束。
 - [ ] 抽取 APT 所需的 executable resolution、command execution、bounded progress 与 typed error 工具，工具层不依赖 core 或 UI。
 - [ ] 直接实现 APT descriptor、availability、installed/count、updates、search 与统一 execute。
 - [ ] 将 core 的旧 APT 入口改为兼容 wrapper，复用新实现并完成 Config V1、model 与 progress 的反向转换，删除旧 APT 命令实现副本。
@@ -41,12 +41,14 @@
 - Iteration 003 已完成，11 个 built-in 已具备 stable identity，并可通过 legacy adapter 注册到对象安全 registry。
 - 确定首个直接迁移对象为 APT，以系统 manager 的批处理、提权和 refresh 路径验证新 crate 边界。
 - 确定 `managers/` 使用 workspace 根目录平铺结构，不恢复通用 `crates/` 容器目录。
+- 新增平铺的 `updater-managers` workspace crate；初始边界只依赖公共 API 与通用运行库，不依赖 core 或 Iced。
 
 ## Git 提交
 
 | 提交 | 内容 | 验证 |
 | --- | --- | --- |
-| 待提交 | 完成 Iteration 003 并建立 Iteration 004 计划 | 文档检查 |
+| `b52d48b` | 完成 Iteration 003 并建立 Iteration 004 计划 | 文档检查 |
+| 待提交 | 建立平铺的 `updater-managers` crate 与 workspace 边界 | managers check、manifest review |
 
 ## 验证记录
 

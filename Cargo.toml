@@ -6,7 +6,7 @@ description = "A GUI application for checking and downloading updates."
 
 [workspace]
 resolver = "3"
-members = ["ui", "core", "manager-api"]
+members = ["ui", "core", "manager-api", "managers"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -40,6 +40,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 updater_core = { path = "core" }
 updater_manager_api = { package = "updater-manager-api", path = "manager-api" }
+updater_managers = { package = "updater-managers", path = "managers" }
 url = "2"
 
 [profile.dev]
