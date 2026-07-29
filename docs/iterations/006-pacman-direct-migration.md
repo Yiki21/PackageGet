@@ -15,8 +15,8 @@
 - [x] 保留自定义 executable、refresh/no-refresh、`pkexec` 与现有 `-Q`、`-Qq`、`-Qu`、`-Ss` 命令语义。
 - [x] 保留 install/update 的 `-S --needed --noconfirm`、uninstall 的 `-R --noconfirm` 和批量 package group 行为。
 - [x] 扩展 shared command error classifier，覆盖 Pacman transaction/database lock，同时不把普通 `pkexec` command failure 误判为 permission。
-- [ ] 将 core 的旧 Pacman 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
-- [ ] 更新 mixed built-in 注册：APT、DNF、Pacman 使用直接实现，其余 8 个 manager 继续使用 legacy adapter。
+- [x] 将 core 的旧 Pacman 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
+- [x] 更新 mixed built-in 注册：APT、DNF、Pacman 使用直接实现，其余 8 个 manager 继续使用 legacy adapter。
 - [ ] 增加纯离线 installed/update/search fixture、command construction、conversion 与 registration contract tests。
 - [ ] 宿主机验证结构化 availability，并在 Podman Arch Linux 容器内执行 direct manager 的只读 availability/installed/count smoke test。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
@@ -47,6 +47,8 @@
 - `updater-managers` 已增加平铺的 `pacman.rs`，直接实现完整 object-safe manager contract，并复用现有 bounded command progress。
 - 自定义 executable、refresh/no-refresh、`-Q/-Qq/-Qu/-Ss`、批量 `-S/-R` 与 `--needed/--noconfirm` 参数已由离线测试锁定。
 - shared command error classifier 已覆盖 `failed to init transaction`、`unable to lock database` 与 `could not lock database`。
+- `core/src/pm/pacman.rs` 已收缩为 Config V1、model、progress 与 typed error 转换层，旧 Pacman command/parser/execute 副本已删除。
+- mixed built-in registry 现在直接注册 APT、DNF 与 Pacman，并继续为其余 8 个 manager 注册 legacy adapter；Pacman duplicate contract 已补齐。
 
 ## Git 提交
 
@@ -55,12 +57,16 @@
 | `03720cd` | 完成 Iteration 005 并建立 Iteration 006 计划 | 文档检查；GitHub Actions `30431775898` |
 | `c45ec4e` | 将真实只读 smoke 扩展为 Podman Arch Linux direct API 验证 | 文档检查 |
 | `c1fc617` | 实现直接 Pacman manager 与 lock error parity | `cargo test -p updater-managers --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
+| `65e8fc8` | 将 legacy Pacman 路由到直接实现并更新 mixed registry | `cargo test -p updater_core --jobs 1 -- --test-threads=1`；`cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` |
 
 ## 验证记录
 
 - `updater-managers`：21 个单元测试、8 个默认 integration contract tests 通过，1 个本机 DNF smoke 保持 ignored。
 - `cargo check -p updater-managers --jobs 1` 通过。
 - `cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` 通过。
+- `updater_core`：70 项测试通过，11 项依赖本机软件或网络的测试保持 ignored。
+- `cargo check -p updater_core --jobs 1` 通过。
+- `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
 
 ## 遗留项 / 下一轮
 
