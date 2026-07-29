@@ -1,11 +1,56 @@
-use std::sync::Mutex;
+use std::{fs, path::PathBuf, sync::Mutex};
 
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use updater_manager_api::{
     AuthorizationHint, AvailabilityReason, ManagerAvailability, ManagerCapability, ManagerConfig,
     ManagerErrorKind, PackageAction, PackageManager, PackageTarget, ProgressEvent,
 };
 use updater_managers::PacmanManager;
+
+#[cfg(unix)]
+fn fake_pacman() -> (TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().expect("create fake Pacman directory");
+    let executable = directory.path().join("pacman");
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
+case "$1" in
+  --version)
+    printf ' .--.\n/ _.- Pacman v7.0.0 - libalpm v15.0.0\n'
+    ;;
+  -Q)
+    if [ "$#" -eq 2 ]; then
+      case "$2" in
+        bash) printf 'bash 5.2.037-1\n' ;;
+        curl) printf 'curl 8.15.0-1\n' ;;
+        *) exit 1 ;;
+      esac
+    else
+      printf 'bash 5.2.037-1\ncurl 8.15.0-1\n'
+    fi
+    ;;
+  -Qq)
+    printf 'bash\ncurl\n'
+    ;;
+  -Qu)
+    printf 'curl 8.15.0-1 -> 8.16.0-1\n'
+    ;;
+  -Ss)
+    printf 'core/bash 5.2.037-1\n    The GNU Bourne Again shell\nextra/fzf 0.65.0-1\n    Command-line fuzzy finder\n'
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+"#,
+    )
+    .expect("write fake Pacman executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("mark fake Pacman executable");
+    (directory, executable)
+}
 
 #[test]
 fn pacman_descriptor_exposes_the_stable_public_contract() {
@@ -111,6 +156,69 @@ async fn mismatched_config_and_targets_are_rejected_before_progress() {
     assert!(events.lock().expect("progress lock").is_empty());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn public_read_apis_preserve_pacman_output_contracts() {
+    let manager = PacmanManager::new();
+    let (_directory, executable) = fake_pacman();
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+
+    assert_eq!(
+        manager
+            .availability(&config)
+            .await
+            .expect("check fake Pacman availability"),
+        ManagerAvailability::Available {
+            version: Some("/ _.- Pacman v7.0.0 - libalpm v15.0.0".to_owned()),
+        }
+    );
+    assert_eq!(
+        manager
+            .current_version(&config, "bash")
+            .await
+            .expect("query fake package version"),
+        "5.2.037-1"
+    );
+
+    let installed = manager
+        .installed(&config)
+        .await
+        .expect("list fake installed packages");
+    assert_eq!(installed.len(), 2);
+    assert_eq!(installed[0].name, "bash");
+    assert_eq!(installed[0].version, "5.2.037-1");
+    assert_eq!(
+        manager
+            .count_installed(&config)
+            .await
+            .expect("count fake installed packages"),
+        installed.len()
+    );
+
+    let updates = manager
+        .updates(&config, false)
+        .await
+        .expect("list fake Pacman updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "curl");
+    assert_eq!(updates[0].current_version, "8.15.0-1");
+    assert_eq!(updates[0].available_version, "8.16.0-1");
+
+    let search = manager
+        .search(&config, "shell")
+        .await
+        .expect("search fake Pacman repositories");
+    assert_eq!(search.len(), 2);
+    assert_eq!(search[0].name, "bash");
+    assert_eq!(search[0].version, "5.2.037-1");
+    assert_eq!(
+        search[0].description.as_deref(),
+        Some("The GNU Bourne Again shell")
+    );
+    assert_eq!(search[1].name, "fzf");
+    assert_eq!(search[1].version, "Not Installed");
+}
+
 #[tokio::test]
 #[ignore = "requires Pacman and a readable local package database"]
 async fn arch_container_pacman_read_only_smoke() {
@@ -121,7 +229,11 @@ async fn arch_container_pacman_read_only_smoke() {
         .availability(&config)
         .await
         .expect("check Pacman availability");
-    assert!(availability.is_available());
+    assert!(matches!(
+        availability,
+        ManagerAvailability::Available { version: Some(version) }
+            if version.contains("Pacman v")
+    ));
 
     let installed = manager
         .installed(&config)

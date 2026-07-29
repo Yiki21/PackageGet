@@ -157,10 +157,9 @@ fn convert_manager_error(error: ManagerError) -> CoreError {
         | ManagerErrorKind::Permission
         | ManagerErrorKind::Busy
         | ManagerErrorKind::Timeout
-        | ManagerErrorKind::RebootRequired => CoreError::CommandError(detail),
-        ManagerErrorKind::Unsupported | ManagerErrorKind::Cancelled | ManagerErrorKind::Other => {
-            CoreError::UnknownError(detail)
-        }
+        | ManagerErrorKind::RebootRequired
+        | ManagerErrorKind::Cancelled => CoreError::from_command_failure(detail),
+        ManagerErrorKind::Unsupported | ManagerErrorKind::Other => CoreError::UnknownError(detail),
         _ => CoreError::UnknownError(detail),
     }
 }
@@ -224,6 +223,8 @@ mod tests {
             (ManagerErrorKind::Network, "request"),
             (ManagerErrorKind::Protocol, "parse"),
             (ManagerErrorKind::Permission, "command"),
+            (ManagerErrorKind::Busy, "command"),
+            (ManagerErrorKind::Cancelled, "command"),
             (ManagerErrorKind::Other, "unknown"),
         ] {
             let error = convert_manager_error(
@@ -238,6 +239,27 @@ mod tests {
             };
             assert_eq!(category, expected);
         }
+    }
+
+    #[test]
+    fn command_errors_preserve_legacy_lock_and_cancellation_guidance() {
+        let lock = convert_manager_error(
+            ManagerError::new(ManagerErrorKind::Busy, "pacman failed")
+                .with_detail("failed to init transaction (unable to lock database)"),
+        );
+        assert!(matches!(
+            lock,
+            CoreError::CommandError(message) if message.contains("package database is locked")
+        ));
+
+        let cancellation = convert_manager_error(
+            ManagerError::new(ManagerErrorKind::Cancelled, "pkexec failed")
+                .with_detail("operation was cancelled"),
+        );
+        assert!(matches!(
+            cancellation,
+            CoreError::CommandError(message) if message.contains("authorization was cancelled")
+        ));
     }
 
     #[tokio::test]

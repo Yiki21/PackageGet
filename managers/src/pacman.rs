@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     path::Path,
+    process::Output,
 };
 
 use async_trait::async_trait;
@@ -14,8 +15,8 @@ use updater_manager_api::{
 
 use crate::{
     command::{
-        CommandSpec, command_status_error, decode_stdout, manager_availability, require_success,
-        resolve_executable, run_output,
+        CommandSpec, command_status_error, decode_stdout, manager_availability_with_version,
+        require_success, resolve_executable, run_output,
     },
     progress::{CommandProgress, run_command_with_progress},
 };
@@ -235,7 +236,13 @@ impl PackageManager for PacmanManager {
             });
         }
 
-        Ok(manager_availability(config, PACMAN_COMMAND, &["--version"]).await)
+        Ok(manager_availability_with_version(
+            config,
+            PACMAN_COMMAND,
+            &["--version"],
+            detect_pacman_version,
+        )
+        .await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {
@@ -378,6 +385,17 @@ fn parse_installed_line(line: &str) -> Option<(&str, &str)> {
     let name = fields.next()?;
     let version = fields.next()?;
     (!name.is_empty() && !version.is_empty()).then_some((name, version))
+}
+
+fn detect_pacman_version(output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .find(|line| line.contains("Pacman v"))
+        .map(ToOwned::to_owned)
 }
 
 fn parse_installed_packages(stdout: &str, manager_id: &ManagerId) -> Vec<PackageInfo> {

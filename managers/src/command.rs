@@ -57,6 +57,15 @@ pub(crate) async fn manager_availability(
     default_program: &str,
     version_args: &[&str],
 ) -> ManagerAvailability {
+    manager_availability_with_version(config, default_program, version_args, detected_version).await
+}
+
+pub(crate) async fn manager_availability_with_version(
+    config: &ManagerConfig,
+    default_program: &str,
+    version_args: &[&str],
+    detect_version: fn(&Output) -> Option<String>,
+) -> ManagerAvailability {
     let program = resolve_executable(config, default_program);
 
     if config.executable().is_some() {
@@ -88,7 +97,7 @@ pub(crate) async fn manager_availability(
     let spec = CommandSpec::new(program.clone()).args(version_args.iter().copied());
     match timeout(Duration::from_secs(5), run_output(&spec)).await {
         Ok(Ok(output)) if output.status.success() => ManagerAvailability::Available {
-            version: detected_version(&output),
+            version: detect_version(&output),
         },
         Ok(Ok(output)) => ManagerAvailability::Unavailable {
             reason: AvailabilityReason::VersionCheckFailed {
@@ -211,6 +220,16 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
         ],
     ) {
         ManagerErrorKind::CommandMissing
+    } else if contains_any(
+        &detail,
+        &[
+            "operation was cancelled",
+            "operation was canceled",
+            "cancelled",
+            "canceled",
+        ],
+    ) {
+        ManagerErrorKind::Cancelled
     } else if contains_any(
         &detail,
         &[
@@ -431,6 +450,8 @@ mod tests {
     fn classifies_command_failures_without_treating_every_pkexec_error_as_permission() {
         for (detail, expected) in [
             ("command not found", ManagerErrorKind::CommandMissing),
+            ("operation was cancelled", ManagerErrorKind::Cancelled),
+            ("pkexec: canceled", ManagerErrorKind::Cancelled),
             ("pkexec: not authorized", ManagerErrorKind::Permission),
             ("could not get lock", ManagerErrorKind::Busy),
             (
