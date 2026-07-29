@@ -13,15 +13,15 @@
 
 - [x] 分别审计当前stable npm与pnpm的availability、global root/prefix、installed、outdated、search及write命令；允许sub agent并行收集只读证据，集成改动保持线性提交。
 - [x] 冻结`builtin:npm`与`builtin:pnpm` descriptor、平台、capabilities、User scope、registry origin和scoped package name grammar。
-- [ ] 为npm建立typed installed/outdated/search schema、退出码边界、deterministic ordering与malformed/empty response契约。
-- [ ] 为pnpm建立独立typed installed/outdated/search schema，明确object/array差异、global virtual store/path字段和非零退出行为。
-- [ ] 明确global package size只从validated package path读取；filesystem error、symlink和package path越界不能静默伪造size。
-- [ ] 实现refresh-free updates、installed/count/current version、search和统一execute；read/write命令均使用固定timeout且不持锁跨await。
-- [ ] 冻结npm `install/uninstall -g`与pnpm `add/remove -g`参数；update使用typed target和明确version，不把option-like package name注入argv。
-- [ ] scoped package如`@scope/name`保留完整identity；禁止把`@`版本分隔和scope前缀混淆，legacy Unknown target仅提供受控兼容。
-- [ ] 将core npm/pnpm收缩为Config V1、model/progress与typed error wrapper，mixed registry改为direct npm/pnpm且只保留pipx legacy adapter。
-- [ ] 增加fake npm/pnpm executables、offline JSON fixtures、exit-code、timeout、scope/version、command argv、size boundary、conversion和duplicate registration contracts。
-- [ ] 执行显式opt-in宿主只读smoke；不执行真实global install、update或remove，也不修改Node.js全局配置。
+- [x] 为npm建立typed installed/outdated/search schema、退出码边界、deterministic ordering与malformed/empty response契约。
+- [x] 为pnpm建立独立typed installed/outdated/search schema，明确object/array差异、global virtual store/path字段和非零退出行为。
+- [x] 明确global package size只从validated package path读取；filesystem error、symlink和package path越界不能静默伪造size。
+- [x] 实现refresh-free updates、installed/count/current version、search和统一execute；read/write命令均使用固定timeout且不持锁跨await。
+- [x] 冻结npm `install/uninstall -g`与pnpm `add/remove -g`参数；update使用typed target和明确version，不把option-like package name注入argv。
+- [x] scoped package如`@scope/name`保留完整identity；禁止把`@`版本分隔和scope前缀混淆，legacy Unknown target仅提供受控兼容。
+- [x] 将core npm/pnpm收缩为Config V1、model/progress与typed error wrapper，mixed registry改为direct npm/pnpm且只保留pipx legacy adapter。
+- [x] 增加fake npm/pnpm executables、offline JSON fixtures、exit-code、timeout、scope/version、command argv、size boundary、conversion和duplicate registration contracts。
+- [x] 执行显式opt-in宿主只读smoke；不执行真实global install、update或remove，也不修改Node.js全局配置。
 - [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity 与协议边界
@@ -62,16 +62,31 @@
 - installed path只作为size和local-link证据：npm path必须匹配global root下由完整package name推导的路径；pnpm path可包含global instance/virtual-store布局。path不得进入identity或write target，symlink/link package不得被跟随计算size。
 - identity冻结为完整registry package name加User scope。installed origin标记manager global inventory，不武断声称registry；outdated/search origin记录当前配置registry，并使用`package:FULL_NAME` reference。
 - write只接受validated registry package name和可选version/tag：拒绝空值、option-like name、额外slash、path/git/file/url/alias spec。scoped name的首个`@`属于scope，版本suffix只能在完整name之后构造。
+- `managers/src/npm.rs`与`managers/src/pnpm.rs`已分别实现direct manager及独立typed schema；共享只使用既有command/progress API，没有新增manager分组目录或宽泛JSON抽象。
+- npm updates冻结配置registry、完整package name与exact available version；pnpm同样不再把direct update降级为`@latest`。typed install允许validated version或dist-tag，legacy Unknown保留受控latest兼容。
+- direct execute在发出Started和执行首个写命令前构造并验证整组commands，随后按package串行有界执行；invalid后续target不会造成前序partial write。
+- core npm/pnpm已删除legacy command、directory traversal和parser副本，只保留Config V1、自定义executable、model/progress/error转换；mixed registry目前10个direct manager，仅pipx保留legacy adapter。
+- 首次pnpm宿主smoke暴露真实global dependency path是symlink；实现已改为保留identity但不跟随计算size，普通目录仍执行canonical containment和fallible deterministic traversal，并增加离线symlink contract。
+- npm与pnpm宿主只读smoke最终均通过availability、inventory/count、outdated与search；未执行任何global write或配置修改。
 
 ## Git 提交
 
 - Iteration 012计划检查点：本次提交（`docs: complete Go iteration and plan npm pnpm`）。
-- npm/pnpm CLI与identity审计检查点：待提交。
+- npm/pnpm CLI与identity审计检查点：`b6f705c docs: audit npm pnpm manager contracts`。
+- npm/pnpm direct/core migration检查点：`aa8b393 feat: migrate npm pnpm to direct managers`。
 
 ## 验证记录
 
 - npm只读审计：`npm --version`、`node --version`、`npm prefix -g`、`npm root -g`、`npm config get registry`、global list/outdated/search均完成；版本仅为本次宿主证据，不写入最低版本约束。
 - pnpm只读审计：`pnpm --version`、resolved global root/bin/store、registry、global list/outdated/search均完成；未执行install、update、remove或配置变更。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test -p updater-managers --test npm_contract --locked --jobs 1 -- --test-threads=1`：9 passed，1 ignored。
+- `cargo test -p updater-managers --test pnpm_contract --locked --jobs 1 -- --test-threads=1`：9 passed，1 ignored。
+- npm与pnpm host read-only ignored smoke分别显式运行：各1 passed。
+- `cargo test -p updater-managers --lib --locked --jobs 1 -- --test-threads=1`：42 passed。
+- `cargo test -p updater_core --lib --locked --jobs 1 -- --test-threads=1`：56 passed。
+- `cargo test -p updater_core --test builtin_registry --locked --jobs 1 -- --test-threads=1`：11 passed。
+- `cargo clippy -p updater-managers -p updater_core --all-targets --locked --jobs 1 -- -D warnings`：通过。
 
 ## 遗留项 / 下一轮
 
