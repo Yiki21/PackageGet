@@ -48,6 +48,7 @@
 - availability、package/update metadata、write progress 与 `CoreError` 已转换为公共 API 的结构化模型和 typed error kind。
 - `register_legacy_managers` 可将现有 11 个 built-in adapter 显式注册到 `ManagerRegistry`。
 - 新增 11 个纯离线 adapter 测试，覆盖 system/app/Go 配置桥接、ID 防串用、metadata、availability、typed errors、progress、完整注册和空操作执行。
+- workspace 完整本地门禁通过；慢速全量复验交由 GitHub Actions，避免使用 `act` 重复构建整套容器环境。
 
 ## Git 提交
 
@@ -57,7 +58,8 @@
 | `ad798ec` | 建立 built-in identity、descriptor 与完整 package metadata | unit test、clippy |
 | `6b31606` | 将 `manager-api` 扁平放置在 workspace 根目录 | format、check、focused test |
 | `dd0f718` | 实现 Config V1 桥接、legacy adapter、类型转换与 built-in 注册 | core check、clippy |
-| 待提交 | 补齐 adapter 配置、转换、注册、错误与 progress 离线测试 | focused test、clippy |
+| `7598c6c` | 补齐 adapter 配置、转换、注册、错误与 progress 离线测试 | focused test、clippy |
+| 待提交 | 记录 Iteration 003 完整本地验证 | format、check、test、clippy、build |
 
 ## 验证记录
 
@@ -66,6 +68,11 @@
 - `cargo test -p updater-manager-api --all-targets --locked --jobs 1 -- --test-threads=1`：4 个测试通过。
 - `cargo check --workspace --all-targets --locked --jobs 1`：扁平化 workspace 路径后通过。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：adapter 完成后通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 --quiet -- --test-threads=1`：91 个测试通过，13 个环境测试 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：adapter 完成后通过。
+- `cargo build --workspace --locked --jobs 1 --quiet`：通过。
 
 ## 遗留项 / 下一轮
 
