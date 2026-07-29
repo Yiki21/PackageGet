@@ -20,4 +20,5 @@
 | 004 | 已完成 | 阶段 2：Managers Crate 与 APT 直接迁移 | [004-managers-crate-apt-migration.md](004-managers-crate-apt-migration.md) |
 | 005 | 已完成 | 阶段 2：DNF 直接迁移与 Progress Parity | [005-dnf-direct-migration.md](005-dnf-direct-migration.md) |
 | 006 | 已完成 | 阶段 2：Pacman 直接迁移与 Arch Transaction Parity | [006-pacman-direct-migration.md](006-pacman-direct-migration.md) |
-| 007 | 进行中 | 阶段 2：Zypper 直接迁移与 Exit-Code/Locale Parity | [007-zypper-direct-migration.md](007-zypper-direct-migration.md) |
+| 007 | 已完成 | 阶段 2：Zypper 直接迁移与 Exit-Code/Locale Parity | [007-zypper-direct-migration.md](007-zypper-direct-migration.md) |
+| 008 | 进行中 | 阶段 2：Flatpak 直接迁移与 User/System Scope Parity | [008-flatpak-direct-migration.md](008-flatpak-direct-migration.md) |

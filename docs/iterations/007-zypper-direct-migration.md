@@ -1,7 +1,7 @@
 # Iteration 007：Zypper 直接迁移与 Exit-Code/Locale Parity
 
 - 日期：2026-07-29
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 2——逐个迁移内置 PackageManager
 - 开发方式：直接在 `main` 上形成小步、线性的 Git 提交
 
@@ -19,7 +19,7 @@
 - [x] 更新 mixed built-in registry：四个 system manager 使用直接实现，其余 7 个 manager 继续使用 legacy adapter。
 - [x] 增加离线 RPM/table fixtures、command construction、exit-code、conversion、registration 与 public API contract tests。
 - [x] 在 openSUSE Tumbleweed 容器中执行 direct API 的无网络、只读 availability/installed/count/current-version smoke。
-- [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
+- [x] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 现有命令契约
 
@@ -82,6 +82,7 @@
 | `a48fb14` | 实现 direct Zypper、command-local locale 与专属退出码 | managers 41 项通过、3 项 ignored；check/clippy 通过 |
 | `80d20f0` | 将 legacy Zypper 路由到 direct manager 并更新 mixed registry | core 74 项通过、11 项 ignored；check/clippy 通过 |
 | `f234fe7` | 增加 direct Zypper public contracts 与 Tumbleweed smoke | 7 个默认 contract tests；Podman smoke 1 项 |
+| `6d005f6` | 记录 Iteration 007 完整本地门禁 | workspace 145 项通过；完整 format/check/test/clippy/build |
 
 ## 验证记录
 
@@ -98,7 +99,10 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：145 项通过，15 项环境或网络测试保持 ignored。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings` 通过。
 - `cargo build --workspace --locked --jobs 1` 通过。
+- GitHub Actions CI run `30435997059` 通过，耗时 2 分 57 秒；format、check、deterministic tests、clippy 与 build 全部成功。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写；已知后续候选为 Flatpak scope/ref/origin parity。
+- 下一轮进入 [Iteration 008：Flatpak 直接迁移与 User/System Scope Parity](008-flatpak-direct-migration.md)。
+- Flatpak 不能继续按 application ID 单字段去重；下一轮以 scope、完整 ref 与 remote origin 作为 target identity。
+- named system installation 暂时无法由现有 `PackageScope` 无损表达，将显式列为非目标，不能静默映射到默认 system installation。
