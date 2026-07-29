@@ -17,8 +17,8 @@
 - [x] 扩展 shared command error classifier，覆盖 Pacman transaction/database lock，同时不把普通 `pkexec` command failure 误判为 permission。
 - [x] 将 core 的旧 Pacman 入口改为兼容 wrapper，删除旧 parser、command construction 和执行实现副本。
 - [x] 更新 mixed built-in 注册：APT、DNF、Pacman 使用直接实现，其余 8 个 manager 继续使用 legacy adapter。
-- [ ] 增加纯离线 installed/update/search fixture、command construction、conversion 与 registration contract tests。
-- [ ] 宿主机验证结构化 availability，并在 Podman Arch Linux 容器内执行 direct manager 的只读 availability/installed/count smoke test。
+- [x] 增加纯离线 installed/update/search fixture、command construction、conversion 与 registration contract tests。
+- [x] 宿主机验证结构化 availability，并在 Arch Linux 容器内执行 direct manager 的只读 availability/installed/count smoke test。
 - [ ] 串行通过 format、check、test、clippy、build，并由 GitHub Actions 复验。
 
 ## 非目标
@@ -49,6 +49,9 @@
 - shared command error classifier 已覆盖 `failed to init transaction`、`unable to lock database` 与 `could not lock database`。
 - `core/src/pm/pacman.rs` 已收缩为 Config V1、model、progress 与 typed error 转换层，旧 Pacman command/parser/execute 副本已删除。
 - mixed built-in registry 现在直接注册 APT、DNF 与 Pacman，并继续为其余 8 个 manager 注册 legacy adapter；Pacman duplicate contract 已补齐。
+- direct Pacman integration contract 已覆盖 descriptor、elevation、缺失自定义 executable、空事务 progress boundary、错误 manager identity 与只读环境 smoke。
+- 当前 Fedora 宿主机未安装 Pacman；显式 availability smoke 验证其返回 `CommandMissing { command: "pacman" }`。
+- Podman 因本机 Docker Hub 失效凭据无法拉取镜像，因此在不改动登录配置的前提下改用 Docker；官方 `archlinux:base` 镜像（digest `sha256:3406a568f45d68f0bef35dc80b3eacec8bda59b0292b2e50d5932ba1667f20cf`）中的 direct API 只读 smoke 通过。
 
 ## Git 提交
 
@@ -58,6 +61,7 @@
 | `c45ec4e` | 将真实只读 smoke 扩展为 Podman Arch Linux direct API 验证 | 文档检查 |
 | `c1fc617` | 实现直接 Pacman manager 与 lock error parity | `cargo test -p updater-managers --jobs 1 -- --test-threads=1`；`cargo clippy -p updater-managers --all-targets --jobs 1 -- -D warnings` |
 | `65e8fc8` | 将 legacy Pacman 路由到直接实现并更新 mixed registry | `cargo test -p updater_core --jobs 1 -- --test-threads=1`；`cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` |
+| `746d111` | 增加 direct Pacman integration contracts 与环境 smoke | 4 个默认 contract tests；宿主 availability 1 项；Arch Docker smoke 1 项 |
 
 ## 验证记录
 
@@ -67,6 +71,9 @@
 - `updater_core`：70 项测试通过，11 项依赖本机软件或网络的测试保持 ignored。
 - `cargo check -p updater_core --jobs 1` 通过。
 - `cargo clippy -p updater_core --all-targets --jobs 1 -- -D warnings` 通过。
+- `cargo test -p updater-managers --test pacman_contract --jobs 1 -- --test-threads=1`：4 项通过，2 项环境 smoke 保持 ignored。
+- 宿主机显式运行 `local_pacman_availability_is_structured`：1 项通过。
+- Docker `archlinux:base` 显式运行 `arch_container_pacman_read_only_smoke`：1 项通过，未执行 refresh 或写事务。
 
 ## 遗留项 / 下一轮
 
