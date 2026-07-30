@@ -8,10 +8,10 @@ use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
-    content::shared::{ManagerSectionStyle, PackageSelectionKey, SharedUi},
+    content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
         BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
-        collect_selected_package_groups, run_grouped_package_action,
+        collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
     manager_catalog::ManagerCatalog,
     theme,
@@ -177,36 +177,6 @@ impl SortOption {
     ];
 }
 
-fn push_update_command_log(
-    logs: &mut Vec<String>,
-    catalog: &ManagerCatalog,
-    manager: &ManagerId,
-    package_name: &str,
-    command_message: String,
-) {
-    let command_message = command_message.trim();
-    if command_message.is_empty() {
-        return;
-    }
-
-    logs.push(format!(
-        "[Update][{}][{}] {}",
-        catalog.display_name(manager),
-        if package_name.is_empty() {
-            "batch"
-        } else {
-            package_name
-        },
-        command_message
-    ));
-
-    const MAX_COMMAND_LOGS: usize = 120;
-    if logs.len() > MAX_COMMAND_LOGS {
-        let overflow = logs.len() - MAX_COMMAND_LOGS;
-        logs.drain(0..overflow);
-    }
-}
-
 impl Updates {
     pub fn update(
         &mut self,
@@ -277,7 +247,7 @@ impl Updates {
                 Action::None
             }
             Message::InspectPackage(pm_type, package_name) => {
-                self.inspected_package = Some(SharedUi::selection_key(&pm_type, &package_name));
+                self.inspected_package = Some(shared::selection_key(&pm_type, &package_name));
                 self.inspector_error = None;
                 Action::None
             }
@@ -293,7 +263,7 @@ impl Updates {
                 if info.is_updating {
                     return Action::None;
                 }
-                let key = SharedUi::selection_key(&pm_type, &package_name);
+                let key = shared::selection_key(&pm_type, &package_name);
                 if selected {
                     info.selected_packages.insert(key);
                 } else {
@@ -307,21 +277,29 @@ impl Updates {
                 }
 
                 let query = self.search_query.trim().to_lowercase();
-                for pm_type in &info.selected_managers {
-                    if let Some((_, packages)) = info.updates_by_manager.get(pm_type) {
-                        for pkg in packages {
-                            if !query.is_empty() && !pkg.name.to_lowercase().contains(&query) {
-                                continue;
-                            }
-
-                            let key = SharedUi::selection_key(pm_type, &pkg.name);
-                            if select_all {
-                                info.selected_packages.insert(key);
-                            } else {
-                                info.selected_packages.remove(&key);
-                            }
-                        }
-                    }
+                let visible = info
+                    .selected_managers
+                    .iter()
+                    .filter_map(|manager| {
+                        info.updates_by_manager
+                            .get(manager)
+                            .map(|(_, packages)| (manager, packages))
+                    })
+                    .flat_map(|(manager, packages)| {
+                        packages
+                            .iter()
+                            .filter(|package| {
+                                query.is_empty()
+                                    || package.name.to_lowercase().contains(query.as_str())
+                            })
+                            .map(move |package| shared::selection_key(manager, &package.name))
+                    });
+                if select_all {
+                    info.selected_packages.extend(visible);
+                } else {
+                    visible.for_each(|key| {
+                        info.selected_packages.remove(&key);
+                    });
                 }
                 Action::None
             }
@@ -351,7 +329,17 @@ impl Updates {
                     initial_manager,
                     String::new(),
                 ));
-                Self::update_packages_action(pm_config, info, catalog)
+                let manager_groups = collect_selected_package_groups(
+                    info.selected_managers.iter().filter_map(|manager| {
+                        info.updates_by_manager
+                            .get(manager)
+                            .map(|(_, packages)| (manager.clone(), packages.as_slice()))
+                    }),
+                    &info.selected_packages,
+                    catalog,
+                    |package| package.name.as_str(),
+                );
+                Self::update_plan_action(pm_config, manager_groups)
             }
             Message::UpdateProgress {
                 completed,
@@ -362,10 +350,11 @@ impl Updates {
             } => {
                 info.update_progress = Some((completed, total, manager.clone(), current_package));
                 if let Some(command_message) = command_message {
-                    push_update_command_log(
+                    push_command_log(
                         &mut info.update_logs,
-                        catalog,
+                        PackageBatchAction::Update,
                         &manager,
+                        catalog,
                         info.update_progress
                             .as_ref()
                             .map_or("", |(_, _, _, package)| package.as_str()),
@@ -426,7 +415,7 @@ impl Updates {
                 if info.is_updating || !self.update_all_refreshing.is_empty() {
                     return Action::None;
                 }
-                let pm_types = SharedUi::configured_managers(pm_config);
+                let pm_types = shared::configured_managers(pm_config);
 
                 if pm_types.is_empty() {
                     return Action::None;
@@ -462,7 +451,7 @@ impl Updates {
                 {
                     return Action::None;
                 }
-                let managers = SharedUi::configured_managers(pm_config);
+                let managers = shared::configured_managers(pm_config);
                 if managers.is_empty() {
                     return Action::None;
                 }
@@ -578,7 +567,7 @@ impl Updates {
         }
         let selected = !info
             .selected_packages
-            .contains(&SharedUi::selection_key(manager, name));
+            .contains(&shared::selection_key(manager, name));
         Some(Message::TogglePackageSelection(
             manager.clone(),
             name.clone(),
@@ -632,15 +621,22 @@ impl Updates {
             .values()
             .map(|(count, _)| *count)
             .sum();
-        let configured_managers = SharedUi::configured_managers(pm_config).len();
+        let configured_managers = shared::configured_managers(pm_config).len();
 
-        let toolbar = SharedUi::toolbar(
+        let toolbar = shared::toolbar(
             column![
                 row![
                     container(self.search_input_view()).width(iced::Length::Fill),
                     column![
-                        SharedUi::section_title("Actions"),
-                        self.refresh_actions_view()
+                        shared::section_title("Actions"),
+                        row![
+                            shared::refresh_button_with_label(
+                                "Refresh Selected",
+                                Message::RefreshSelected
+                            ),
+                            shared::refresh_button_with_label("Refresh All", Message::RefreshAll),
+                        ]
+                        .spacing(8)
                     ]
                     .spacing(theme::spacing::SM),
                 ]
@@ -679,14 +675,14 @@ impl Updates {
         }
 
         column![
-            SharedUi::page_header(
+            shared::page_header(
                 "Updates",
                 format!(
                     "{update_count} available updates across {configured_managers} configured managers"
                 ),
                 theme::colors::UPDATES,
             ),
-            SharedUi::summary_row(summary_items),
+            shared::summary_row(summary_items),
             toolbar,
             self.batch_actions_view(info, catalog),
             self.update_all_confirmation_view(catalog),
@@ -706,7 +702,7 @@ impl Updates {
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         let filters_content = if !info.has_loading_count {
-            SharedUi::loading_manager_filter_view(
+            shared::loading_manager_filter_view(
                 pm_config,
                 catalog,
                 if info.is_loading_count {
@@ -716,12 +712,12 @@ impl Updates {
                 },
             )
         } else {
-            let managers = SharedUi::configured_managers(pm_config);
+            let managers = shared::configured_managers(pm_config);
 
             if managers.is_empty() {
                 return iced::widget::column![
-                    SharedUi::section_title("Sources"),
-                    SharedUi::empty_filter_view("No package managers detected")
+                    shared::section_title("Sources"),
+                    shared::empty_filter_view("No package managers detected")
                 ]
                 .spacing(theme::spacing::SM)
                 .into();
@@ -738,7 +734,7 @@ impl Updates {
                 })
                 .collect();
 
-            SharedUi::active_manager_filter_view(
+            shared::active_manager_filter_view(
                 entries,
                 &info.selected_managers,
                 &info.loading_updates,
@@ -750,7 +746,7 @@ impl Updates {
             )
         };
 
-        let mut content = iced::widget::column![SharedUi::section_title("Sources")];
+        let mut content = iced::widget::column![shared::section_title("Sources")];
         if !info.init_errors.is_empty() {
             content = content.push(
                 iced::widget::text("Some package managers failed to initialize")
@@ -765,23 +761,12 @@ impl Updates {
             .into()
     }
 
-    fn refresh_actions_view<'a>(&self) -> iced::Element<'a, Message> {
-        use iced::widget::row;
-
-        row![
-            SharedUi::refresh_button_with_label("Refresh Selected", Message::RefreshSelected),
-            SharedUi::refresh_button_with_label("Refresh All", Message::RefreshAll),
-        ]
-        .spacing(8)
-        .into()
-    }
-
     fn sort_order_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
         use iced::widget::{column, row};
 
         let sort_options = row(SortOption::ALL.iter().map(|option| {
             let option = *option;
-            SharedUi::segmented_button(
+            shared::segmented_button(
                 option.name(),
                 option == info.sort_by,
                 Message::SortOptionChanged(option),
@@ -792,15 +777,15 @@ impl Updates {
         .width(iced::Length::Fill);
 
         column![
-            SharedUi::section_title("Sort"),
-            SharedUi::segmented_group(sort_options)
+            shared::section_title("Sort"),
+            shared::segmented_group(sort_options)
         ]
         .spacing(theme::spacing::SM)
         .into()
     }
 
     fn search_input_view<'a>(&self) -> iced::Element<'a, Message> {
-        SharedUi::search_input_view(
+        shared::search_input_view(
             crate::content::shared::search_input_id(crate::content::ActiveContentPage::Updates),
             "Search",
             "Search updates...",
@@ -819,7 +804,7 @@ impl Updates {
         use iced::widget::{column, container, row, scrollable};
 
         if !info.has_loading_count {
-            return SharedUi::centered_message(if info.is_loading_count {
+            return shared::centered_message(if info.is_loading_count {
                 "Loading update information..."
             } else {
                 "Waiting to load update information"
@@ -827,7 +812,7 @@ impl Updates {
         }
 
         if info.selected_managers.is_empty() {
-            return SharedUi::centered_message("Please select a package manager to view");
+            return shared::centered_message("Please select a package manager to view");
         }
 
         if info
@@ -835,7 +820,7 @@ impl Updates {
             .iter()
             .any(|pm_type| info.loading_updates.contains(pm_type))
         {
-            return SharedUi::centered_message("Loading selected package manager updates...");
+            return shared::centered_message("Loading selected package manager updates...");
         }
 
         let filtered_managers: Vec<_> = info
@@ -854,7 +839,7 @@ impl Updates {
             .any(|(pm_type, _)| info.load_errors.contains_key(pm_type));
 
         if total_updates == 0 && !has_visible_errors {
-            return SharedUi::centered_message("No updates available");
+            return shared::centered_message("No updates available");
         }
 
         let search_query = self.search_query.trim().to_lowercase();
@@ -866,7 +851,7 @@ impl Updates {
             });
 
             if !has_any_match && !has_visible_errors {
-                return SharedUi::centered_message("No updates match your search");
+                return shared::centered_message("No updates match your search");
             }
         }
 
@@ -895,7 +880,7 @@ impl Updates {
                     homepage: None,
                 })
         });
-        let inspector = SharedUi::package_inspector(
+        let inspector = shared::package_inspector(
             inspected,
             catalog,
             Message::CopyInspectorText,
@@ -962,7 +947,7 @@ impl Updates {
             .into()
         });
 
-        SharedUi::manager_section(
+        shared::manager_section(
             manager.clone(),
             catalog,
             subtitle,
@@ -1022,7 +1007,7 @@ impl Updates {
         let package_name = package.name.clone();
         let is_selected = info
             .selected_packages
-            .contains(&SharedUi::selection_key(&manager, &package.name));
+            .contains(&shared::selection_key(&manager, &package.name));
 
         let package_checkbox = checkbox(is_selected)
             .on_toggle_maybe((!info.is_updating).then_some({
@@ -1034,7 +1019,7 @@ impl Updates {
             }))
             .size(18)
             .spacing(8)
-            .style(SharedUi::checkbox_style(false));
+            .style(shared::checkbox_style(false));
 
         let versions = row![
             column![
@@ -1199,7 +1184,7 @@ impl Updates {
                     total_visible += 1;
                     if info
                         .selected_packages
-                        .contains(&SharedUi::selection_key(pm_type, &package.name))
+                        .contains(&shared::selection_key(pm_type, &package.name))
                     {
                         selected_visible += 1;
                     }
@@ -1237,7 +1222,7 @@ impl Updates {
             .size(18)
             .spacing(8)
             .text_size(14)
-            .style(SharedUi::checkbox_style(false));
+            .style(shared::checkbox_style(false));
 
         let update_button = button(text(button_text).size(14).font(theme::FONT_SEMIBOLD).style(
             if is_enabled {
@@ -1407,25 +1392,6 @@ impl Updates {
             Message::UpdatePackagesResult,
         );
         Action::CancellableRun(task, cancellation)
-    }
-
-    fn update_packages_action(
-        pm_config: &updater_core::Config,
-        info: &UpdatesInfo,
-        catalog: &ManagerCatalog,
-    ) -> Action {
-        let manager_groups = collect_selected_package_groups(
-            info.selected_managers.iter().filter_map(|manager| {
-                info.updates_by_manager
-                    .get(manager)
-                    .map(|(_, packages)| (manager.clone(), packages.as_slice()))
-            }),
-            &info.selected_packages,
-            catalog,
-            |package| package.name.as_str(),
-        );
-
-        Self::update_plan_action(pm_config, manager_groups)
     }
 }
 

@@ -6,7 +6,7 @@ use updater_core::{ALL_PACKAGE_MANAGERS, ManagerConfig, PackageManagerAvailabili
 use updater_manager_api::{ManagerCategory, ManagerId};
 
 use crate::{
-    content::shared::SharedUi,
+    content::shared,
     icon::{ADD_ICON, REFRESH_ICON, SAVE_ICON},
     manager_catalog::ManagerCatalog,
     theme,
@@ -216,7 +216,11 @@ impl Settings {
                 }
                 self.is_saving = true;
                 self.save_status = None;
-                Self::save_config(self.draft.clone())
+                let config = self.draft.clone();
+                Action::Run(iced::Task::perform(
+                    async move { config.save().await.map_err(|error| error.to_string()) },
+                    Message::SaveConfigResult,
+                ))
             }
             Message::SaveConfigResult(result) => {
                 self.is_saving = false;
@@ -325,7 +329,7 @@ impl Settings {
         let pm_config = &self.draft;
 
         let content = column![
-            SharedUi::page_header(
+            shared::page_header(
                 "Settings",
                 format!("{} package managers configured", pm_config.managers.len()),
                 theme::colors::SETTINGS,
@@ -410,7 +414,7 @@ impl Settings {
 
         column![
             Self::section_title("System Package Manager"),
-            SharedUi::styled_container(content)
+            shared::styled_container(content)
         ]
         .spacing(12)
         .into()
@@ -424,7 +428,7 @@ impl Settings {
 
         let selected = theme::Appearance::from_config(&pm_config.appearance);
         let options = row(theme::Appearance::ALL.into_iter().map(|appearance| {
-            SharedUi::segmented_button(
+            shared::segmented_button(
                 appearance.name(),
                 appearance == selected,
                 Message::AppearanceChanged(appearance),
@@ -440,11 +444,11 @@ impl Settings {
             .size(18)
             .spacing(8)
             .text_size(14)
-            .style(SharedUi::checkbox_style(false));
+            .style(shared::checkbox_style(false));
 
         column![
             Self::section_title("Appearance & Notifications"),
-            SharedUi::segmented_group(options),
+            shared::segmented_group(options),
             notifications,
         ]
         .spacing(12)
@@ -692,7 +696,7 @@ impl Settings {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
 
-        SharedUi::styled_container(column(content_items).spacing(8)).into()
+        shared::styled_container(column(content_items).spacing(8)).into()
     }
 
     fn availability_text(&self, manager: &ManagerId) -> iced::Element<'static, Message> {
@@ -861,15 +865,6 @@ impl Settings {
         } else {
             container(text("")).into()
         }
-    }
-
-    fn save_config(config: updater_core::Config) -> Action {
-        let task = iced::Task::perform(
-            async move { config.save().await.map_err(|e| e.to_string()) },
-            Message::SaveConfigResult,
-        );
-
-        Action::Run(task)
     }
 }
 

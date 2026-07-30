@@ -203,7 +203,7 @@ pub struct SemanticColors {
 pub fn semantic_colors(theme: &Theme) -> SemanticColors {
     let base = palette(theme);
     if is_dark(theme) {
-        let high_contrast = is_high_contrast(theme);
+        let high_contrast = base.background == Color::BLACK && base.text == Color::WHITE;
         SemanticColors {
             accent: base.primary,
             accent_hover: if high_contrast {
@@ -377,10 +377,6 @@ fn palette(theme: &Theme) -> iced::theme::Palette {
 
 fn is_dark(theme: &Theme) -> bool {
     theme.base().background_color.relative_luminance() < 0.35
-}
-
-fn is_high_contrast(theme: &Theme) -> bool {
-    palette(theme).background == Color::BLACK && palette(theme).text == Color::WHITE
 }
 
 fn surface(theme: &Theme) -> Color {

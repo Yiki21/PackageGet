@@ -18,10 +18,6 @@ impl CancellationToken {
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
-
-    fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,18 +40,6 @@ impl PackageBatchAction {
             Self::Install => "Install",
             Self::Remove => "Remove",
             Self::Update => "Update",
-        }
-    }
-
-    fn log_label(self) -> &'static str {
-        self.label()
-    }
-
-    fn error_verb(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Remove => "remove",
-            Self::Update => "update",
         }
     }
 
@@ -89,13 +73,13 @@ impl PackageBatchAction {
             }
         };
 
-        result.map_err(|e| {
-            format!(
-                "Failed to {} packages from {}: {}",
-                self.error_verb(),
-                manager,
-                e
-            )
+        result.map_err(|error| {
+            let action = match self {
+                Self::Install => "install",
+                Self::Remove => "remove",
+                Self::Update => "update",
+            };
+            format!("Failed to {} packages from {}: {}", action, manager, error)
         })
     }
 }
@@ -230,7 +214,7 @@ where
         let mut completed_managers = 0usize;
 
         for (manager, package_names) in manager_groups {
-            if cancellation.is_cancelled() {
+            if cancellation.0.load(Ordering::Acquire) {
                 let _ = runner_sender.unbounded_send(BatchActionEvent::Done(OperationOutcome {
                     action,
                     completed_packages: global_offset,
@@ -324,7 +308,7 @@ pub fn push_command_log(
 
     logs.push(format!(
         "[{}][{}][{}] {}",
-        action.log_label(),
+        action.label(),
         catalog.display_name(manager),
         package_name,
         command_message

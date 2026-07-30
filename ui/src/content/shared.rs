@@ -93,154 +93,148 @@ pub struct ManagerSectionStyle {
     pub error_prefix: &'static str,
 }
 
-/// Shared content-page UI helpers.
-pub struct SharedUi;
+pub fn selection_key(manager: &ManagerId, package_name: &str) -> PackageSelectionKey {
+    (manager.clone(), package_name.to_owned())
+}
 
-impl SharedUi {
-    pub fn selection_key(manager: &ManagerId, package_name: &str) -> PackageSelectionKey {
-        (manager.clone(), package_name.to_owned())
-    }
-
-    pub fn package_summary<'a, Message>(
-        package: &'a PackageInfo,
-    ) -> iced::widget::Column<'a, Message>
-    where
-        Message: 'a,
-    {
-        let mut summary = column![
-            text(&package.name)
-                .size(14)
-                .font(theme::FONT_SEMIBOLD)
-                .style(theme::text_on_surface)
-                .width(iced::Length::Fill)
-                .wrapping(text::Wrapping::WordOrGlyph)
-        ]
-        .spacing(theme::spacing::XS)
-        .width(iced::Length::Fill);
-
-        if let Some(description) = package
-            .description
-            .as_deref()
-            .filter(|description| !description.trim().is_empty())
-        {
-            summary = summary.push(
-                text(description)
-                    .size(13)
-                    .style(theme::text_on_surface_muted)
-                    .width(iced::Length::Fill)
-                    .height(iced::Length::Fixed(36.0))
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            );
-        }
-
-        let mut metadata = Vec::with_capacity(2);
-        if let Some(bytes) = package.size {
-            metadata.push(format!("Size: {}", Self::format_size(bytes)));
-        }
-        if let Some(install_date) = package
-            .install_date
-            .as_deref()
-            .filter(|date| !date.trim().is_empty())
-        {
-            metadata.push(format!("Installed: {install_date}"));
-        }
-        if !metadata.is_empty() {
-            summary = summary.push(
-                text(metadata.join("  |  "))
-                    .size(12)
-                    .style(theme::text_on_surface_alt)
-                    .width(iced::Length::Fill)
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            );
-        }
-
-        summary
-    }
-
-    pub fn format_size(bytes: u64) -> String {
-        let (value, unit) = if bytes >= 1024 * 1024 * 1024 {
-            (bytes as f64 / (1024_u64.pow(3)) as f64, "GiB")
-        } else if bytes >= 1024 * 1024 {
-            (bytes as f64 / (1024_u64.pow(2)) as f64, "MiB")
-        } else if bytes >= 1024 {
-            (bytes as f64 / 1024.0, "KiB")
-        } else {
-            return format!("{bytes} B");
-        };
-
-        format!("{value:.1} {unit}")
-    }
-
-    pub fn muted_badge<'a, Message>(label: &'a str) -> iced::widget::Container<'a, Message> {
-        container(
-            text(label)
-                .size(12)
-                .font(theme::FONT_MONO)
-                .style(theme::text_on_surface_muted),
-        )
-        .padding([2, 0])
-    }
-
-    pub fn configured_managers(pm_config: &Config) -> Vec<ManagerId> {
-        pm_config
-            .managers
-            .iter()
-            .map(|manager| manager.id.clone())
-            .collect()
-    }
-
-    pub fn section_title(text: &'static str) -> iced::widget::Text<'static> {
-        iced::widget::text(text)
-            .size(12)
+pub fn package_summary<'a, Message>(package: &'a PackageInfo) -> iced::widget::Column<'a, Message>
+where
+    Message: 'a,
+{
+    let mut summary = column![
+        text(&package.name)
+            .size(14)
             .font(theme::FONT_SEMIBOLD)
-            .style(theme::text_on_surface_muted)
-    }
+            .style(theme::text_on_surface)
+            .width(iced::Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph)
+    ]
+    .spacing(theme::spacing::XS)
+    .width(iced::Length::Fill);
 
-    pub fn page_header<'a, Message>(
-        title: &'a str,
-        subtitle: impl Into<String>,
-        accent: iced::Color,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
+    if let Some(description) = package
+        .description
+        .as_deref()
+        .filter(|description| !description.trim().is_empty())
     {
-        let marker = container("")
-            .width(iced::Length::Fixed(10.0))
-            .height(iced::Length::Fixed(10.0))
-            .style(move |_theme: &iced::Theme| container::Style {
-                background: Some(accent.into()),
-                border: Border {
-                    radius: 999.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            });
-
-        column![
-            row![
-                marker,
-                text(title)
-                    .size(30)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_surface),
-            ]
-            .spacing(theme::spacing::SM)
-            .align_y(iced::Alignment::Center),
-            text(subtitle.into())
+        summary = summary.push(
+            text(description)
                 .size(13)
-                .style(theme::text_on_surface_muted),
-        ]
-        .spacing(theme::spacing::XS)
-        .into()
+                .style(theme::text_on_surface_muted)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fixed(36.0))
+                .wrapping(text::Wrapping::WordOrGlyph),
+        );
     }
 
-    pub fn summary_item<'a, Message>(
-        label: impl Into<String>,
-        accent: iced::Color,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
+    let mut metadata = Vec::with_capacity(2);
+    if let Some(bytes) = package.size {
+        metadata.push(format!("Size: {}", format_size(bytes)));
+    }
+    if let Some(install_date) = package
+        .install_date
+        .as_deref()
+        .filter(|date| !date.trim().is_empty())
     {
+        metadata.push(format!("Installed: {install_date}"));
+    }
+    if !metadata.is_empty() {
+        summary = summary.push(
+            text(metadata.join("  |  "))
+                .size(12)
+                .style(theme::text_on_surface_alt)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
+        );
+    }
+
+    summary
+}
+
+pub fn format_size(bytes: u64) -> String {
+    let (value, unit) = if bytes >= 1024 * 1024 * 1024 {
+        (bytes as f64 / (1024_u64.pow(3)) as f64, "GiB")
+    } else if bytes >= 1024 * 1024 {
+        (bytes as f64 / (1024_u64.pow(2)) as f64, "MiB")
+    } else if bytes >= 1024 {
+        (bytes as f64 / 1024.0, "KiB")
+    } else {
+        return format!("{bytes} B");
+    };
+
+    format!("{value:.1} {unit}")
+}
+
+pub fn muted_badge<'a, Message>(label: &'a str) -> iced::widget::Container<'a, Message> {
+    container(
+        text(label)
+            .size(12)
+            .font(theme::FONT_MONO)
+            .style(theme::text_on_surface_muted),
+    )
+    .padding([2, 0])
+}
+
+pub fn configured_managers(pm_config: &Config) -> Vec<ManagerId> {
+    pm_config
+        .managers
+        .iter()
+        .map(|manager| manager.id.clone())
+        .collect()
+}
+
+pub fn section_title(text: &'static str) -> iced::widget::Text<'static> {
+    iced::widget::text(text)
+        .size(12)
+        .font(theme::FONT_SEMIBOLD)
+        .style(theme::text_on_surface_muted)
+}
+
+pub fn page_header<'a, Message>(
+    title: &'a str,
+    subtitle: impl Into<String>,
+    accent: iced::Color,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    let marker = container("")
+        .width(iced::Length::Fixed(10.0))
+        .height(iced::Length::Fixed(10.0))
+        .style(move |_theme: &iced::Theme| container::Style {
+            background: Some(accent.into()),
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+    column![
+        row![
+            marker,
+            text(title)
+                .size(30)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface),
+        ]
+        .spacing(theme::spacing::SM)
+        .align_y(iced::Alignment::Center),
+        text(subtitle.into())
+            .size(13)
+            .style(theme::text_on_surface_muted),
+    ]
+    .spacing(theme::spacing::XS)
+    .into()
+}
+
+pub fn summary_row<'a, Message>(
+    items: impl IntoIterator<Item = (String, iced::Color)>,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    row(items.into_iter().map(|(label, accent)| {
         row![
             container("")
                 .width(6)
@@ -253,7 +247,7 @@ impl SharedUi {
                     },
                     ..Default::default()
                 }),
-            text(label.into())
+            text(label)
                 .size(12)
                 .font(theme::FONT_SEMIBOLD)
                 .style(theme::text_on_surface_muted),
@@ -261,472 +255,116 @@ impl SharedUi {
         .spacing(theme::spacing::XS)
         .align_y(iced::Alignment::Center)
         .into()
-    }
+    }))
+    .spacing(theme::spacing::LG)
+    .wrap()
+    .vertical_spacing(theme::spacing::SM)
+    .into()
+}
 
-    pub fn summary_row<'a, Message>(
-        items: impl IntoIterator<Item = (String, iced::Color)>,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        row(items
-            .into_iter()
-            .map(|(label, accent)| Self::summary_item(label, accent)))
-        .spacing(theme::spacing::LG)
-        .wrap()
-        .vertical_spacing(theme::spacing::SM)
-        .into()
-    }
-
-    pub fn toolbar<'a, Message>(
-        content: impl Into<Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message>
-    where
-        Message: 'a,
-    {
-        container(content)
-            .width(iced::Length::Fill)
-            .style(theme::toolbar_container)
-    }
-
-    pub fn segmented_button<'a, Message>(
-        label: &'a str,
-        selected: bool,
-        message: Message,
-    ) -> iced::widget::Button<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        button(
-            text(label)
-                .size(12)
-                .font(if selected {
-                    theme::FONT_SEMIBOLD
-                } else {
-                    theme::FONT_REGULAR
-                })
-                .align_x(iced::Alignment::Center),
-        )
-        .padding([7, 10])
+pub fn toolbar<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Container<'a, Message>
+where
+    Message: 'a,
+{
+    container(content)
         .width(iced::Length::Fill)
-        .style(theme::segmented_button(selected))
-        .on_press(message)
-    }
+        .style(theme::toolbar_container)
+}
 
-    pub fn segmented_group<'a, Message>(
-        content: impl Into<Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message>
-    where
-        Message: 'a,
-    {
-        container(content)
-            .padding(3)
-            .width(iced::Length::Fill)
-            .style(|iced_theme: &iced::Theme| {
-                let semantic = theme::semantic_colors(iced_theme);
-                container::Style {
-                    background: Some(semantic.surface_muted.into()),
-                    border: Border {
-                        color: semantic.divider_light,
-                        width: 1.0,
-                        radius: theme::radius::SURFACE.into(),
-                    },
-                    ..Default::default()
-                }
+pub fn segmented_button<'a, Message>(
+    label: &'a str,
+    selected: bool,
+    message: Message,
+) -> iced::widget::Button<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    button(
+        text(label)
+            .size(12)
+            .font(if selected {
+                theme::FONT_SEMIBOLD
+            } else {
+                theme::FONT_REGULAR
             })
-    }
+            .align_x(iced::Alignment::Center),
+    )
+    .padding([7, 10])
+    .width(iced::Length::Fill)
+    .style(theme::segmented_button(selected))
+    .on_press(message)
+}
 
-    pub fn styled_container<'a, Message>(
-        content: impl Into<Element<'a, Message>>,
-    ) -> iced::widget::Container<'a, Message> {
-        container(content)
-            .padding(theme::spacing::LG)
-            .width(iced::Length::Fill)
-            .style(theme::surface_container)
-    }
-
-    pub fn checkbox_style(
-        is_loading: bool,
-    ) -> impl Fn(&iced::Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style
-    {
-        move |iced_theme, status| {
-            use iced::widget::checkbox::Style;
+pub fn segmented_group<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Container<'a, Message>
+where
+    Message: 'a,
+{
+    container(content)
+        .padding(3)
+        .width(iced::Length::Fill)
+        .style(|iced_theme: &iced::Theme| {
             let semantic = theme::semantic_colors(iced_theme);
+            container::Style {
+                background: Some(semantic.surface_muted.into()),
+                border: Border {
+                    color: semantic.divider_light,
+                    width: 1.0,
+                    radius: theme::radius::SURFACE.into(),
+                },
+                ..Default::default()
+            }
+        })
+}
 
-            match status {
-                iced::widget::checkbox::Status::Active { is_checked } => {
-                    let (icon_color, border_color) = if is_checked {
-                        (semantic.on_primary, semantic.accent)
+pub fn styled_container<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Container<'a, Message> {
+    container(content)
+        .padding(theme::spacing::LG)
+        .width(iced::Length::Fill)
+        .style(theme::surface_container)
+}
+
+pub fn checkbox_style(
+    is_loading: bool,
+) -> impl Fn(&iced::Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style {
+    move |iced_theme, status| {
+        use iced::widget::checkbox::Style;
+        let semantic = theme::semantic_colors(iced_theme);
+
+        match status {
+            iced::widget::checkbox::Status::Active { is_checked } => {
+                let (icon_color, border_color) = if is_checked {
+                    (semantic.on_primary, semantic.accent)
+                } else {
+                    (semantic.on_surface_muted, semantic.divider)
+                };
+
+                Style {
+                    background: if is_checked {
+                        semantic.accent.into()
                     } else {
-                        (semantic.on_surface_muted, semantic.divider)
-                    };
-
-                    Style {
-                        background: if is_checked {
-                            semantic.accent.into()
-                        } else {
-                            semantic.surface.into()
-                        },
-                        icon_color,
-                        border: Border {
-                            color: border_color,
-                            width: 2.0,
-                            radius: 4.0.into(),
-                        },
-                        text_color: if is_loading {
-                            Some(semantic.on_surface_muted)
-                        } else {
-                            Some(semantic.on_surface)
-                        },
-                    }
-                }
-                iced::widget::checkbox::Status::Hovered { is_checked } => {
-                    if is_loading {
-                        Style {
-                            background: semantic.surface.into(),
-                            icon_color: semantic.on_surface_muted,
-                            border: Border {
-                                color: semantic.divider,
-                                width: 2.0,
-                                radius: 4.0.into(),
-                            },
-                            text_color: Some(semantic.on_surface_muted),
-                        }
-                    } else {
-                        let (icon_color, border_color, bg_color) = if is_checked {
-                            (
-                                semantic.on_primary,
-                                semantic.accent_hover,
-                                semantic.accent_hover,
-                            )
-                        } else {
-                            (semantic.on_surface_muted, semantic.accent, semantic.surface)
-                        };
-
-                        Style {
-                            background: bg_color.into(),
-                            icon_color,
-                            border: Border {
-                                color: border_color,
-                                width: 2.0,
-                                radius: 4.0.into(),
-                            },
-                            text_color: Some(semantic.on_surface),
-                        }
-                    }
-                }
-                iced::widget::checkbox::Status::Disabled { .. } => Style {
-                    background: semantic.surface.into(),
-                    icon_color: semantic.on_surface_muted,
+                        semantic.surface.into()
+                    },
+                    icon_color,
                     border: Border {
-                        color: semantic.divider,
+                        color: border_color,
                         width: 2.0,
                         radius: 4.0.into(),
                     },
-                    text_color: Some(semantic.on_surface_muted),
-                },
+                    text_color: if is_loading {
+                        Some(semantic.on_surface_muted)
+                    } else {
+                        Some(semantic.on_surface)
+                    },
+                }
             }
-        }
-    }
-
-    pub fn package_inspector<'a, Message>(
-        package: Option<PackageInspector<'a>>,
-        catalog: &'a ManagerCatalog,
-        on_copy_name: impl FnOnce(String) -> Message,
-        on_copy_homepage: impl FnOnce(String) -> Message,
-        on_open_homepage: impl Fn(String) -> Message + Copy + 'a,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        let Some(package) = package else {
-            return column![
-                text("Package details")
-                    .size(18)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_surface),
-                text("No package selected")
-                    .size(13)
-                    .style(theme::text_on_surface_muted),
-            ]
-            .spacing(theme::spacing::SM)
-            .into();
-        };
-
-        let mut details = column![
-            text(format!(
-                "Source · {}",
-                catalog.display_name(&package.manager)
-            ))
-            .size(12)
-            .font(theme::FONT_SEMIBOLD)
-            .style(theme::text_on_surface_muted),
-            text(package.name)
-                .size(22)
-                .font(theme::FONT_SEMIBOLD)
-                .style(theme::text_on_surface)
-                .width(iced::Length::Fill)
-                .wrapping(text::Wrapping::WordOrGlyph),
-            button(text("Copy Package Name").size(12))
-                .padding([6, 10])
-                .style(theme::secondary_button(true))
-                .on_press(on_copy_name(package.name.to_owned())),
-        ]
-        .spacing(theme::spacing::MD);
-
-        if let Some(description) = package.description.filter(|value| !value.trim().is_empty()) {
-            details = details.push(
-                text(description)
-                    .size(13)
-                    .style(theme::text_on_surface_muted)
-                    .width(iced::Length::Fill)
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            );
-        }
-
-        details = details.push(Self::divider()).push(Self::inspector_field(
-            "Version",
-            package.version,
-            true,
-        ));
-        if let Some(available) = package.available_version {
-            details = details.push(Self::inspector_field("Available", available, true));
-        }
-        if let Some(size) = package.size {
-            details = details.push(Self::inspector_field(
-                "Installed size",
-                Self::format_size(size),
-                false,
-            ));
-        }
-        if let Some(date) = package
-            .install_date
-            .filter(|value| !value.trim().is_empty())
-        {
-            details = details.push(Self::inspector_field("Installed", date, false));
-        }
-        if let Some(homepage) = package.homepage.filter(|value| !value.trim().is_empty()) {
-            details = details.push(
-                column![
-                    Self::section_title("Homepage"),
-                    button(
-                        text(homepage)
-                            .size(12)
-                            .font(theme::FONT_MONO)
-                            .style(theme::text_accent)
-                            .width(iced::Length::Fill)
-                            .wrapping(text::Wrapping::WordOrGlyph)
-                    )
-                    .padding(0)
-                    .width(iced::Length::Fill)
-                    .style(theme::link_button)
-                    .on_press(on_open_homepage(homepage.to_owned())),
-                    row![
-                        button(text("Open Homepage").size(12).font(theme::FONT_SEMIBOLD))
-                            .padding([6, 10])
-                            .style(theme::secondary_button(true))
-                            .on_press(on_open_homepage(homepage.to_owned())),
-                        button(text("Copy URL").size(12))
-                            .padding([6, 10])
-                            .style(theme::secondary_button(true))
-                            .on_press(on_copy_homepage(homepage.to_owned())),
-                    ]
-                    .spacing(theme::spacing::SM),
-                ]
-                .spacing(theme::spacing::XS),
-            );
-        }
-
-        iced::widget::scrollable(details)
-            .height(iced::Length::Fill)
-            .style(theme::scrollable_style)
-            .into()
-    }
-
-    fn divider<'a, Message>() -> iced::widget::Container<'a, Message> {
-        container("")
-            .height(iced::Length::Fixed(1.0))
-            .width(iced::Length::Fill)
-            .style(|iced_theme: &iced::Theme| container::Style {
-                background: Some(theme::semantic_colors(iced_theme).divider_light.into()),
-                ..Default::default()
-            })
-    }
-
-    fn inspector_field<'a, Message>(
-        label: &'static str,
-        value: impl Into<String>,
-        mono: bool,
-    ) -> iced::widget::Column<'a, Message> {
-        column![
-            Self::section_title(label),
-            text(value.into())
-                .size(13)
-                .font(if mono {
-                    theme::FONT_MONO
-                } else {
-                    theme::FONT_REGULAR
-                })
-                .style(theme::text_on_surface)
-                .width(iced::Length::Fill)
-                .wrapping(text::Wrapping::WordOrGlyph),
-        ]
-        .spacing(theme::spacing::XS)
-    }
-
-    pub fn centered_message<'a, Message>(message: &'a str) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        container(text(message).size(16).style(theme::text_on_surface_muted))
-            .width(iced::Length::Fill)
-            .height(iced::Length::Fill)
-            .center_x(iced::Length::Fill)
-            .center_y(iced::Length::Fill)
-            .into()
-    }
-
-    pub fn error_card<'a, Message>(
-        title: impl Into<String>,
-        detail: &'a str,
-        retry: Message,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        let content = row![
-            container(
-                text("!")
-                    .size(14)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_primary)
-            )
-            .width(24)
-            .height(24)
-            .center_x(24)
-            .center_y(24)
-            .style(|iced_theme: &iced::Theme| container::Style {
-                background: Some(theme::semantic_colors(iced_theme).error.into()),
-                border: Border {
-                    radius: 999.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            column![
-                text(title.into())
-                    .size(14)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_surface),
-                text(detail)
-                    .size(13)
-                    .style(theme::text_on_surface_muted)
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            ]
-            .spacing(theme::spacing::XS)
-            .width(iced::Length::Fill),
-            button(text("Retry").size(13).font(theme::FONT_SEMIBOLD))
-                .padding([7, 12])
-                .style(theme::secondary_button(true))
-                .on_press(retry),
-        ]
-        .spacing(theme::spacing::MD)
-        .align_y(iced::Alignment::Center);
-
-        container(content)
-            .padding(theme::spacing::MD)
-            .width(iced::Length::Fill)
-            .style(|iced_theme: &iced::Theme| container::Style {
-                background: Some(theme::semantic_colors(iced_theme).error_soft.into()),
-                border: Border {
-                    radius: theme::radius::SURFACE.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
-    }
-
-    pub fn manager_section<'a, Message>(
-        manager: ManagerId,
-        catalog: &'a ManagerCatalog,
-        subtitle: String,
-        style: ManagerSectionStyle,
-        error: Option<&'a str>,
-        retry: impl FnOnce() -> Message,
-        body: Option<Element<'a, Message>>,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        use iced::widget::{column, row};
-
-        let ManagerSectionStyle {
-            accent,
-            error_prefix,
-        } = style;
-        let manager_name = catalog.display_name(&manager).to_owned();
-        let header = row![
-            text(manager_name.clone())
-                .size(15)
-                .font(theme::FONT_SEMIBOLD)
-                .color(accent),
-            text(subtitle).size(13).style(theme::text_on_surface_muted)
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center);
-
-        if let Some(error) = error {
-            return column![
-                header,
-                Self::error_card(
-                    format!("{}: {}", error_prefix, manager_name),
-                    error,
-                    retry()
-                ),
-            ]
-            .spacing(12)
-            .into();
-        }
-
-        let Some(body) = body else {
-            return column![].into();
-        };
-
-        column![header, Self::styled_container(body)]
-            .spacing(12)
-            .into()
-    }
-
-    pub fn loading_manager_filter_view<'a, Message>(
-        pm_config: &Config,
-        catalog: &'a ManagerCatalog,
-        loading_text: &'static str,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        let all_managers = Self::configured_managers(pm_config);
-
-        if all_managers.is_empty() {
-            return Self::empty_filter_view("No package managers detected");
-        }
-
-        let mut col_items: Vec<iced::Element<'a, Message>> = vec![
-            text(loading_text)
-                .size(13)
-                .style(theme::text_on_surface_muted)
-                .into(),
-        ];
-
-        let checkboxes = all_managers.iter().map(|manager| {
-            iced::widget::checkbox(false)
-                .label(catalog.display_name(manager).to_owned())
-                .spacing(10)
-                .text_size(13)
-                .style(move |iced_theme, _status| {
-                    use iced::widget::checkbox::Style;
-                    let semantic = theme::semantic_colors(iced_theme);
+            iced::widget::checkbox::Status::Hovered { is_checked } => {
+                if is_loading {
                     Style {
                         background: semantic.surface.into(),
                         icon_color: semantic.on_surface_muted,
@@ -737,138 +375,443 @@ impl SharedUi {
                         },
                         text_color: Some(semantic.on_surface_muted),
                     }
-                })
-                .into()
-        });
+                } else {
+                    let (icon_color, border_color, bg_color) = if is_checked {
+                        (
+                            semantic.on_primary,
+                            semantic.accent_hover,
+                            semantic.accent_hover,
+                        )
+                    } else {
+                        (semantic.on_surface_muted, semantic.accent, semantic.surface)
+                    };
 
-        col_items.extend(checkboxes);
-        column(col_items).spacing(8).into()
-    }
-
-    pub fn empty_filter_view<'a, Message>(message: &'static str) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        column![text(message).size(14).style(theme::text_on_surface_muted)]
-            .spacing(8)
-            .into()
-    }
-
-    pub fn active_manager_filter_view<'a, Message>(
-        entries: Vec<(ManagerId, usize)>,
-        selected_managers: &'a HashSet<ManagerId>,
-        loading_managers: &'a HashSet<ManagerId>,
-        catalog: &'a ManagerCatalog,
-        is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
-        on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a,
-    {
-        row(entries.into_iter().map(move |(manager, count)| {
-            let is_selected = selected_managers.contains(&manager);
-            let is_loading = loading_managers.contains(&manager);
-            let is_initializing = is_initializing(&manager);
-            let is_disabled = is_loading || is_initializing;
-            let manager_name = catalog.display_name(&manager);
-
-            let label = if is_loading {
-                format!("{manager_name} (Loading...)")
-            } else if is_initializing {
-                format!("{manager_name} (Initializing...)")
-            } else {
-                format!("{manager_name} ({count})")
-            };
-
-            let checkbox = iced::widget::checkbox(is_selected)
-                .label(label)
-                .spacing(8)
-                .text_size(13)
-                .style(SharedUi::checkbox_style(is_disabled));
-
-            if is_disabled {
-                checkbox.into()
-            } else {
-                checkbox
-                    .on_toggle(move |selected| on_toggle(manager.clone(), selected))
-                    .into()
+                    Style {
+                        background: bg_color.into(),
+                        icon_color,
+                        border: Border {
+                            color: border_color,
+                            width: 2.0,
+                            radius: 4.0.into(),
+                        },
+                        text_color: Some(semantic.on_surface),
+                    }
+                }
             }
-        }))
-        .spacing(18)
-        .width(iced::Length::Fill)
-        .wrap()
-        .vertical_spacing(10)
-        .into()
+            iced::widget::checkbox::Status::Disabled { .. } => Style {
+                background: semantic.surface.into(),
+                icon_color: semantic.on_surface_muted,
+                border: Border {
+                    color: semantic.divider,
+                    width: 2.0,
+                    radius: 4.0.into(),
+                },
+                text_color: Some(semantic.on_surface_muted),
+            },
+        }
     }
+}
 
-    pub fn refresh_button_with_label<'a, Message>(
-        label: &'static str,
-        message: Message,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        use iced::widget::button;
+pub fn package_inspector<'a, Message>(
+    package: Option<PackageInspector<'a>>,
+    catalog: &'a ManagerCatalog,
+    on_copy_name: impl FnOnce(String) -> Message,
+    on_copy_homepage: impl FnOnce(String) -> Message,
+    on_open_homepage: impl Fn(String) -> Message + Copy + 'a,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    let Some(package) = package else {
+        return column![
+            text("Package details")
+                .size(18)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface),
+            text("No package selected")
+                .size(13)
+                .style(theme::text_on_surface_muted),
+        ]
+        .spacing(theme::spacing::SM)
+        .into();
+    };
 
-        button(text(label).size(13).font(theme::FONT_SEMIBOLD))
-            .padding([8, 12])
+    let mut details = column![
+        text(format!(
+            "Source · {}",
+            catalog.display_name(&package.manager)
+        ))
+        .size(12)
+        .font(theme::FONT_SEMIBOLD)
+        .style(theme::text_on_surface_muted),
+        text(package.name)
+            .size(22)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface)
+            .width(iced::Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph),
+        button(text("Copy Package Name").size(12))
+            .padding([6, 10])
             .style(theme::secondary_button(true))
-            .on_press(message)
-            .into()
+            .on_press(on_copy_name(package.name.to_owned())),
+    ]
+    .spacing(theme::spacing::MD);
+
+    if let Some(description) = package.description.filter(|value| !value.trim().is_empty()) {
+        details = details.push(
+            text(description)
+                .size(13)
+                .style(theme::text_on_surface_muted)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
+        );
     }
 
-    pub fn refresh_button<'a, Message>(message: Message) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
+    details = details
+        .push(divider())
+        .push(inspector_field("Version", package.version, true));
+    if let Some(available) = package.available_version {
+        details = details.push(inspector_field("Available", available, true));
+    }
+    if let Some(size) = package.size {
+        details = details.push(inspector_field("Installed size", format_size(size), false));
+    }
+    if let Some(date) = package
+        .install_date
+        .filter(|value| !value.trim().is_empty())
     {
-        Self::refresh_button_with_label("Refresh", message)
+        details = details.push(inspector_field("Installed", date, false));
+    }
+    if let Some(homepage) = package.homepage.filter(|value| !value.trim().is_empty()) {
+        details = details.push(
+            column![
+                section_title("Homepage"),
+                button(
+                    text(homepage)
+                        .size(12)
+                        .font(theme::FONT_MONO)
+                        .style(theme::text_accent)
+                        .width(iced::Length::Fill)
+                        .wrapping(text::Wrapping::WordOrGlyph)
+                )
+                .padding(0)
+                .width(iced::Length::Fill)
+                .style(theme::link_button)
+                .on_press(on_open_homepage(homepage.to_owned())),
+                row![
+                    button(text("Open Homepage").size(12).font(theme::FONT_SEMIBOLD))
+                        .padding([6, 10])
+                        .style(theme::secondary_button(true))
+                        .on_press(on_open_homepage(homepage.to_owned())),
+                    button(text("Copy URL").size(12))
+                        .padding([6, 10])
+                        .style(theme::secondary_button(true))
+                        .on_press(on_copy_homepage(homepage.to_owned())),
+                ]
+                .spacing(theme::spacing::SM),
+            ]
+            .spacing(theme::spacing::XS),
+        );
     }
 
-    pub fn search_input_view<'a, Message>(
-        id: iced::widget::Id,
-        label: &'static str,
-        placeholder: &'static str,
-        value: &str,
-        on_input: impl Fn(String) -> Message + 'a,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        let input = text_input(placeholder, value)
-            .id(id)
-            .on_input(on_input)
-            .padding([9, 11])
-            .size(14)
-            .style(theme::text_input_style);
+    iced::widget::scrollable(details)
+        .height(iced::Length::Fill)
+        .style(theme::scrollable_style)
+        .into()
+}
 
-        column![Self::section_title(label), input]
-            .spacing(theme::spacing::SM)
+fn divider<'a, Message>() -> iced::widget::Container<'a, Message> {
+    container("")
+        .height(iced::Length::Fixed(1.0))
+        .width(iced::Length::Fill)
+        .style(|iced_theme: &iced::Theme| container::Style {
+            background: Some(theme::semantic_colors(iced_theme).divider_light.into()),
+            ..Default::default()
+        })
+}
+
+fn inspector_field<'a, Message>(
+    label: &'static str,
+    value: impl Into<String>,
+    mono: bool,
+) -> iced::widget::Column<'a, Message> {
+    column![
+        section_title(label),
+        text(value.into())
+            .size(13)
+            .font(if mono {
+                theme::FONT_MONO
+            } else {
+                theme::FONT_REGULAR
+            })
+            .style(theme::text_on_surface)
+            .width(iced::Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph),
+    ]
+    .spacing(theme::spacing::XS)
+}
+
+pub fn centered_message<'a, Message>(message: &'a str) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    container(text(message).size(16).style(theme::text_on_surface_muted))
+        .width(iced::Length::Fill)
+        .height(iced::Length::Fill)
+        .center_x(iced::Length::Fill)
+        .center_y(iced::Length::Fill)
+        .into()
+}
+
+pub fn error_card<'a, Message>(
+    title: impl Into<String>,
+    detail: &'a str,
+    retry: Message,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    let content = row![
+        container(
+            text("!")
+                .size(14)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_primary)
+        )
+        .width(24)
+        .height(24)
+        .center_x(24)
+        .center_y(24)
+        .style(|iced_theme: &iced::Theme| container::Style {
+            background: Some(theme::semantic_colors(iced_theme).error.into()),
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        column![
+            text(title.into())
+                .size(14)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface),
+            text(detail)
+                .size(13)
+                .style(theme::text_on_surface_muted)
+                .wrapping(text::Wrapping::WordOrGlyph),
+        ]
+        .spacing(theme::spacing::XS)
+        .width(iced::Length::Fill),
+        button(text("Retry").size(13).font(theme::FONT_SEMIBOLD))
+            .padding([7, 12])
+            .style(theme::secondary_button(true))
+            .on_press(retry),
+    ]
+    .spacing(theme::spacing::MD)
+    .align_y(iced::Alignment::Center);
+
+    container(content)
+        .padding(theme::spacing::MD)
+        .width(iced::Length::Fill)
+        .style(|iced_theme: &iced::Theme| container::Style {
+            background: Some(theme::semantic_colors(iced_theme).error_soft.into()),
+            border: Border {
+                radius: theme::radius::SURFACE.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+pub fn manager_section<'a, Message>(
+    manager: ManagerId,
+    catalog: &'a ManagerCatalog,
+    subtitle: String,
+    style: ManagerSectionStyle,
+    error: Option<&'a str>,
+    retry: impl FnOnce() -> Message,
+    body: Option<Element<'a, Message>>,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    use iced::widget::{column, row};
+
+    let ManagerSectionStyle {
+        accent,
+        error_prefix,
+    } = style;
+    let manager_name = catalog.display_name(&manager).to_owned();
+    let header = row![
+        text(manager_name.clone())
+            .size(15)
+            .font(theme::FONT_SEMIBOLD)
+            .color(accent),
+        text(subtitle).size(13).style(theme::text_on_surface_muted)
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
+
+    if let Some(error) = error {
+        return column![
+            header,
+            error_card(
+                format!("{}: {}", error_prefix, manager_name),
+                error,
+                retry()
+            ),
+        ]
+        .spacing(12)
+        .into();
+    }
+
+    let Some(body) = body else {
+        return column![].into();
+    };
+
+    column![header, styled_container(body)].spacing(12).into()
+}
+
+pub fn loading_manager_filter_view<'a, Message>(
+    pm_config: &Config,
+    catalog: &'a ManagerCatalog,
+    loading_text: &'static str,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    let all_managers = configured_managers(pm_config);
+
+    if all_managers.is_empty() {
+        return empty_filter_view("No package managers detected");
+    }
+
+    let mut col_items: Vec<iced::Element<'a, Message>> = vec![
+        text(loading_text)
+            .size(13)
+            .style(theme::text_on_surface_muted)
+            .into(),
+    ];
+
+    let checkboxes = all_managers.iter().map(|manager| {
+        iced::widget::checkbox(false)
+            .label(catalog.display_name(manager).to_owned())
+            .spacing(10)
+            .text_size(13)
+            .style(move |iced_theme, _status| {
+                use iced::widget::checkbox::Style;
+                let semantic = theme::semantic_colors(iced_theme);
+                Style {
+                    background: semantic.surface.into(),
+                    icon_color: semantic.on_surface_muted,
+                    border: Border {
+                        color: semantic.divider,
+                        width: 2.0,
+                        radius: 4.0.into(),
+                    },
+                    text_color: Some(semantic.on_surface_muted),
+                }
+            })
             .into()
-    }
+    });
 
-    pub fn search_input_view_with_submit<'a, Message>(
-        id: iced::widget::Id,
-        label: &'static str,
-        placeholder: &'static str,
-        value: &str,
-        on_input: impl Fn(String) -> Message + 'a,
-        on_submit: Message,
-    ) -> Element<'a, Message>
-    where
-        Message: 'a + Clone,
-    {
-        let input = text_input(placeholder, value)
-            .id(id)
-            .on_input(on_input)
-            .on_submit(on_submit)
-            .padding([9, 11])
-            .size(14)
-            .style(theme::text_input_style);
+    col_items.extend(checkboxes);
+    column(col_items).spacing(8).into()
+}
 
-        column![Self::section_title(label), input]
-            .spacing(theme::spacing::SM)
-            .into()
-    }
+pub fn empty_filter_view<'a, Message>(message: &'static str) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    column![text(message).size(14).style(theme::text_on_surface_muted)]
+        .spacing(8)
+        .into()
+}
+
+pub fn active_manager_filter_view<'a, Message>(
+    entries: Vec<(ManagerId, usize)>,
+    selected_managers: &'a HashSet<ManagerId>,
+    loading_managers: &'a HashSet<ManagerId>,
+    catalog: &'a ManagerCatalog,
+    is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
+    on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    row(entries.into_iter().map(move |(manager, count)| {
+        let is_selected = selected_managers.contains(&manager);
+        let is_loading = loading_managers.contains(&manager);
+        let is_initializing = is_initializing(&manager);
+        let is_disabled = is_loading || is_initializing;
+        let manager_name = catalog.display_name(&manager);
+
+        let label = if is_loading {
+            format!("{manager_name} (Loading...)")
+        } else if is_initializing {
+            format!("{manager_name} (Initializing...)")
+        } else {
+            format!("{manager_name} ({count})")
+        };
+
+        let checkbox = iced::widget::checkbox(is_selected)
+            .label(label)
+            .spacing(8)
+            .text_size(13)
+            .style(checkbox_style(is_disabled));
+
+        if is_disabled {
+            checkbox.into()
+        } else {
+            checkbox
+                .on_toggle(move |selected| on_toggle(manager.clone(), selected))
+                .into()
+        }
+    }))
+    .spacing(18)
+    .width(iced::Length::Fill)
+    .wrap()
+    .vertical_spacing(10)
+    .into()
+}
+
+pub fn refresh_button_with_label<'a, Message>(
+    label: &'static str,
+    message: Message,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    use iced::widget::button;
+
+    button(text(label).size(13).font(theme::FONT_SEMIBOLD))
+        .padding([8, 12])
+        .style(theme::secondary_button(true))
+        .on_press(message)
+        .into()
+}
+
+pub fn search_input_view<'a, Message>(
+    id: iced::widget::Id,
+    label: &'static str,
+    placeholder: &'static str,
+    value: &str,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    let input = text_input(placeholder, value)
+        .id(id)
+        .on_input(on_input)
+        .padding([9, 11])
+        .size(14)
+        .style(theme::text_input_style);
+
+    column![section_title(label), input]
+        .spacing(theme::spacing::SM)
+        .into()
 }
 
 #[cfg(test)]

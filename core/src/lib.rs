@@ -211,29 +211,19 @@ macro_rules! define_package_managers {
                 let command = manager_command_path(config, *self);
                 let validate_path = custom_path || Path::new(&command).components().count() > 1;
 
-                self.availability_for_command(&command, validate_path).await
-            }
-
-            async fn availability_for_command(
-                &self,
-                command: &str,
-                validate_path: bool,
-            ) -> PackageManagerAvailability {
                 if validate_path {
-                    let path = Path::new(command);
+                    let path = Path::new(&command);
                     let metadata = match tokio::fs::metadata(path).await {
                         Ok(metadata) => metadata,
                         Err(_) => {
                             return PackageManagerAvailability::NotFound {
-                                command: command.to_owned(),
+                                command,
                             };
                         }
                     };
 
                     if !metadata.is_file() || !is_executable(&metadata) {
-                        return PackageManagerAvailability::NotExecutable {
-                            path: command.to_owned(),
-                        };
+                        return PackageManagerAvailability::NotExecutable { path: command };
                     }
                 }
 
@@ -241,7 +231,7 @@ macro_rules! define_package_managers {
                 let version_command = version_args.join(" ");
                 let output = tokio::time::timeout(
                     Duration::from_secs(5),
-                    manager_command(command).args(version_args).output(),
+                    manager_command(&command).args(version_args).output(),
                 )
                 .await;
 
@@ -250,7 +240,7 @@ macro_rules! define_package_managers {
                     Ok(Ok(output)) => {
                         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
                         PackageManagerAvailability::VersionCheckFailed {
-                            command: command.to_owned(),
+                            command,
                             detail: if detail.is_empty() {
                                 format!("exited with {}", output.status)
                             } else {
@@ -259,16 +249,14 @@ macro_rules! define_package_managers {
                         }
                     }
                     Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                        PackageManagerAvailability::NotFound {
-                            command: command.to_owned(),
-                        }
+                        PackageManagerAvailability::NotFound { command }
                     }
                     Ok(Err(error)) => PackageManagerAvailability::VersionCheckFailed {
-                        command: command.to_owned(),
+                        command,
                         detail: error.to_string(),
                     },
                     Err(_) => PackageManagerAvailability::VersionCheckFailed {
-                        command: command.to_owned(),
+                        command,
                         detail: format!("timed out while running {}", version_command),
                     },
                 }
@@ -385,14 +373,31 @@ macro_rules! define_package_managers {
                         });
                     };
 
-                    Self::run_system_batch_action_with_progress(
-                        *self,
-                        action,
-                        config,
-                        package_names,
-                        &mut report,
-                    )
-                    .await?;
+                    match self {
+                        Self::Apt => match action {
+                            PackageAction::Uninstall => AptManager::uninstall_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Update => AptManager::update_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Install => AptManager::install_packages_with_progress(config, package_names, &mut report).await,
+                        },
+                        Self::Dnf => match action {
+                            PackageAction::Uninstall => DnfManager::uninstall_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Update => DnfManager::update_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Install => DnfManager::install_packages_with_progress(config, package_names, &mut report).await,
+                        },
+                        Self::Pacman => match action {
+                            PackageAction::Uninstall => PacmanManager::uninstall_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Update => PacmanManager::update_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Install => PacmanManager::install_packages_with_progress(config, package_names, &mut report).await,
+                        },
+                        Self::Zypper => match action {
+                            PackageAction::Uninstall => ZypperManager::uninstall_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Update => ZypperManager::update_packages_with_progress(config, package_names, &mut report).await,
+                            PackageAction::Install => ZypperManager::install_packages_with_progress(config, package_names, &mut report).await,
+                        },
+                        _ => Err(CoreError::UnknownError(
+                            "batch action is only supported for system package managers".to_owned(),
+                        )),
+                    }?;
                     return Ok(());
                 }
 
@@ -414,39 +419,23 @@ macro_rules! define_package_managers {
                         });
                     };
 
-                    self.run_single_package_action_with_progress(
-                        action,
-                        config,
-                        &package_name,
-                        &mut report,
-                    )
-                    .await?;
+                    match action {
+                        PackageAction::Uninstall => match self {
+                            $(Self::$app_variant => $app_manager::uninstall_package_with_progress(config, &package_name, &mut report).await,)*
+                            _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
+                        },
+                        PackageAction::Update => match self {
+                            $(Self::$app_variant => $app_manager::update_package_with_progress(config, &package_name, &mut report).await,)*
+                            _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
+                        },
+                        PackageAction::Install => match self {
+                            $(Self::$app_variant => $app_manager::install_package_with_progress(config, &package_name, &mut report).await,)*
+                            _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
+                        },
+                    }?;
                 }
 
                 Ok(())
-            }
-
-            async fn run_single_package_action_with_progress(
-                &self,
-                action: PackageAction,
-                config: &Config,
-                package_name: &str,
-                report: &mut impl FnMut(CommandProgressEvent),
-            ) -> CoreResult<()> {
-                match action {
-                    PackageAction::Uninstall => match self {
-                        $(Self::$app_variant => $app_manager::uninstall_package_with_progress(config, package_name, report).await,)*
-                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
-                    },
-                    PackageAction::Update => match self {
-                        $(Self::$app_variant => $app_manager::update_package_with_progress(config, package_name, report).await,)*
-                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
-                    },
-                    PackageAction::Install => match self {
-                        $(Self::$app_variant => $app_manager::install_package_with_progress(config, package_name, report).await,)*
-                        _ => Err(CoreError::UnknownError("single-package action is only supported for app package managers".to_owned())),
-                    },
-                }
             }
         }
     };
@@ -574,72 +563,6 @@ impl PackageManagerType {
             Self::Npm => NpmManager::list_updates_with_refresh(config, refresh).await,
             Self::Pnpm => PnpmManager::list_updates_with_refresh(config, refresh).await,
             Self::Pipx => PipxManager::list_updates_with_refresh(config, refresh).await,
-        }
-    }
-
-    async fn run_system_batch_action_with_progress(
-        manager: PackageManagerType,
-        action: PackageAction,
-        config: &Config,
-        package_names: &[String],
-        report: &mut impl FnMut(CommandProgressEvent),
-    ) -> CoreResult<()> {
-        match manager {
-            Self::Apt => match action {
-                PackageAction::Uninstall => {
-                    AptManager::uninstall_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Update => {
-                    AptManager::update_packages_with_progress(config, package_names, report).await
-                }
-                PackageAction::Install => {
-                    AptManager::install_packages_with_progress(config, package_names, report).await
-                }
-            },
-            Self::Dnf => match action {
-                PackageAction::Uninstall => {
-                    DnfManager::uninstall_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Update => {
-                    DnfManager::update_packages_with_progress(config, package_names, report).await
-                }
-                PackageAction::Install => {
-                    DnfManager::install_packages_with_progress(config, package_names, report).await
-                }
-            },
-            Self::Pacman => match action {
-                PackageAction::Uninstall => {
-                    PacmanManager::uninstall_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Update => {
-                    PacmanManager::update_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Install => {
-                    PacmanManager::install_packages_with_progress(config, package_names, report)
-                        .await
-                }
-            },
-            Self::Zypper => match action {
-                PackageAction::Uninstall => {
-                    ZypperManager::uninstall_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Update => {
-                    ZypperManager::update_packages_with_progress(config, package_names, report)
-                        .await
-                }
-                PackageAction::Install => {
-                    ZypperManager::install_packages_with_progress(config, package_names, report)
-                        .await
-                }
-            },
-            _ => Err(CoreError::UnknownError(
-                "batch action is only supported for system package managers".to_owned(),
-            )),
         }
     }
 }

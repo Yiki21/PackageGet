@@ -152,8 +152,15 @@ impl StatusPanel {
         self.is_active = is_active;
 
         self.last_frame = at;
-        self.sync_progress_animation(at, installed_info, updates_info, finding_info);
-        self.progress = self.current_progress_value();
+        let progress_target = progress_value(installed_info, updates_info, finding_info);
+        if (self.progress_target - progress_target).abs() > 0.001 {
+            self.progress_target = progress_target;
+            self.progress_animation.go_mut(progress_target, at);
+        }
+        self.progress = self
+            .progress_animation
+            .interpolate_with(|value| value, self.last_frame)
+            .clamp(0.0, 1.0);
 
         if should_toggle_details && !self.command_logs.is_empty() {
             self.details_expanded = !self.details_expanded;
@@ -213,26 +220,6 @@ impl StatusPanel {
     /// Renders the status panel view.
     pub fn view<'a>(&'a self) -> iced::Element<'a, Message> {
         render(self)
-    }
-
-    fn sync_progress_animation(
-        &mut self,
-        at: Instant,
-        installed_info: &InstalledInfo,
-        updates_info: &UpdatesInfo,
-        finding_info: &FindingInfo,
-    ) {
-        let target = progress_value(installed_info, updates_info, finding_info);
-        if (self.progress_target - target).abs() > 0.001 {
-            self.progress_target = target;
-            self.progress_animation.go_mut(target, at);
-        }
-    }
-
-    fn current_progress_value(&self) -> f32 {
-        self.progress_animation
-            .interpolate_with(|value| value, self.last_frame)
-            .clamp(0.0, 1.0)
     }
 }
 

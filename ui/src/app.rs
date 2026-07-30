@@ -323,12 +323,74 @@ impl App {
             }
             Message::CancelActiveOperation => {
                 if let Some(handle) = self.active_operation_handle.take() {
-                    let progress = self.cancelled_operation_progress();
+                    let progress = if self.finding_info.is_installing {
+                        let (completed, total) = self
+                            .finding_info
+                            .install_progress
+                            .as_ref()
+                            .map(|(completed, total, _, _)| (*completed, *total))
+                            .unwrap_or((0, self.finding_info.selected_packages.len()));
+                        Some(crate::activity::CancelledProgress {
+                            action: "Install",
+                            completed_packages: completed,
+                            total_packages: total,
+                            completed_managers: 0,
+                            total_managers: self.finding_info.selected_managers.len(),
+                        })
+                    } else if self.updates_info.is_updating {
+                        let (completed, total) = self
+                            .updates_info
+                            .update_progress
+                            .as_ref()
+                            .map(|(completed, total, _, _)| (*completed, *total))
+                            .unwrap_or((0, self.updates_info.selected_packages.len()));
+                        Some(crate::activity::CancelledProgress {
+                            action: "Update",
+                            completed_packages: completed,
+                            total_packages: total,
+                            completed_managers: 0,
+                            total_managers: self.updates_info.selected_managers.len(),
+                        })
+                    } else if self.installed_info.is_removing {
+                        let (completed, total) = self
+                            .installed_info
+                            .remove_progress
+                            .as_ref()
+                            .map(|(completed, total, _, _)| (*completed, *total))
+                            .unwrap_or((0, self.installed_info.selected_packages.len()));
+                        Some(crate::activity::CancelledProgress {
+                            action: "Remove",
+                            completed_packages: completed,
+                            total_packages: total,
+                            completed_managers: 0,
+                            total_managers: self.installed_info.selected_managers.len(),
+                        })
+                    } else {
+                        None
+                    };
                     if let Some(cancellation) = self.active_operation_cancellation.take() {
                         cancellation.cancel();
                     }
                     handle.abort();
-                    self.cancel_active_operation_state();
+                    if self.finding_info.is_installing {
+                        self.finding_info.is_installing = false;
+                        self.finding_info.install_progress = None;
+                        self.finding_info.last_install_error =
+                            Some("Operation cancelled by user".to_owned());
+                    }
+                    if self.updates_info.is_updating {
+                        self.updates_info.is_updating = false;
+                        self.updates_info.update_progress = None;
+                        self.updates_info.last_update_error =
+                            Some("Operation cancelled by user".to_owned());
+                    }
+                    if self.installed_info.is_removing {
+                        self.installed_info.is_removing = false;
+                        self.installed_info.remove_progress = None;
+                        self.installed_info.last_remove_error =
+                            Some("Operation cancelled by user".to_owned());
+                    }
+                    self.installed_info.confirming_remove = false;
                     if let Some(progress) = progress {
                         let id = self.next_operation_id;
                         self.next_operation_id = self.next_operation_id.saturating_add(1);
@@ -415,9 +477,33 @@ impl App {
                 total,
                 manager,
                 command_message,
-            } => self.apply_init_installed_progress(completed, total, manager, command_message),
+            } => {
+                self.installed_info.init_progress = Some((completed.min(total), total));
+                let manager_name = self.manager_catalog.display_name(&manager).to_owned();
+                Self::push_init_log(
+                    &mut self.installed_info.init_logs,
+                    "InitInstalled",
+                    &manager_name,
+                    command_message,
+                );
+            }
             Message::InitInstalledCount { manager, result } => {
-                self.apply_init_installed_count(manager, result)
+                self.installed_info.has_loading_count = true;
+                match result {
+                    Ok(count) => {
+                        self.installed_info.init_errors.remove(&manager);
+                        self.installed_info
+                            .installed_packages
+                            .insert(manager, (count, Vec::new()));
+                    }
+                    Err(error) => {
+                        self.installed_info
+                            .installed_packages
+                            .entry(manager.clone())
+                            .or_insert_with(|| (0, Vec::new()));
+                        self.installed_info.init_errors.insert(manager, error);
+                    }
+                }
             }
             Message::InitInstalledFinished => task = self.finish_init_installed_counts(),
             Message::InitUpdatesProgress {
@@ -425,9 +511,33 @@ impl App {
                 total,
                 manager,
                 command_message,
-            } => self.apply_init_updates_progress(completed, total, manager, command_message),
+            } => {
+                self.updates_info.init_progress = Some((completed.min(total), total));
+                let manager_name = self.manager_catalog.display_name(&manager).to_owned();
+                Self::push_init_log(
+                    &mut self.updates_info.init_logs,
+                    "InitUpdates",
+                    &manager_name,
+                    command_message,
+                );
+            }
             Message::InitUpdatesCount { manager, result } => {
-                self.apply_init_updates_count(manager, result)
+                self.updates_info.has_loading_count = true;
+                match result {
+                    Ok(updates) => {
+                        self.updates_info.init_errors.remove(&manager);
+                        self.updates_info
+                            .updates_by_manager
+                            .insert(manager, (updates.len(), updates));
+                    }
+                    Err(error) => {
+                        self.updates_info
+                            .updates_by_manager
+                            .entry(manager.clone())
+                            .or_insert_with(|| (0, Vec::new()));
+                        self.updates_info.init_errors.insert(manager, error);
+                    }
+                }
             }
             Message::InitUpdatesFinished => self.finish_init_updates_counts(),
             Message::Shortcut(_) => unreachable!("shortcuts are handled before routed messages"),
@@ -447,10 +557,14 @@ impl App {
                 || self.status_panel.dismiss_top_surface()
                 || std::mem::replace(&mut self.activity_center_open, false);
 
-            return if dismissed {
-                self.restore_page_focus()
-            } else {
-                Task::none()
+            return match (dismissed, self.content.active_content) {
+                (
+                    true,
+                    ActiveContentPage::Finding
+                    | ActiveContentPage::Updates
+                    | ActiveContentPage::Installed,
+                ) => self.focus_search(self.content.active_content),
+                _ => Task::none(),
             };
         }
 
@@ -541,91 +655,12 @@ impl App {
         ])
     }
 
-    fn restore_page_focus(&self) -> Task<Message> {
-        match self.content.active_content {
-            content::ActiveContentPage::Finding
-            | content::ActiveContentPage::Updates
-            | content::ActiveContentPage::Installed => {
-                self.focus_search(self.content.active_content)
-            }
-            content::ActiveContentPage::Settings => Task::none(),
-        }
-    }
-
-    fn cancelled_operation_progress(&self) -> Option<crate::activity::CancelledProgress> {
-        if self.finding_info.is_installing {
-            let (completed, total) = self
-                .finding_info
-                .install_progress
-                .as_ref()
-                .map(|(completed, total, _, _)| (*completed, *total))
-                .unwrap_or((0, self.finding_info.selected_packages.len()));
-            return Some(crate::activity::CancelledProgress {
-                action: "Install",
-                completed_packages: completed,
-                total_packages: total,
-                completed_managers: 0,
-                total_managers: self.finding_info.selected_managers.len(),
-            });
-        }
-        if self.updates_info.is_updating {
-            let (completed, total) = self
-                .updates_info
-                .update_progress
-                .as_ref()
-                .map(|(completed, total, _, _)| (*completed, *total))
-                .unwrap_or((0, self.updates_info.selected_packages.len()));
-            return Some(crate::activity::CancelledProgress {
-                action: "Update",
-                completed_packages: completed,
-                total_packages: total,
-                completed_managers: 0,
-                total_managers: self.updates_info.selected_managers.len(),
-            });
-        }
-        if self.installed_info.is_removing {
-            let (completed, total) = self
-                .installed_info
-                .remove_progress
-                .as_ref()
-                .map(|(completed, total, _, _)| (*completed, *total))
-                .unwrap_or((0, self.installed_info.selected_packages.len()));
-            return Some(crate::activity::CancelledProgress {
-                action: "Remove",
-                completed_packages: completed,
-                total_packages: total,
-                completed_managers: 0,
-                total_managers: self.installed_info.selected_managers.len(),
-            });
-        }
-        None
-    }
-
     fn save_activity_history(&self) -> Task<Message> {
         let history = self.activity_history.clone();
         Task::perform(
             async move { history.save().await },
             Message::ActivityHistorySaved,
         )
-    }
-
-    fn cancel_active_operation_state(&mut self) {
-        if self.finding_info.is_installing {
-            self.finding_info.is_installing = false;
-            self.finding_info.install_progress = None;
-            self.finding_info.last_install_error = Some("Operation cancelled by user".to_owned());
-        }
-        if self.updates_info.is_updating {
-            self.updates_info.is_updating = false;
-            self.updates_info.update_progress = None;
-            self.updates_info.last_update_error = Some("Operation cancelled by user".to_owned());
-        }
-        if self.installed_info.is_removing {
-            self.installed_info.is_removing = false;
-            self.installed_info.remove_progress = None;
-            self.installed_info.last_remove_error = Some("Operation cancelled by user".to_owned());
-        }
-        self.installed_info.confirming_remove = false;
     }
 
     fn record_operation(&mut self, outcome: &content::OperationOutcome) -> Task<Message> {
@@ -944,25 +979,6 @@ impl App {
         crate::shortcut::capture(layout.into())
     }
 
-    fn apply_init_installed_count(&mut self, manager: ManagerId, result: Result<usize, String>) {
-        self.installed_info.has_loading_count = true;
-        match result {
-            Ok(count) => {
-                self.installed_info.init_errors.remove(&manager);
-                self.installed_info
-                    .installed_packages
-                    .insert(manager, (count, Vec::new()));
-            }
-            Err(error) => {
-                self.installed_info
-                    .installed_packages
-                    .entry(manager.clone())
-                    .or_insert_with(|| (0, Vec::new()));
-                self.installed_info.init_errors.insert(manager, error);
-            }
-        }
-    }
-
     fn finish_init_installed_counts(&mut self) -> Task<Message> {
         self.installed_info.is_loading_count = false;
         self.installed_info.has_loading_count = true;
@@ -1008,68 +1024,10 @@ impl App {
         }))
     }
 
-    fn apply_init_updates_count(
-        &mut self,
-        manager: ManagerId,
-        result: Result<Vec<PackageUpdate>, String>,
-    ) {
-        self.updates_info.has_loading_count = true;
-        match result {
-            Ok(updates) => {
-                self.updates_info.init_errors.remove(&manager);
-                let count = updates.len();
-                self.updates_info
-                    .updates_by_manager
-                    .insert(manager, (count, updates));
-            }
-            Err(error) => {
-                self.updates_info
-                    .updates_by_manager
-                    .entry(manager.clone())
-                    .or_insert_with(|| (0, Vec::new()));
-                self.updates_info.init_errors.insert(manager, error);
-            }
-        }
-    }
-
     fn finish_init_updates_counts(&mut self) {
         self.updates_info.is_loading_count = false;
         self.updates_info.has_loading_count = true;
         self.updates_info.init_progress = None;
-    }
-
-    fn apply_init_installed_progress(
-        &mut self,
-        completed: usize,
-        total: usize,
-        manager: ManagerId,
-        command_message: String,
-    ) {
-        self.installed_info.init_progress = Some((completed.min(total), total));
-        let manager_name = self.manager_catalog.display_name(&manager).to_owned();
-        Self::push_init_log(
-            &mut self.installed_info.init_logs,
-            "InitInstalled",
-            &manager_name,
-            command_message,
-        );
-    }
-
-    fn apply_init_updates_progress(
-        &mut self,
-        completed: usize,
-        total: usize,
-        manager: ManagerId,
-        command_message: String,
-    ) {
-        self.updates_info.init_progress = Some((completed.min(total), total));
-        let manager_name = self.manager_catalog.display_name(&manager).to_owned();
-        Self::push_init_log(
-            &mut self.updates_info.init_logs,
-            "InitUpdates",
-            &manager_name,
-            command_message,
-        );
     }
 
     fn push_init_log(

@@ -88,19 +88,17 @@ fn find_executable(command: &str, directories: &[PathBuf]) -> Option<PathBuf> {
     })
 }
 
-fn resolve_default_manager_command(manager_type: PackageManagerType) -> String {
-    let command = manager_default_command(manager_type);
-    find_executable(command, &manager_search_directories())
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| command.to_owned())
-}
-
 pub(crate) fn manager_command_path(config: &Config, manager_type: PackageManagerType) -> String {
     let id = manager_type.manager_id();
     config
         .manager_executable(&id)
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| resolve_default_manager_command(manager_type))
+        .unwrap_or_else(|| {
+            let command = manager_default_command(manager_type);
+            find_executable(command, &manager_search_directories())
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| command.to_owned())
+        })
 }
 
 #[cfg(test)]
