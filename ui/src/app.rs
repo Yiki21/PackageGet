@@ -74,6 +74,8 @@ pub struct App {
     pending_settings_exit: Option<PendingSettingsExit>,
     /// Current configuration loading or recovery state.
     config_load_state: ConfigLoadState,
+    /// Current package-data reload generation.
+    package_data_generation: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +155,8 @@ pub enum Message {
     ConfirmConfigReset,
     /// Installed initialization progress message.
     InitInstalledProgress {
+        /// Package-data reload generation.
+        generation: u64,
         /// Completed manager count.
         completed: usize,
         /// Total manager count.
@@ -164,15 +168,22 @@ pub enum Message {
     },
     /// Installed count payload for one manager.
     InitInstalledCount {
+        /// Package-data reload generation.
+        generation: u64,
         /// Source manager.
         manager: ManagerId,
         /// Installed package count value or failure detail.
         result: Result<usize, String>,
     },
     /// Installed initialization completion message.
-    InitInstalledFinished,
+    InitInstalledFinished {
+        /// Package-data reload generation.
+        generation: u64,
+    },
     /// Updates initialization progress message.
     InitUpdatesProgress {
+        /// Package-data reload generation.
+        generation: u64,
         /// Completed manager count.
         completed: usize,
         /// Total manager count.
@@ -184,13 +195,18 @@ pub enum Message {
     },
     /// Updates payload for one manager.
     InitUpdatesCount {
+        /// Package-data reload generation.
+        generation: u64,
         /// Source manager.
         manager: ManagerId,
         /// Update entries or failure detail.
         result: Result<Vec<PackageUpdate>, String>,
     },
     /// Updates initialization completion message.
-    InitUpdatesFinished,
+    InitUpdatesFinished {
+        /// Package-data reload generation.
+        generation: u64,
+    },
 }
 
 impl App {
@@ -219,6 +235,7 @@ impl App {
             system_theme: iced::theme::Mode::Light,
             pending_settings_exit: None,
             config_load_state: ConfigLoadState::Loading,
+            package_data_generation: 0,
         };
 
         let task = Task::batch(vec![
@@ -503,73 +520,99 @@ impl App {
                 }
             }
             Message::InitInstalledProgress {
+                generation,
                 completed,
                 total,
                 manager,
                 command_message,
             } => {
-                self.installed_info.init_progress = Some((completed.min(total), total));
-                let manager_name = self.manager_catalog.display_name(&manager).to_owned();
-                Self::push_init_log(
-                    &mut self.installed_info.init_logs,
-                    "InitInstalled",
-                    &manager_name,
-                    command_message,
-                );
+                if generation == self.package_data_generation {
+                    self.installed_info.init_progress = Some((completed.min(total), total));
+                    let manager_name = self.manager_catalog.display_name(&manager).to_owned();
+                    Self::push_init_log(
+                        &mut self.installed_info.init_logs,
+                        "InitInstalled",
+                        &manager_name,
+                        command_message,
+                    );
+                }
             }
-            Message::InitInstalledCount { manager, result } => {
-                self.installed_info.has_loading_count = true;
-                match result {
-                    Ok(count) => {
-                        self.installed_info.init_errors.remove(&manager);
-                        self.installed_info
-                            .installed_packages
-                            .insert(manager, (count, Vec::new()));
-                    }
-                    Err(error) => {
-                        self.installed_info
-                            .installed_packages
-                            .entry(manager.clone())
-                            .or_insert_with(|| (0, Vec::new()));
-                        self.installed_info.init_errors.insert(manager, error);
+            Message::InitInstalledCount {
+                generation,
+                manager,
+                result,
+            } => {
+                if generation == self.package_data_generation {
+                    self.installed_info.has_loading_count = true;
+                    match result {
+                        Ok(count) => {
+                            self.installed_info.init_errors.remove(&manager);
+                            self.installed_info
+                                .installed_packages
+                                .insert(manager, (count, Vec::new()));
+                        }
+                        Err(error) => {
+                            self.installed_info
+                                .installed_packages
+                                .entry(manager.clone())
+                                .or_insert_with(|| (0, Vec::new()));
+                            self.installed_info.init_errors.insert(manager, error);
+                        }
                     }
                 }
             }
-            Message::InitInstalledFinished => task = self.finish_init_installed_counts(),
+            Message::InitInstalledFinished { generation } => {
+                if generation == self.package_data_generation {
+                    task = self.finish_init_installed_counts();
+                }
+            }
             Message::InitUpdatesProgress {
+                generation,
                 completed,
                 total,
                 manager,
                 command_message,
             } => {
-                self.updates_info.init_progress = Some((completed.min(total), total));
-                let manager_name = self.manager_catalog.display_name(&manager).to_owned();
-                Self::push_init_log(
-                    &mut self.updates_info.init_logs,
-                    "InitUpdates",
-                    &manager_name,
-                    command_message,
-                );
+                if generation == self.package_data_generation {
+                    self.updates_info.init_progress = Some((completed.min(total), total));
+                    let manager_name = self.manager_catalog.display_name(&manager).to_owned();
+                    Self::push_init_log(
+                        &mut self.updates_info.init_logs,
+                        "InitUpdates",
+                        &manager_name,
+                        command_message,
+                    );
+                }
             }
-            Message::InitUpdatesCount { manager, result } => {
-                self.updates_info.has_loading_count = true;
-                match result {
-                    Ok(updates) => {
-                        self.updates_info.init_errors.remove(&manager);
-                        self.updates_info
-                            .updates_by_manager
-                            .insert(manager, (updates.len(), updates));
-                    }
-                    Err(error) => {
-                        self.updates_info
-                            .updates_by_manager
-                            .entry(manager.clone())
-                            .or_insert_with(|| (0, Vec::new()));
-                        self.updates_info.init_errors.insert(manager, error);
+            Message::InitUpdatesCount {
+                generation,
+                manager,
+                result,
+            } => {
+                if generation == self.package_data_generation {
+                    self.updates_info.has_loading_count = true;
+                    match result {
+                        Ok(updates) => {
+                            self.updates_info.init_errors.remove(&manager);
+                            self.updates_info
+                                .updates_by_manager
+                                .insert(manager, (updates.len(), updates));
+                        }
+                        Err(error) => {
+                            self.updates_info
+                                .updates_by_manager
+                                .entry(manager.clone())
+                                .or_insert_with(|| (0, Vec::new()));
+                            self.updates_info.init_errors.insert(manager, error);
+                        }
                     }
                 }
             }
-            Message::InitUpdatesFinished => self.finish_init_updates_counts(),
+            Message::InitUpdatesFinished { generation } => {
+                if generation == self.package_data_generation {
+                    self.finish_init_updates_counts();
+                }
+            }
             Message::Shortcut(_) => unreachable!("shortcuts are handled before routed messages"),
         }
 
@@ -1202,37 +1245,20 @@ impl App {
             return Task::none();
         }
 
-        for manager in &managers {
-            self.installed_info
-                .loading_installed
-                .insert(manager.clone());
+        let mut tasks = Vec::with_capacity(managers.len());
+        for manager in managers {
+            tasks.push(
+                content::Installed::start_load(
+                    &self.pm_config,
+                    &mut self.installed_info,
+                    manager,
+                    &self.manager_catalog,
+                )
+                .map(content::Message::Installed)
+                .map(Message::Content),
+            );
         }
-
-        let registry = self.manager_catalog.registry();
-        Task::batch(managers.into_iter().map(move |manager| {
-            let config = self.pm_config.clone();
-            let registry = registry.clone();
-            let task_manager = manager.clone();
-            Task::future(async move {
-                let runtime = registry
-                    .manager_for(&task_manager, ManagerCapability::Installed)
-                    .map_err(|error| error.to_string())?;
-                let manager_config = config
-                    .manager(&task_manager)
-                    .ok_or_else(|| format!("Manager is not configured: {task_manager}"))?;
-                runtime.installed(manager_config).await.map_err(|error| {
-                    format!(
-                        "Failed to load installed packages for {}: {}",
-                        task_manager, error
-                    )
-                })
-            })
-            .then(move |result| {
-                Task::done(Message::Content(content::Message::Installed(
-                    content::InstalledMessage::LoadInstalledResult(manager.clone(), result),
-                )))
-            })
-        }))
+        Task::batch(tasks)
     }
 
     fn finish_init_updates_counts(&mut self) {
@@ -1294,6 +1320,8 @@ impl App {
     }
 
     fn reload_package_data(&mut self, reason: content::ReloadReason) -> Task<Message> {
+        self.package_data_generation = self.package_data_generation.wrapping_add(1);
+        let generation = self.package_data_generation;
         let configured: HashSet<_> = Self::configured_managers(&self.pm_config)
             .into_iter()
             .collect();
@@ -1347,18 +1375,24 @@ impl App {
         self.updates_info.init_logs.clear();
         self.updates_info.has_loading_count = false;
         self.updates_info.is_loading_count = true;
+        self.content.updates.reset_update_all();
 
         self.finding_info.search_results.clear();
         self.finding_info.search_errors.clear();
         self.finding_info.selected_packages.clear();
+        self.finding_info.searching_managers.clear();
 
         Task::batch(vec![
-            self.start_init_installed_counts_task(self.pm_config.clone()),
-            self.start_init_updates_counts_task(self.pm_config.clone()),
+            self.start_init_installed_counts_task(self.pm_config.clone(), generation),
+            self.start_init_updates_counts_task(self.pm_config.clone(), generation),
         ])
     }
 
-    fn start_init_installed_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
+    fn start_init_installed_counts_task(
+        &mut self,
+        config: updater_core::Config,
+        generation: u64,
+    ) -> Task<Message> {
         let managers = Self::configured_managers(&config);
         let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.installed_info
@@ -1398,19 +1432,28 @@ impl App {
                             .map_err(|error| error.to_string())
                     }
                 },
-                item_message: |manager, result| Message::InitInstalledCount { manager, result },
-                progress_message: |progress: InitProgress| Message::InitInstalledProgress {
+                item_message: move |manager, result| Message::InitInstalledCount {
+                    generation,
+                    manager,
+                    result,
+                },
+                progress_message: move |progress: InitProgress| Message::InitInstalledProgress {
+                    generation,
                     completed: progress.completed,
                     total: progress.total,
                     manager: progress.manager,
                     command_message: progress.command_message,
                 },
-                done_message: || Message::InitInstalledFinished,
+                done_message: move || Message::InitInstalledFinished { generation },
             },
         )
     }
 
-    fn start_init_updates_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
+    fn start_init_updates_counts_task(
+        &mut self,
+        config: updater_core::Config,
+        generation: u64,
+    ) -> Task<Message> {
         let managers = Self::configured_managers(&config);
         let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.updates_info
@@ -1456,14 +1499,19 @@ impl App {
                             .map_err(|error| error.to_string())
                     }
                 },
-                item_message: |manager, result| Message::InitUpdatesCount { manager, result },
-                progress_message: |progress: InitProgress| Message::InitUpdatesProgress {
+                item_message: move |manager, result| Message::InitUpdatesCount {
+                    generation,
+                    manager,
+                    result,
+                },
+                progress_message: move |progress: InitProgress| Message::InitUpdatesProgress {
+                    generation,
                     completed: progress.completed,
                     total: progress.total,
                     manager: progress.manager,
                     command_message: progress.command_message,
                 },
-                done_message: || Message::InitUpdatesFinished,
+                done_message: move || Message::InitUpdatesFinished { generation },
             },
         )
     }
@@ -1622,5 +1670,113 @@ mod tests {
                 recovery_error: Some(recovery_error),
             } if load_error == "invalid JSON" && recovery_error.contains("permission denied")
         ));
+    }
+
+    #[test]
+    fn init_messages_apply_only_to_the_current_reload_generation() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        app.package_data_generation = 2;
+        app.installed_info.is_loading_count = true;
+        app.installed_info.init_progress = Some((0, 1));
+        app.updates_info.is_loading_count = true;
+        app.updates_info.init_progress = Some((0, 1));
+
+        let _ = app.update_message(Message::InitInstalledProgress {
+            generation: 1,
+            completed: 1,
+            total: 1,
+            manager: manager.clone(),
+            command_message: "stale installed progress".to_owned(),
+        });
+        let _ = app.update_message(Message::InitInstalledCount {
+            generation: 1,
+            manager: manager.clone(),
+            result: Err("stale installed result".to_owned()),
+        });
+        let _ = app.update_message(Message::InitInstalledFinished { generation: 1 });
+        let _ = app.update_message(Message::InitUpdatesProgress {
+            generation: 1,
+            completed: 1,
+            total: 1,
+            manager: manager.clone(),
+            command_message: "stale updates progress".to_owned(),
+        });
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation: 1,
+            manager: manager.clone(),
+            result: Err("stale updates result".to_owned()),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation: 1 });
+
+        assert_eq!(app.installed_info.init_progress, Some((0, 1)));
+        assert!(app.installed_info.init_logs.is_empty());
+        assert!(app.installed_info.init_errors.is_empty());
+        assert!(app.installed_info.is_loading_count);
+        assert_eq!(app.updates_info.init_progress, Some((0, 1)));
+        assert!(app.updates_info.init_logs.is_empty());
+        assert!(app.updates_info.init_errors.is_empty());
+        assert!(app.updates_info.is_loading_count);
+
+        let _ = app.update_message(Message::InitInstalledCount {
+            generation: 2,
+            manager: manager.clone(),
+            result: Err("current installed result".to_owned()),
+        });
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation: 2,
+            manager: manager.clone(),
+            result: Err("current updates result".to_owned()),
+        });
+        let _ = app.update_message(Message::InitInstalledFinished { generation: 2 });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation: 2 });
+
+        assert_eq!(
+            app.installed_info
+                .init_errors
+                .get(&manager)
+                .map(String::as_str),
+            Some("current installed result")
+        );
+        assert_eq!(
+            app.updates_info
+                .init_errors
+                .get(&manager)
+                .map(String::as_str),
+            Some("current updates result")
+        );
+        assert!(!app.installed_info.is_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+    }
+
+    #[test]
+    fn package_reload_invalidates_requests_and_preserves_configured_selection() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        app.pm_config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        app.package_data_generation = 7;
+        app.installed_info.selected_managers.insert(manager.clone());
+        app.installed_info
+            .loading_installed
+            .insert(manager.clone(), 1);
+        app.updates_info.selected_managers.insert(manager.clone());
+        app.updates_info.loading_updates.insert(manager.clone(), 1);
+        app.finding_info.selected_managers.insert(manager.clone());
+        app.finding_info
+            .searching_managers
+            .insert(manager.clone(), 1);
+
+        let _ = app.reload_package_data(content::ReloadReason::PackageOperation);
+
+        assert_eq!(app.package_data_generation, 8);
+        assert!(app.installed_info.loading_installed.is_empty());
+        assert!(app.updates_info.loading_updates.is_empty());
+        assert!(app.finding_info.searching_managers.is_empty());
+        assert!(app.installed_info.selected_managers.contains(&manager));
+        assert!(app.updates_info.selected_managers.contains(&manager));
+        assert!(app.finding_info.selected_managers.contains(&manager));
     }
 }

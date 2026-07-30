@@ -41,7 +41,14 @@ pub enum Message {
     /// Package-manager selection message.
     SelectPackageManager(ManagerId, bool),
     /// Installed-load result message.
-    LoadInstalledResult(ManagerId, Result<Vec<PackageInfo>, String>),
+    LoadInstalledResult {
+        /// Request generation assigned when this manager load started.
+        request_id: u64,
+        /// Source manager.
+        manager: ManagerId,
+        /// Installed packages or failure detail.
+        result: Result<Vec<PackageInfo>, String>,
+    },
     /// Installed refresh message.
     RefreshInfo,
     /// Retry loading one package manager.
@@ -97,7 +104,9 @@ pub struct InstalledInfo {
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<ManagerId>,
     /// Managers currently loading full installed package list.
-    pub loading_installed: HashSet<ManagerId>,
+    pub loading_installed: HashMap<ManagerId, u64>,
+    /// Last allocated installed-load request generation.
+    pub request_generation: u64,
     /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
     /// Whether counts have ever been loaded.
@@ -179,23 +188,23 @@ impl Installed {
                     }
 
                     info.selected_managers.insert(manager.clone());
-                    if info.init_errors.contains_key(&manager)
+                    let should_load = if info.init_errors.contains_key(&manager)
                         || info.load_errors.contains_key(&manager)
                     {
                         info.init_errors.remove(&manager);
                         info.load_errors.remove(&manager);
-                        info.loading_installed.insert(manager.clone());
-                        Action::Run(Self::create_load_task(pm_config, manager, catalog))
+                        true
+                    } else if info.loading_installed.contains_key(&manager) {
+                        false
                     } else if let Some((count, packages)) = info.installed_packages.get(&manager) {
-                        if *count == packages.len() {
-                            Action::None
-                        } else {
-                            info.loading_installed.insert(manager.clone());
-                            Action::Run(Self::create_load_task(pm_config, manager, catalog))
-                        }
+                        *count != packages.len()
                     } else {
-                        info.loading_installed.insert(manager.clone());
-                        Action::Run(Self::create_load_task(pm_config, manager, catalog))
+                        true
+                    };
+                    if should_load {
+                        Action::Run(Self::start_load(pm_config, info, manager, catalog))
+                    } else {
+                        Action::None
                     }
                 } else {
                     info.selected_managers.remove(&manager);
@@ -212,7 +221,14 @@ impl Installed {
                     Action::None
                 }
             }
-            Message::LoadInstalledResult(manager, result) => {
+            Message::LoadInstalledResult {
+                request_id,
+                manager,
+                result,
+            } => {
+                if info.loading_installed.get(&manager) != Some(&request_id) {
+                    return Action::None;
+                }
                 info.loading_installed.remove(&manager);
                 let inspected_package_missing = self.inspected_package.as_ref().is_some_and(
                     |(inspected_manager, inspected_name)| {
@@ -242,27 +258,20 @@ impl Installed {
                     return Action::None;
                 }
 
-                // Mark all managers as loading.
-                for manager in &managers {
-                    info.loading_installed.insert(manager.clone());
-                }
-
-                // Create load tasks for all managers.
                 let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|manager| Self::create_load_task(pm_config, manager, catalog))
+                    .map(|manager| Self::start_load(pm_config, info, manager, catalog))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
             }
             Message::RetryLoad(manager) => {
-                if info.loading_installed.contains(&manager) {
+                if info.loading_installed.contains_key(&manager) {
                     return Action::None;
                 }
                 info.init_errors.remove(&manager);
                 info.load_errors.remove(&manager);
-                info.loading_installed.insert(manager.clone());
-                Action::Run(Self::create_load_task(pm_config, manager, catalog))
+                Action::Run(Self::start_load(pm_config, info, manager, catalog))
             }
             Message::SearchQueryChanged(query) => {
                 self.search_query = query;
@@ -821,7 +830,7 @@ impl Installed {
         info: &'a InstalledInfo,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
-        let is_loading = info.loading_installed.contains(manager);
+        let is_loading = info.loading_installed.contains_key(manager);
         let filtered_packages = self.filter_and_sort_packages(packages, info.sort_by);
         let subtitle = if is_loading {
             "(Loading...)".to_owned()
@@ -1109,11 +1118,16 @@ impl Installed {
         content.into()
     }
 
-    fn create_load_task(
+    pub(crate) fn start_load(
         pm_config: &updater_core::Config,
+        info: &mut InstalledInfo,
         manager: ManagerId,
         catalog: &ManagerCatalog,
     ) -> Task<Message> {
+        info.request_generation = info.request_generation.wrapping_add(1);
+        let request_id = info.request_generation;
+        info.loading_installed.insert(manager.clone(), request_id);
+
         let pm_config = pm_config.clone();
         let registry = catalog.registry();
         let result_manager = manager.clone();
@@ -1131,7 +1145,55 @@ impl Installed {
                 .map_err(|e| format!("Failed to load installed packages for {}: {}", manager, e))
         })
         .then(move |result| {
-            Task::done(Message::LoadInstalledResult(result_manager.clone(), result))
+            Task::done(Message::LoadInstalledResult {
+                request_id,
+                manager: result_manager.clone(),
+                result,
+            })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installed_result_only_applies_to_the_active_request() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo::default();
+        let manager = ManagerId::parse("builtin:cargo").unwrap();
+        info.loading_installed.insert(manager.clone(), 2);
+
+        let _ = installed.update(
+            Message::LoadInstalledResult {
+                request_id: 1,
+                manager: manager.clone(),
+                result: Err("stale result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert_eq!(info.loading_installed.get(&manager), Some(&2));
+        assert!(info.load_errors.is_empty());
+
+        let _ = installed.update(
+            Message::LoadInstalledResult {
+                request_id: 2,
+                manager: manager.clone(),
+                result: Err("current result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(!info.loading_installed.contains_key(&manager));
+        assert_eq!(
+            info.load_errors.get(&manager).map(String::as_str),
+            Some("current result")
+        );
     }
 }

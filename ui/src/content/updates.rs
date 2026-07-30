@@ -56,7 +56,14 @@ pub enum Message {
     /// Package-manager selection message.
     SelectPackageManager(ManagerId, bool),
     /// Updates-load result message.
-    LoadUpdatesResult(ManagerId, Result<Vec<PackageUpdate>, String>),
+    LoadUpdatesResult {
+        /// Request generation assigned when this manager load started.
+        request_id: u64,
+        /// Source manager.
+        manager: ManagerId,
+        /// Available updates or failure detail.
+        result: Result<Vec<PackageUpdate>, String>,
+    },
     /// Search-query change message.
     SearchQueryChanged(String),
     /// Sort-option change message.
@@ -113,7 +120,9 @@ pub struct UpdatesInfo {
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<ManagerId>,
     /// Managers currently loading update list.
-    pub loading_updates: HashSet<ManagerId>,
+    pub loading_updates: HashMap<ManagerId, u64>,
+    /// Last allocated updates-load request generation.
+    pub request_generation: u64,
     /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
     /// Whether counts have ever been loaded.
@@ -199,20 +208,17 @@ impl Updates {
                     {
                         info.init_errors.remove(&pm_type);
                         info.load_errors.remove(&pm_type);
-                        info.loading_updates.insert(pm_type.clone());
-                        Action::Run(Self::create_load_task(pm_config, pm_type, catalog, true))
-                    } else if info.loading_updates.contains(&pm_type) {
+                        Action::Run(Self::start_load(pm_config, info, pm_type, catalog, true))
+                    } else if info.loading_updates.contains_key(&pm_type) {
                         Action::None
                     } else if let Some((count, packages)) = info.updates_by_manager.get(&pm_type) {
                         if *count == packages.len() {
                             Action::None
                         } else {
-                            info.loading_updates.insert(pm_type.clone());
-                            Action::Run(Self::create_load_task(pm_config, pm_type, catalog, false))
+                            Action::Run(Self::start_load(pm_config, info, pm_type, catalog, false))
                         }
                     } else {
-                        info.loading_updates.insert(pm_type.clone());
-                        Action::Run(Self::create_load_task(pm_config, pm_type, catalog, false))
+                        Action::Run(Self::start_load(pm_config, info, pm_type, catalog, false))
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
@@ -221,7 +227,14 @@ impl Updates {
                     Action::None
                 }
             }
-            Message::LoadUpdatesResult(pm_type, result) => {
+            Message::LoadUpdatesResult {
+                request_id,
+                manager: pm_type,
+                result,
+            } => {
+                if info.loading_updates.get(&pm_type) != Some(&request_id) {
+                    return Action::None;
+                }
                 info.loading_updates.remove(&pm_type);
                 apply_manager_counted_items_result(
                     &mut info.updates_by_manager,
@@ -365,9 +378,7 @@ impl Updates {
                 Action::None
             }
             Message::UpdatePackagesResult(outcome) => {
-                self.pending_update_all = None;
-                self.update_all_scope.clear();
-                self.update_all_refreshing.clear();
+                self.reset_update_all();
                 info.is_updating = false;
                 info.update_progress = None;
                 if outcome.is_success() {
@@ -399,15 +410,9 @@ impl Updates {
                     return Action::None;
                 }
 
-                // Mark selected managers as loading.
-                for manager in &managers {
-                    info.loading_updates.insert(manager.clone());
-                }
-
-                // Create load tasks for selected managers.
                 let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|manager| Self::create_load_task(pm_config, manager, catalog, true))
+                    .map(|manager| Self::start_load(pm_config, info, manager, catalog, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -422,13 +427,9 @@ impl Updates {
                     return Action::None;
                 }
 
-                for manager in &pm_types {
-                    info.loading_updates.insert(manager.clone());
-                }
-
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|manager| Self::create_load_task(pm_config, manager, catalog, true))
+                    .map(|manager| Self::start_load(pm_config, info, manager, catalog, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -436,14 +437,13 @@ impl Updates {
             Message::RetryLoad(pm_type) => {
                 if info.is_updating
                     || !self.update_all_refreshing.is_empty()
-                    || info.loading_updates.contains(&pm_type)
+                    || info.loading_updates.contains_key(&pm_type)
                 {
                     return Action::None;
                 }
                 info.init_errors.remove(&pm_type);
                 info.load_errors.remove(&pm_type);
-                info.loading_updates.insert(pm_type.clone());
-                Action::Run(Self::create_load_task(pm_config, pm_type, catalog, true))
+                Action::Run(Self::start_load(pm_config, info, pm_type, catalog, true))
             }
             Message::PrepareUpdateAll => {
                 if info.is_updating
@@ -463,11 +463,10 @@ impl Updates {
                 for manager in &managers {
                     info.init_errors.remove(manager);
                     info.load_errors.remove(manager);
-                    info.loading_updates.insert(manager.clone());
                 }
 
                 Action::Run(Task::batch(managers.into_iter().map(|manager| {
-                    Self::create_load_task(pm_config, manager, catalog, true)
+                    Self::start_load(pm_config, info, manager, catalog, true)
                 })))
             }
             Message::ConfirmUpdateAll => {
@@ -507,10 +506,15 @@ impl Updates {
                 self.update_all_refreshing = self.update_all_scope.clone();
                 info.init_errors.remove(&manager);
                 info.load_errors.remove(&manager);
-                info.loading_updates.insert(manager.clone());
-                Action::Run(Self::create_load_task(pm_config, manager, catalog, true))
+                Action::Run(Self::start_load(pm_config, info, manager, catalog, true))
             }
         }
+    }
+
+    pub(crate) fn reset_update_all(&mut self) {
+        self.pending_update_all = None;
+        self.update_all_scope.clear();
+        self.update_all_refreshing.clear();
     }
 
     pub fn has_inspector_selection(&self) -> bool {
@@ -819,7 +823,7 @@ impl Updates {
         if info
             .selected_managers
             .iter()
-            .any(|pm_type| info.loading_updates.contains(pm_type))
+            .any(|pm_type| info.loading_updates.contains_key(pm_type))
         {
             return shared::centered_message("Loading selected package manager updates...");
         }
@@ -932,7 +936,7 @@ impl Updates {
         info: &'a UpdatesInfo,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
-        let is_loading = info.loading_updates.contains(&manager);
+        let is_loading = info.loading_updates.contains_key(&manager);
         let filtered_packages = self.filter_and_sort_updates(packages, info.sort_by);
         let subtitle = if is_loading {
             "(Loading...)".to_owned()
@@ -1298,12 +1302,17 @@ impl Updates {
         }
     }
 
-    fn create_load_task(
+    fn start_load(
         pm_config: &updater_core::Config,
+        info: &mut UpdatesInfo,
         manager: ManagerId,
         catalog: &ManagerCatalog,
         force_refresh: bool,
     ) -> Task<Message> {
+        info.request_generation = info.request_generation.wrapping_add(1);
+        let request_id = info.request_generation;
+        info.loading_updates.insert(manager.clone(), request_id);
+
         let pm_config = pm_config.clone();
         let manager_name = catalog.display_name(&manager).to_owned();
         let registry = catalog.registry();
@@ -1321,7 +1330,13 @@ impl Updates {
                 .await
                 .map_err(|e| format!("Failed to load updates for {manager_name}: {e}"))
         })
-        .then(move |result| Task::done(Message::LoadUpdatesResult(result_manager.clone(), result)))
+        .then(move |result| {
+            Task::done(Message::LoadUpdatesResult {
+                request_id,
+                manager: result_manager.clone(),
+                result,
+            })
+        })
     }
 
     fn build_update_plan(
@@ -1458,5 +1473,50 @@ mod tests {
         assert_eq!(plan.manager_count(), 1);
         assert_eq!(plan.manager_groups[0].0, flatpak);
         assert_eq!(plan.manager_groups[0].1, vec!["retry-me"]);
+    }
+
+    #[test]
+    fn update_result_only_advances_the_active_preflight_request() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let manager = manager_id("builtin:cargo");
+        updates.update_all_scope.insert(manager.clone());
+        updates.update_all_refreshing.insert(manager.clone());
+        info.loading_updates.insert(manager.clone(), 2);
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 1,
+                manager: manager.clone(),
+                result: Err("stale result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert_eq!(info.loading_updates.get(&manager), Some(&2));
+        assert!(info.load_errors.is_empty());
+        assert!(updates.update_all_refreshing.contains(&manager));
+        assert!(updates.pending_update_all.is_none());
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 2,
+                manager: manager.clone(),
+                result: Err("current result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(!info.loading_updates.contains_key(&manager));
+        assert_eq!(
+            info.load_errors.get(&manager).map(String::as_str),
+            Some("current result")
+        );
+        assert!(updates.update_all_refreshing.is_empty());
+        assert!(updates.pending_update_all.is_some());
     }
 }

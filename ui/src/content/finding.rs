@@ -35,8 +35,17 @@ pub enum Message {
     SearchQueryChanged(String),
     /// Search execution message.
     ExecuteSearch,
+    /// Repeat the last completed query after package-data reload.
+    RepeatLastSearch,
     /// Search result message.
-    SearchResult(ManagerId, Result<Vec<PackageInfo>, String>),
+    SearchResult {
+        /// Request generation assigned when this manager search started.
+        request_id: u64,
+        /// Source manager.
+        manager: ManagerId,
+        /// Matching packages or failure detail.
+        result: Result<Vec<PackageInfo>, String>,
+    },
     /// Retry search for one package manager.
     RetrySearch(ManagerId),
     /// Show a search result in the package inspector.
@@ -81,7 +90,9 @@ pub struct FindingInfo {
     /// Managers selected in the filter panel.
     pub selected_managers: HashSet<ManagerId>,
     /// Managers currently running search.
-    pub searching_managers: HashSet<ManagerId>,
+    pub searching_managers: HashMap<ManagerId, u64>,
+    /// Last allocated search request generation.
+    pub request_generation: u64,
     /// Current sort option.
     pub sort_by: SortOption,
     /// Selected package keys for batch operations.
@@ -156,7 +167,7 @@ impl Finding {
                 Action::None
             }
             Message::ExecuteSearch => {
-                let query = self.search_query.trim();
+                let query = self.search_query.trim().to_owned();
                 if query.is_empty() || info.is_installing || !info.searching_managers.is_empty() {
                     return Action::None;
                 }
@@ -166,26 +177,27 @@ impl Finding {
                     return Action::None;
                 }
 
-                // Clear previous results before running a new search.
-                info.search_results.clear();
-                info.selected_packages.clear();
-                info.searching_managers.clear();
-                info.search_errors.clear();
-                self.last_search_query = query.to_string();
-
-                // Mark selected managers as searching.
-                for manager_id in &info.selected_managers {
-                    info.searching_managers.insert(manager_id.clone());
-                }
-
-                Action::Run(Self::execute_search_task(
-                    pm_config,
-                    &info.selected_managers,
-                    query,
-                    catalog,
-                ))
+                self.start_search(pm_config, info, &query, catalog)
             }
-            Message::SearchResult(pm_type, result) => {
+            Message::RepeatLastSearch => {
+                let query = self.last_search_query.clone();
+                if query.is_empty()
+                    || info.is_installing
+                    || !info.searching_managers.is_empty()
+                    || info.selected_managers.is_empty()
+                {
+                    return Action::None;
+                }
+                self.start_search(pm_config, info, &query, catalog)
+            }
+            Message::SearchResult {
+                request_id,
+                manager: pm_type,
+                result,
+            } => {
+                if info.searching_managers.get(&pm_type) != Some(&request_id) {
+                    return Action::None;
+                }
                 info.searching_managers.remove(&pm_type);
                 apply_manager_items_result(
                     &mut info.search_results,
@@ -197,18 +209,21 @@ impl Finding {
             }
             Message::RetrySearch(pm_type) => {
                 if self.last_search_query.is_empty()
-                    || info.searching_managers.contains(&pm_type)
+                    || info.searching_managers.contains_key(&pm_type)
                     || !info.selected_managers.contains(&pm_type)
                 {
                     return Action::None;
                 }
                 info.search_errors.remove(&pm_type);
-                info.searching_managers.insert(pm_type.clone());
+                info.request_generation = info.request_generation.wrapping_add(1);
+                let request_id = info.request_generation;
+                info.searching_managers.insert(pm_type.clone(), request_id);
                 Action::Run(Self::execute_search_task(
                     pm_config,
                     &HashSet::from([pm_type]),
                     &self.last_search_query,
                     catalog,
+                    request_id,
                 ))
             }
             Message::InspectPackage(pm_type, package_name) => {
@@ -356,15 +371,7 @@ impl Finding {
                     let follow_up = if self.last_search_query.is_empty() {
                         Task::none()
                     } else {
-                        for manager_id in &info.selected_managers {
-                            info.searching_managers.insert(manager_id.clone());
-                        }
-                        Self::execute_search_task(
-                            pm_config,
-                            &info.selected_managers,
-                            &self.last_search_query,
-                            catalog,
-                        )
+                        Task::done(Message::RepeatLastSearch)
                     };
                     Action::PackageOperationFinished {
                         outcome,
@@ -554,7 +561,7 @@ impl Finding {
                     let manager = manager.clone();
                     let display_name = catalog.display_name(&manager);
                     let is_selected = info.selected_managers.contains(&manager);
-                    let is_searching = info.searching_managers.contains(&manager);
+                    let is_searching = info.searching_managers.contains_key(&manager);
                     let label = if is_searching {
                         format!("{display_name} (Searching...)")
                     } else if info.search_errors.contains_key(&manager) {
@@ -986,13 +993,39 @@ impl Finding {
         }
     }
 
-    // Action creators.
+    fn start_search(
+        &mut self,
+        pm_config: &updater_core::Config,
+        info: &mut FindingInfo,
+        query: &str,
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Action {
+        info.search_results.clear();
+        info.selected_packages.clear();
+        info.searching_managers.clear();
+        info.search_errors.clear();
+        self.last_search_query = query.to_owned();
+        info.request_generation = info.request_generation.wrapping_add(1);
+        let request_id = info.request_generation;
+        for manager in &info.selected_managers {
+            info.searching_managers.insert(manager.clone(), request_id);
+        }
+
+        Action::Run(Self::execute_search_task(
+            pm_config,
+            &info.selected_managers,
+            query,
+            catalog,
+            request_id,
+        ))
+    }
 
     fn execute_search_task(
         pm_config: &updater_core::Config,
         selected_managers: &HashSet<ManagerId>,
         query: &str,
         catalog: &crate::manager_catalog::ManagerCatalog,
+        request_id: u64,
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
         let query = query.to_string();
@@ -1024,11 +1057,117 @@ impl Finding {
                     (manager_id, result)
                 })
                 .then(move |(manager_id, result)| {
-                    Task::done(Message::SearchResult(manager_id, result))
+                    Task::done(Message::SearchResult {
+                        request_id,
+                        manager: manager_id,
+                        result,
+                    })
                 })
             })
             .collect();
 
         Task::batch(tasks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn search_result_only_applies_to_the_active_request() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.searching_managers.insert(manager.clone(), 2);
+
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: 1,
+                manager: manager.clone(),
+                result: Err("stale result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert_eq!(info.searching_managers.get(&manager), Some(&2));
+        assert!(info.search_errors.is_empty());
+
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: 2,
+                manager: manager.clone(),
+                result: Err("current result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(!info.searching_managers.contains_key(&manager));
+        assert_eq!(
+            info.search_errors.get(&manager).map(String::as_str),
+            Some("current result")
+        );
+    }
+
+    #[test]
+    fn deselected_manager_cannot_reinsert_a_late_search_result() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_managers.insert(manager.clone());
+        info.searching_managers.insert(manager.clone(), 1);
+
+        let _ = finding.update(
+            Message::SelectPackageManager(manager.clone(), false),
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: 1,
+                manager: manager.clone(),
+                result: Err("late result".to_owned()),
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(!info.selected_managers.contains(&manager));
+        assert!(!info.searching_managers.contains_key(&manager));
+        assert!(!info.search_errors.contains_key(&manager));
+        assert!(!info.search_results.contains_key(&manager));
+    }
+
+    #[test]
+    fn repeating_last_search_allocates_a_fresh_request() {
+        let mut finding = Finding {
+            last_search_query: "ripgrep".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_managers.insert(manager.clone());
+
+        let action = finding.update(
+            Message::RepeatLastSearch,
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::Run(_)));
+        assert_eq!(info.request_generation, 1);
+        assert_eq!(info.searching_managers.get(&manager), Some(&1));
+        assert_eq!(finding.last_search_query, "ripgrep");
     }
 }

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    path::PathBuf,
+};
 
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
@@ -743,7 +747,7 @@ where
 pub fn active_manager_filter_view<'a, Message>(
     entries: Vec<(ManagerId, usize)>,
     selected_managers: &'a HashSet<ManagerId>,
-    loading_managers: &'a HashSet<ManagerId>,
+    loading_managers: &'a HashMap<ManagerId, u64>,
     catalog: &'a ManagerCatalog,
     is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
     on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
@@ -753,7 +757,7 @@ where
 {
     row(entries.into_iter().map(move |(manager, count)| {
         let is_selected = selected_managers.contains(&manager);
-        let is_loading = loading_managers.contains(&manager);
+        let is_loading = loading_managers.contains_key(&manager);
         let is_initializing = is_initializing(&manager);
         let is_disabled = is_loading || is_initializing;
         let manager_name = catalog.display_name(&manager);

@@ -7,12 +7,13 @@ mod updates;
 mod workflows;
 
 use crate::{
-    content::{finding::Finding, installed::Installed, setting::Settings, updates::Updates},
+    content::{finding::Finding, setting::Settings, updates::Updates},
     shortcut::SelectionDirection,
 };
 
 pub use finding::FindingInfo;
-pub use installed::{InstalledInfo, Message as InstalledMessage};
+pub(crate) use installed::Installed;
+pub use installed::InstalledInfo;
 pub use setting::Message as SettingsMessage;
 pub(crate) use shared::{open_directory, search_input_id};
 pub(crate) use updater_core::CancellationToken;
