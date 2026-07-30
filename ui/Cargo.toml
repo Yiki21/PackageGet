@@ -33,8 +33,8 @@ dest = "/usr/share/polkit-1/actions/com.ayi.updater.policy"
 mode = "644"
 
 [[package.metadata.generate-rpm.assets]]
-source = "../assets/linux/updater.desktop"
-dest = "/usr/share/applications/updater.desktop"
+source = "../assets/linux/com.ayi.updater.desktop"
+dest = "/usr/share/applications/com.ayi.updater.desktop"
 mode = "644"
 
 [[package.metadata.generate-rpm.assets]]
@@ -78,7 +78,7 @@ assets = [
   ["target/release/updater", "usr/bin/updater", "755"],
   ["target/release/updater-system-helper", "usr/libexec/updater-system-helper", "755"],
   ["../assets/linux/com.ayi.updater.policy", "usr/share/polkit-1/actions/com.ayi.updater.policy", "644"],
-  ["../assets/linux/updater.desktop", "usr/share/applications/updater.desktop", "644"],
+  ["../assets/linux/com.ayi.updater.desktop", "usr/share/applications/com.ayi.updater.desktop", "644"],
   ["../assets/icons/updater.svg", "usr/share/icons/hicolor/scalable/apps/updater.svg", "644"],
   ["../assets/icons/updater.png", "usr/share/icons/hicolor/512x512/apps/updater.png", "644"],
   ["../README.md", "usr/share/doc/updater/README.md", "644"],
@@ -95,7 +95,6 @@ name = "updater"
 directories-next.workspace = true
 env_logger.workspace = true
 futures.workspace = true
-iced.workspace = true
 log.workspace = true
 mimalloc.workspace = true
 notify-rust.workspace = true
@@ -106,6 +105,12 @@ tokio.workspace = true
 updater_core.workspace = true
 updater_manager_api.workspace = true
 url.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { workspace = true, features = ["linux-theme-detection", "wayland", "x11"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+iced.workspace = true
 
 [dev-dependencies]
 roxmltree.workspace = true

@@ -10,5 +10,5 @@ Terminal=false
 Categories=Settings;PackageManager;
 Keywords=update;upgrade;install;packages;software;
 StartupNotify=true
-StartupWMClass=updater
+StartupWMClass=com.ayi.updater
 X-GNOME-UsesNotifications=true

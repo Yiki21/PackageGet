@@ -15,14 +15,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> iced::Result {
     env_logger::init();
 
-    let has_wayland_socket = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
-    if !has_wayland_socket {
-        eprintln!("Updater requires a native Wayland session.");
-        std::process::exit(1);
-    }
-
     iced::application(app::App::new, app::App::update, app::App::view)
         .title("Updater")
         .font(theme::GEIST_REGULAR_BYTES)
@@ -36,7 +28,7 @@ fn main() -> iced::Result {
             min_size: Some(iced::Size::new(640.0, 520.0)),
             exit_on_close_request: false,
             platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "updater".to_owned(),
+                application_id: "com.ayi.updater".to_owned(),
                 ..Default::default()
             },
             ..Default::default()

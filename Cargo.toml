@@ -18,12 +18,10 @@ futures = "0.3"
 iced = { version = "0.14", default-features = false, features = [
   "advanced",
   "crisp",
-  "linux-theme-detection",
   "svg",
   "thread-pool",
   "tiny-skia",
   "tokio",
-  "wayland",
   "web-colors",
   "wgpu",
 ] }
