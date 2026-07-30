@@ -64,7 +64,7 @@
 - Finding、Installed、Updates、Settings、shared、workflows、App init、Activity和Status的manager identity已统一切换为`ManagerId`。
 - Config中的unknown manager不会再被`filter_map(PackageManagerType::from_manager_id)`丢弃；Settings保持可见并保留原配置，初始化/read task返回带原ID的明确错误。
 - Finding、Installed和Updates已删除DNF fallback；旧core上报的progress manager不再覆盖当前group的`ManagerId`。
-- Activity新记录升级为version 2并持久化`ManagerId`，仍读取version 1的display-name failure记录；时间戳留给后续迭代。
+- Activity failure identity已切换为`ManagerId`；后续Iteration 017按用户要求删除了version与旧display-name兼容层，只保留单一当前schema。
 - UI package测试25项通过；完整workspace门禁等待文档检查点提交后执行。
 
 ## Git提交

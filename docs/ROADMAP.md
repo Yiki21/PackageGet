@@ -97,13 +97,13 @@ manager-api/**、managers/**、docs/manager-authoring.md。
 - manager 特有 settings 先由 built-in ID 对应的受控编辑器处理，公共 API 不依赖 Iced。
 
 5.  为 Config load error 增加可见启动恢复界面，提供 Retry、打开配置目录、经确认后重新检测/重置配置；不再只在 ui/src/app.rs::ConfigLoaded 里写日志后停住。
-6.  Activity history 后续记录 ManagerId 与时间戳；继续兼容旧 display-name 记录，并保留现有上限和隐私脱敏。
+6.  Activity history直接记录ManagerId与后续时间戳，不保留版本字段或旧display-name兼容路径，并保留现有上限和隐私脱敏。
 
 当前进度（Iteration 016）：
 
 - UI page state、message payload、selection key、progress、operation outcome和Activity failure identity已切换为`ManagerId`；Finding、Installed、Updates中的DNF display fallback已删除。
 - UI通过direct built-in registry构建只读catalog，descriptor作为名称、说明、category、platform与capability metadata来源；unknown configured manager显示稳定ID并在Settings draft/save/reload中保留。
-- Activity新记录保存`ManagerId`并继续读取v1 display-name记录；时间戳仍未加入。
+- Activity使用无版本字段的单一当前schema，failure直接保存`ManagerId`；旧history不读取或迁移，时间戳仍未加入。
 - 旧`PackageManagerType`只保留在read/write任务调用旧core API前的最终执行边界。Config恢复界面、Settings executable path完整验证/重置和registry执行引擎cutover仍是后续迭代。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
