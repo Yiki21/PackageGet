@@ -15,7 +15,7 @@
   Homebrew。Chocolatey、Scoop、macOS softwareupdate/MAS 后续通过同一接口添加。
 - PackageManager 首轮采用编译时扩展：第三方 crate 依赖公共 API、实现 trait 并显式注册；不直接加载 Rust 动态库，也不在本轮承诺免重编译的运行时插件。
 - 依赖按风险分组升级到实施时最新稳定版：Iced/窗口后端单独迁移，其他依赖分组更新；继续提交 Cargo.lock 保证发布可复现。
-- 首轮提供未签名发布物：Linux .deb/.rpm、Windows 便携包与安装包、macOS .app/.dmg；清楚标注未签名限制。Windows 签名和 Apple signing/notarization 在证书与 CI
+- 首轮提供未签名发布物：Linux .deb/.rpm/Arch `.pkg.tar.zst`、Windows 便携包与安装包、macOS .app/.dmg；清楚标注未签名限制。Windows 签名和 Apple signing/notarization 在证书与 CI
   secrets 就绪后补齐。
 - 所有 PackageManager 写操作仍按 manager group 串行执行，不并发执行安装、更新或卸载。
 
@@ -116,7 +116,7 @@
 1. 当前`main`仍不能直接作为stable发布：`Build-v0.2.4`之后的四crate拆分、Config/Activity schema直接切换和执行引擎替换规模较大，且阶段4至阶段6的跨平台与完整artifact目标尚未完成。
 2. Linux beta前的功能可靠性缺口已收敛：Iteration 020完成Config load可见恢复，Iteration 021拒绝晚到读取结果，Iteration 022补齐Discover install与selected Updates冻结确认并准确表达manager边界取消语义。
 3. Iteration 023先交付品牌化Polkit授权链：APT、DNF、Pacman与Zypper通过固定最小特权helper执行写操作，Linux包携带按动作区分的Updater policy metadata；密码和认证UI仍完全属于桌面Polkit agent。
-4. Iteration 024只做Linux release hardening：启用并验证Wayland/X11、执行clean/旧配置恢复矩阵、验证amd64/arm64 `.deb/.rpm`与checksums、更新版本和release notes。全部门禁通过后可发布`0.3.0-beta.1`，明确标注Linux preview。
+4. Iteration 024只做Linux release hardening：Wayland/X11、clean/旧配置恢复、本地x86_64 `.deb/.rpm/.pkg.tar.zst`、版本/release notes和完整质量门禁已经通过。`0.3.0-beta.1`仍须先由GitHub Actions原生amd64/arm64矩阵验证五个包与checksums，全部成功后才创建tag并明确标注Linux preview。
 5. 完整stable仍以阶段4、阶段5和阶段6的跨平台功能、可靠性、artifact与文档标准为准；Windows/macOS产物不存在时，不把Linux preview描述成ROADMAP目标已完成。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
@@ -184,7 +184,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 
 阶段 6：跨平台发布物、文档和后续 manager
 
-1.  保留并验证 Linux amd64/arm64 .deb/.rpm，同时打包Polkit policy与固定特权helper并验证X11/Wayland desktop entry；修正 RPM package 选择器。
+1.  保留并验证 Linux amd64/arm64 .deb/.rpm与Arch x86_64 `.pkg.tar.zst`，同时打包Polkit policy与固定特权helper并验证X11/Wayland desktop entry；修正 RPM package 选择器。
 2.  通过通用 Rust 二进制打包工具配置 Windows x86_64 便携 .zip 与安装包，增加 .ico、版本信息和 application identity。
 3.  生成 macOS Apple Silicon/Intel .app 和 .dmg，增加 .icns、Info.plist、bundle ID、最低系统版本说明；首轮 artifact 和 README 明确标注
     unsigned/Gatekeeper/SmartScreen 限制。
