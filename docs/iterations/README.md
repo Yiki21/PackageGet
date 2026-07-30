@@ -36,5 +36,5 @@
 | 020 | 已完成 | 阶段 3：Config Load 可见恢复 | [020-config-load-recovery.md](020-config-load-recovery.md) |
 | 021 | 已完成 | 阶段 5：异步读取 Request Generation | [021-request-generation.md](021-request-generation.md) |
 | 022 | 已完成 | 阶段 5：写操作冻结计划与协作取消文案 | [022-frozen-write-plans.md](022-frozen-write-plans.md) |
-| 023 | 待视觉验收 | 阶段 4/6：品牌化 Polkit 授权链 | [023-branded-polkit-authorization.md](023-branded-polkit-authorization.md) |
-| 024 | 待开始 | 阶段 4/6：Linux Beta 发布硬化 | [024-linux-beta-release-hardening.md](024-linux-beta-release-hardening.md) |
+| 023 | 已完成 | 阶段 4/6：品牌化 Polkit 授权链 | [023-branded-polkit-authorization.md](023-branded-polkit-authorization.md) |
+| 024 | 进行中 | 阶段 4/6：Linux Beta 发布硬化 | [024-linux-beta-release-hardening.md](024-linux-beta-release-hardening.md) |

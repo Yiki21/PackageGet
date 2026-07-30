@@ -1,7 +1,7 @@
 # Iteration 023：品牌化 Polkit 授权链
 
 - 日期：2026-07-30
-- 状态：实现完成，待本机安装视觉验收
+- 状态：已完成
 - ROADMAP阶段：阶段4 Linux系统manager提权与阶段6 Linux打包资产
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -18,7 +18,7 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 - [x] `.deb`与`.rpm`包含helper、policy和显式Polkit运行时依赖。
 - [x] 增加helper参数白名单、option/path injection拒绝、四个manager命令映射以及manager调用契约测试。
 - [x] 验证policy XML、软件包内容和完整workspace串行门禁。
-- [ ] 经用户授权覆盖安装当前`updater-0.2.4-1`后，由Hyprpolkitagent完成真实认证窗口视觉验收。
+- [x] 经用户授权覆盖安装当前`updater-0.2.4-1`后，由Hyprpolkitagent完成真实认证窗口视觉验收。
 
 ## 安全边界
 
@@ -53,12 +53,15 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 - `.deb`与`.rpm`已包含helper和policy；package dump确认RPM内为`root:root`、helper `0755`、policy `0644`，DEB提取后的两个文件hash与源码完全一致。
 - package workflow固定已验证的`cargo-deb 3.7.0`和`cargo-generate-rpm 0.21.0`，RPM selector修正为工具要求的workspace目录`ui`。
 - 完整workspace串行门禁通过：198项测试成功、14项真实环境测试显式ignored、0失败，format/check/clippy/build均通过。
-- 当前主机仍安装旧`updater-0.2.4-1`，系统中尚无helper/policy；未在未授权情况下覆盖用户现有系统包，因此真实认证窗口仍待安装后验收。
+- 当前主机已安装本轮生成的`updater-0.2.4-1`；RPM校验无改动，helper、policy、desktop entry、图标和文档均由软件包持有。
+- `pkaction`读取到Updater vendor/icon、按动作区分的description/message、固定helper路径与`argv1`约束；真实Hyprpolkitagent窗口显示了Updater的系统更新认证消息。
+- 实机同时确认Hyprpolkitagent 0.1.3将窗口标题固定为`Hyprland Polkit Agent`。该标题不读取Polkit action，保持由全局桌面agent管理，不在Updater中替换或修改agent。
 
 ## Git提交
 
 - `5ada47b docs: plan branded polkit authorization`
 - `191130e feat: add restricted polkit system helper`
+- `61386a4 docs: record polkit authorization validation`
 
 ## 验证记录
 
@@ -69,6 +72,9 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 - `cargo generate-rpm -p ui`：生成`target/generate-rpm/updater-0.2.4-1.x86_64.rpm`；SHA-256为`7c2a2399a8738a9c5a3ff3aedcc130e9096c14e8045882b7a4213897c63cc5c2`。
 - `cargo deb -p updater --no-build --no-strip --locked`：生成`target/debian/updater_0.2.4-1_amd64.deb`；SHA-256为`97d5722873a5b6c98e639ee122c991e72b2a2567481e67bc08d75c5ba397bd41`。Fedora主机无法解析Debian `$auto` shared-library package名称，Ubuntu CI仍需完成该项原生验证；显式`policykit-1`依赖与包内容已确认。
 - `rpmlint`：helper/policy路径、权限、依赖和summary无问题；仍报告`cargo-generate-rpm`未生成BuildHost/Changelog tag及GUI无man page，留给Iteration 024发布硬化评估。
+- `rpm -V updater`：通过，已安装文件与RPM数据库记录一致。
+- `pkaction --action-id com.ayi.updater.update-system-packages --verbose`：确认Updater品牌元数据、`auth_admin_keep`和helper action绑定均已生效。
+- Hyprpolkitagent真实窗口：显示`Authentication is required to update system packages with Updater`，密码输入和认证按钮仍由系统agent提供。
 - `cargo fmt --all -- --check`：通过。
 - `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：198项成功、14项ignored、0失败。
@@ -77,5 +83,4 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 
 ## 遗留项 / 下一轮
 
-- 先经用户确认覆盖安装本地RPM并检查`pkaction`元数据与Hyprpolkitagent实际展示；不触发install/update/remove事务，可用metadata refresh验证授权窗口。
-- 视觉验收完成后将Iteration 023标记已完成，再由Iteration 024继续Linux Wayland/X11、配置矩阵和beta发布物收口。
+- Iteration 024继续Linux Wayland/X11、配置矩阵和beta发布物收口；Updater不接管或定制全局Polkit authentication agent。
