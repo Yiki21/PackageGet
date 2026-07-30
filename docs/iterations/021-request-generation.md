@@ -1,7 +1,7 @@
 # Iteration 021：异步读取 Request Generation
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段5异步结果新鲜度与阶段3发布前可靠性
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -18,7 +18,7 @@
 - [x] Install成功后的重复搜索在reload状态重置后重新发起，并获得新的request ID。
 - [x] 复用现有Installed load task，删除App中重复的manager lookup/config lookup/installed调用。
 - [x] 增加旧init generation、旧search结果、旧updates结果和旧installed结果的reducer测试。
-- [ ] 更新ROADMAP和本记录，并串行通过完整workspace门禁。
+- [x] 更新ROADMAP和本记录，并串行通过完整workspace门禁。
 
 ## 行为约束
 
@@ -53,19 +53,26 @@
 - reload清空活动request map和Update All预检；Install follow-up改为在reload同步状态重置后发送`RepeatLastSearch`，再登记新ID并执行上次query。
 - App初始化完成后的Installed full load复用页面`start_load`入口，删除重复的registry、config和runtime调用实现。
 - 新增7项reducer测试，覆盖旧init generation、同manager旧结果、取消选择后的晚到搜索、旧Update All预检结果、reload invalidation与重复搜索新ID。
+- 完整workspace串行门禁通过：186项测试成功、14项真实环境测试显式ignored、0失败，format/check/clippy/build均通过。
+- 发布判断保持不变：Iteration 022完成写操作冻结确认和准确取消文案，Iteration 023完成Linux release hardening后发布`0.3.0-beta.1` Linux preview；当前不提前tag。
 
 ## Git提交
 
 - `0a69834 docs: record config recovery visual acceptance`
 - `c5f9e47 docs: plan request generation iteration`
 - `a0a9d38 fix: reject stale package data results`
+- `fdc4f0a docs: record request generation progress`
 
 ## 验证记录
 
 - `cargo check -p updater --all-targets --locked --jobs 1`：通过，无warning。
 - `cargo test -p updater --locked --jobs 1 -- --test-threads=1`：39项成功、0失败。
 - `cargo clippy -p updater --all-targets --locked --jobs 1 -- -D warnings`：通过，无warning。
-- 完整workspace串行门禁待执行。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，186项成功、14项显式ignored、0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
