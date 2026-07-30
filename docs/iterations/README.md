@@ -34,3 +34,4 @@
 | 018 | 已完成 | 阶段 2/3：Registry Execution Engine Cutover | [018-registry-execution-engine-cutover.md](018-registry-execution-engine-cutover.md) |
 | 019 | 已完成 | 阶段 3：Settings Executable Validation 与发布检查点 | [019-settings-executable-validation.md](019-settings-executable-validation.md) |
 | 020 | 已完成 | 阶段 3：Config Load 可见恢复 | [020-config-load-recovery.md](020-config-load-recovery.md) |
+| 021 | 进行中 | 阶段 5：异步读取 Request Generation | [021-request-generation.md](021-request-generation.md) |
