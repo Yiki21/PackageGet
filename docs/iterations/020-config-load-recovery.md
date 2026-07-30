@@ -12,12 +12,12 @@
 ## 实施计划
 
 - [x] 审计App启动状态、Config存储路径、现有桌面URL opener和恢复页面所需主题能力。
-- [ ] 让`Config`公开当前配置文件路径，并让load/reload/save共用同一解析入口。
-- [ ] 将App启动配置状态表达为Loading、Failed、ConfirmReset、Resetting和Ready互斥状态。
-- [ ] Config失败时用恢复页替换正常工作区，显示bounded/wrapped错误详情与Retry、Open Config Folder、Reset Configuration操作。
-- [ ] Retry继续使用严格loader；打开目录失败必须反馈；Reset必须二次确认，确认前不得写磁盘。
-- [ ] Reset重新检测当前manager并通过现有原子save覆盖`config.json`；失败继续停留在恢复页，成功才启动package data初始化。
-- [ ] 补充配置路径和App恢复状态转换测试。
+- [x] 让`Config`公开当前配置文件路径，并让load/reload/save共用同一解析入口。
+- [x] 将App启动配置状态表达为Loading、Failed、ConfirmReset、Resetting和Ready互斥状态。
+- [x] Config失败时用恢复页替换正常工作区，显示bounded/wrapped错误详情与Retry、Open Config Folder、Reset Configuration操作。
+- [x] Retry继续使用严格loader；打开目录失败必须反馈；Reset必须二次确认，确认前不得写磁盘。
+- [x] Reset重新检测当前manager并通过现有原子save覆盖`config.json`；失败继续停留在恢复页，成功才启动package data初始化。
+- [x] 补充配置路径和App恢复状态转换测试。
 - [ ] 更新ROADMAP、配置文档与本记录，并串行通过完整workspace门禁。
 
 ## 行为约束
@@ -46,14 +46,21 @@
 - 当前`App::ConfigLoaded(Err)`只写error log并返回空Task；`pm_config`仍是默认空值，用户没有Retry、配置目录或reset入口。
 - `Config::load/read_from_path/save_to_path`已经提供严格schema和原子替换，本轮直接复用，不改存储格式。
 - 现有`open_http_url`已实现`gio open`/`xdg-open`顺序和错误传播；本轮只抽取两类桌面目标真正共享的opener边界。
+- `ConfigLoadState`直接放在App reducer中表达互斥状态；恢复页直接留在`App::view`，没有新增controller或只调用一次的view helper。
+- Retry与首次加载复用同一个`load_config_task`；URL与目录复用同一个`open_desktop_target`，两处抽取都有两个真实调用方。
+- Reset确认后调用现有manager检测和原子`Config::save`；reset失败保留原始load error，并单独显示recovery error。
 
 ## Git提交
 
-待记录。
+- `f3fed93 docs: plan config load recovery`
+- `7998229 feat: add visible config load recovery`
 
 ## 验证记录
 
-待执行。
+- `cargo test -p updater app::tests --locked --jobs 1 -- --test-threads=1`：7 passed。
+- `cargo test -p updater_core storage::tests --locked --jobs 1 -- --test-threads=1`：10 passed，其他测试目标按filter为0。
+- `cargo clippy -p updater_core -p updater --all-targets --locked --jobs 1 -- -D warnings`：通过，无warning。
+- 完整workspace串行门禁待执行。
 
 ## 遗留项 / 下一轮
 

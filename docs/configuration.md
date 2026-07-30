@@ -33,7 +33,7 @@ Updater使用单一配置schema。配置文件位于平台用户配置目录下�
 
 未知但格式合法的第三方manager会保留在`managers`中。当前catalog中缺少该manager只影响运行时可用性，不会在保存Settings时删除它。
 
-缺少必需字段、包含未知顶层字段或使用其他结构的文件会返回配置错误且不会被自动覆盖。删除无效的`config.json`后，Updater会重新检测manager并创建当前格式的文件。
+缺少必需字段、包含未知顶层字段或使用其他结构的文件会返回配置错误且不会被自动覆盖。Updater会显示启动恢复界面：`Retry`使用同一个严格loader再次读取；`Open Config Folder`只打开配置目录；`Reset Configuration`仅在二次确认后重新检测manager，并用默认应用设置原子替换现有文件。取消或打开目录都不会修改`config.json`，reset失败时仍保留并显示最初的load error。
 
 ## 写入语义
 
