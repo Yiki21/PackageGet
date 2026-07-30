@@ -11,9 +11,9 @@ use crate::{content::OperationOutcome, manager_catalog::ManagerCatalog};
 
 const MAX_ACTIVITY_RECORDS: usize = 50;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActivityRecord {
-    pub version: u8,
     pub id: u64,
     pub action: String,
     pub completed_packages: usize,
@@ -21,10 +21,7 @@ pub struct ActivityRecord {
     pub completed_managers: usize,
     pub total_managers: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed_manager_id: Option<ManagerId>,
-    /// Legacy v1 display name retained for existing history files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed_manager: Option<String>,
+    pub failed_manager: Option<ManagerId>,
     pub error: Option<String>,
 }
 
@@ -40,29 +37,25 @@ pub struct CancelledProgress {
 impl ActivityRecord {
     pub fn from_outcome(id: u64, outcome: &OperationOutcome) -> Self {
         Self {
-            version: 2,
             id,
             action: outcome.action.label().to_owned(),
             completed_packages: outcome.completed_packages,
             total_packages: outcome.total_packages,
             completed_managers: outcome.completed_managers,
             total_managers: outcome.total_managers,
-            failed_manager_id: outcome.failed_manager.clone(),
-            failed_manager: None,
+            failed_manager: outcome.failed_manager.clone(),
             error: outcome.error.as_deref().map(redact_detail),
         }
     }
 
     pub fn cancelled(id: u64, progress: CancelledProgress) -> Self {
         Self {
-            version: 2,
             id,
             action: progress.action.to_owned(),
             completed_packages: progress.completed_packages.min(progress.total_packages),
             total_packages: progress.total_packages,
             completed_managers: progress.completed_managers.min(progress.total_managers),
             total_managers: progress.total_managers,
-            failed_manager_id: None,
             failed_manager: None,
             error: Some("Cancelled by user".to_owned()),
         }
@@ -74,10 +67,9 @@ impl ActivityRecord {
 
     pub fn summary(&self, catalog: &ManagerCatalog) -> String {
         let manager_name = self
-            .failed_manager_id
+            .failed_manager
             .as_ref()
-            .map(|manager| catalog.display_name(manager))
-            .or(self.failed_manager.as_deref());
+            .map(|manager| catalog.display_name(manager));
         let manager_suffix = manager_name
             .map(|manager| format!(" · failed at {manager}"))
             .unwrap_or_default();
@@ -115,11 +107,7 @@ impl ActivityHistory {
             return Self::default();
         };
         Self {
-            records: records
-                .into_iter()
-                .filter(|record| matches!(record.version, 1 | 2))
-                .take(MAX_ACTIVITY_RECORDS)
-                .collect(),
+            records: records.into_iter().take(MAX_ACTIVITY_RECORDS).collect(),
         }
     }
 
@@ -158,7 +146,7 @@ impl ActivityHistory {
 
 fn history_path() -> Option<PathBuf> {
     ProjectDirs::from("com", "ayi", "updater")
-        .map(|directories| directories.data_local_dir().join("activity-v1.json"))
+        .map(|directories| directories.data_local_dir().join("activity.json"))
 }
 
 fn redact_detail(detail: &str) -> String {
@@ -194,14 +182,12 @@ mod tests {
         let mut history = ActivityHistory::default();
         for id in 1..=60 {
             history.push(ActivityRecord {
-                version: 1,
                 id,
                 action: "Update".to_owned(),
                 completed_packages: 1,
                 total_packages: 1,
                 completed_managers: 1,
                 total_managers: 1,
-                failed_manager_id: None,
                 failed_manager: None,
                 error: None,
             });
@@ -220,13 +206,30 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_failed_manager_name_remains_readable() {
-        let record: ActivityRecord = serde_json::from_str(
-            r#"{"version":1,"id":4,"action":"Update","completed_packages":0,"total_packages":1,"completed_managers":0,"total_managers":1,"failed_manager":"DNF","error":"failed"}"#,
-        )
-        .unwrap();
+    fn current_schema_round_trip_preserves_manager_id() {
+        let record = ActivityRecord {
+            id: 4,
+            action: "Update".to_owned(),
+            completed_packages: 0,
+            total_packages: 1,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: Some(ManagerId::parse("builtin:dnf").unwrap()),
+            error: Some("failed".to_owned()),
+        };
 
-        assert!(record.failed_manager_id.is_none());
-        assert_eq!(record.failed_manager.as_deref(), Some("DNF"));
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded = serde_json::from_str::<ActivityRecord>(&json).unwrap();
+
+        assert_eq!(decoded, record);
+    }
+
+    #[test]
+    fn versioned_activity_schema_is_rejected() {
+        let result = serde_json::from_str::<ActivityRecord>(
+            r#"{"version":2,"id":4,"action":"Update","completed_packages":0,"total_packages":1,"completed_managers":0,"total_managers":1,"failed_manager":"builtin:dnf","error":"failed"}"#,
+        );
+
+        assert!(result.is_err());
     }
 }
