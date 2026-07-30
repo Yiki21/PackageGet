@@ -71,6 +71,8 @@
 
 - `fc893e0 docs: plan ui manager identity cutover`
 - `112b02e refactor(ui): use stable manager identities`
+- `b4d878c docs: record ui identity cutover progress`
+- `91076d1 refactor(ui): satisfy identity quality gates`
 
 ## 验证记录
 
@@ -78,7 +80,11 @@
 - `cargo check -p updater --jobs 1`：通过，无warning。
 - `cargo test -p updater --jobs 1 -- --test-threads=1`：通过，25项测试全部成功。
 - 静态identity检查：UI中的`PackageManagerType`只剩App/Finding/Installed/Updates/workflows最终旧core执行边界；无DNF fallback、unknown-ID `filter_map`或manager state集合残留。
-- 完整workspace check/test/clippy/build与GitHub Actions：待最终验证。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，211项成功，14项显式ignored，0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions：待推送最终HEAD后验证。
 
 ## 遗留项 / 下一轮
 
