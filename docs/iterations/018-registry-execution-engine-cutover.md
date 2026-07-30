@@ -11,13 +11,13 @@
 
 ## 实施计划
 
-- [ ] 提交已通过workspace检查的代码精简：内联单次复用helper、删除空namespace封装，并保持现有行为不变。
-- [ ] 盘点direct manager API与UI任务边界，明确读取、刷新、搜索、进度、失败和取消语义。
-- [ ] 在core提供registry驱动的领域执行入口；分组写操作保持manager间串行、首次失败停止和组间取消检查。
-- [ ] 让UI共享同一个`ManagerRegistry`，catalog与执行任务不再各自构造或依赖closed enum。
-- [ ] 将初始化、Finding、Installed、Updates与Settings检测任务切换到direct API模型和capability检查。
-- [ ] 删除legacy enum、宏dispatcher、静态trait、`core/src/pm/`兼容模块及无用依赖和测试。
-- [ ] 更新ROADMAP与manager authoring文档，记录新的执行路径和剩余阶段3工作。
+- [x] 提交已通过workspace检查的代码精简：内联单次复用helper、删除空namespace封装，并保持现有行为不变。
+- [x] 盘点direct manager API与UI任务边界，明确读取、刷新、搜索、进度、失败和取消语义。
+- [x] 在core提供registry驱动的领域执行入口；分组写操作保持manager间串行、首次失败停止和组间取消检查。
+- [x] 让UI共享同一个`ManagerRegistry`，catalog与执行任务不再各自构造或依赖closed enum。
+- [x] 将初始化、Finding、Installed、Updates与Settings检测任务切换到direct API模型和capability检查。
+- [x] 删除legacy enum、宏dispatcher、静态trait、`core/src/pm/`兼容模块及无用依赖和测试。
+- [x] 更新ROADMAP与manager authoring文档，记录新的执行路径和剩余阶段3工作。
 - [ ] 串行通过workspace format、check、test、clippy与build完整门禁。
 
 ## 行为约束
@@ -49,12 +49,22 @@
 ### 2026-07-30
 
 - Iteration 017已完成Activity direct `ManagerId` schema；ROADMAP下一项是registry执行引擎切换与legacy执行边界删除。
-- 已完成一轮行为保持的代码精简，待作为本轮第一个独立检查点提交。
+- 行为保持的代码精简已提交：删除25个private helper与3个public helper，空`SharedUi` namespace改为直接模块函数，净减少281行。
+- 新增`core/src/execution.rs`，只承载跨manager复用且需要独立测试的顺序、失败、部分结果、progress与取消语义；读取操作直接调用registry manager，不增加service wrapper。
+- `ManagerCatalog`现在持有共享`Arc<ManagerRegistry>`；Config首次检测、Settings availability、初始化计数、Finding search、Installed list、Updates scan和三类写操作均使用该实例。
+- UI模型直接使用manager API的`PackageInfo`与`PackageUpdate`；写操作直接使用`PackageAction`、`OperationProgress`与`OperationOutcome`。
+- 取消不再abort Iced future或提前伪造Activity记录；token只在当前manager完成后的下一组边界生效，最终结果由core统一生成。
+- 已删除`PackageManagerType`、`define_package_managers!`、旧静态trait、`core/src/pm/`的12个兼容文件和core的8个无用运行时依赖。
+- 新增4项engine测试，覆盖输入顺序、unsupported capability、部分失败停止和组间取消；workspace check/test/clippy已通过，最终完整门禁待文档检查点后执行。
 
 ## Git提交
 
-- 待记录。
+- `55fd98f docs: plan registry execution engine cutover`
+- `eb16b3f refactor: simplify core and ui flows`
+- `54eb1f0 refactor: cut over to registry execution engine`
 
 ## 遗留项 / 下一轮
 
-- 待本轮完成后填写。
+- Config load error可见恢复界面仍未实现。
+- Settings executable path的保存前验证与显式重置仍未完成。
+- Activity时间戳仍未加入。

@@ -71,15 +71,15 @@
 6.  提供 docs/manager-authoring.md 和一个独立 fake/sample manager 集成测试，演示第三方 crate 如何声明 ID、capability、实现 trait、注册并被 engine
     调用。首轮不提供 Iced 专用“插件设置页面”接口。
 
-渐进迁移
+迁移结果（Iteration 018）
 
-1.  先加入新 API 与 registry，并用 adapter 包住现有 PackageManagerType/define_package_managers!，保持当前 UI 和行为不变。
-2.  将 core/src/pm/common.rs、progress.rs 和具体 manager 模块逐个迁到 updater-managers；每迁一个 manager 就补齐 fixture/parser/contract test。
-3.  将 ui/src/content/workflows.rs 的领域操作计划/结果逐步下沉到 core，Iced channel 和消息映射仍留在 UI。
-4.  所有 built-in 都通过 registry 后，再删除闭合枚举、宏生成的 match dispatcher 和旧静态 PackageManager trait。
+1.  所有built-in实现、共享命令工具和contract test均已迁入`updater-managers`，core不再包含具体manager适配器。
+2.  `updater_core::execute_package_groups`负责跨manager串行、首次失败停止、部分结果和组间协作取消；Iced channel与message映射留在UI。
+3.  UI读取、搜索、刷新、检测和写操作均通过同一个`ManagerRegistry`解析`ManagerId`并检查capability。
+4.  `PackageManagerType`、`define_package_managers!`、宏生成的match dispatcher、旧静态`PackageManager` trait和`core/src/pm/`已删除。
 
-关键文件：core/src/lib.rs 的 define_package_managers!、PackageManagerType 和旧 PackageManager；core/src/pm/\*；ui/src/content/workflows.rs；新增
-manager-api/**、managers/**、docs/manager-authoring.md。
+关键文件：`manager-api/src/lib.rs`、`managers/src/`、`core/src/registry.rs`、`core/src/execution.rs`、`ui/src/content/workflows.rs`、
+`docs/manager-authoring.md`。
 
 ### 阶段 3：迁移配置、UI identity 和 manager 设置
 
@@ -99,12 +99,12 @@ manager-api/**、managers/**、docs/manager-authoring.md。
 5.  为 Config load error 增加可见启动恢复界面，提供 Retry、打开配置目录、经确认后重新检测/重置配置；不再只在 ui/src/app.rs::ConfigLoaded 里写日志后停住。
 6.  Activity history直接记录ManagerId与后续时间戳，不保留版本字段或旧display-name兼容路径，并保留现有上限和隐私脱敏。
 
-当前进度（Iteration 016）：
+当前进度（Iteration 018）：
 
 - UI page state、message payload、selection key、progress、operation outcome和Activity failure identity已切换为`ManagerId`；Finding、Installed、Updates中的DNF display fallback已删除。
-- UI通过direct built-in registry构建只读catalog，descriptor作为名称、说明、category、platform与capability metadata来源；unknown configured manager显示稳定ID并在Settings draft/save/reload中保留。
+- UI catalog持有共享的direct built-in registry，descriptor作为名称、说明、category、platform与capability metadata来源；读取、搜索、刷新、检测和写操作均通过该registry执行。unknown configured manager显示稳定ID并在Settings draft/save/reload中保留。
 - Activity使用无版本字段的单一当前schema，failure直接保存`ManagerId`；旧history不读取或迁移，时间戳仍未加入。
-- 旧`PackageManagerType`只保留在read/write任务调用旧core API前的最终执行边界。Config恢复界面、Settings executable path完整验证/重置和registry执行引擎cutover仍是后续迭代。
+- `PackageManagerType`、宏dispatcher、旧静态trait和core legacy manager适配器已删除；Config恢复界面、Settings executable path完整验证/重置和Activity时间戳仍是后续迭代。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
 draft/baseline、sync_from_config、is_dirty；ui/src/content.rs::ReloadReason::preserves_page_context；ui/src/activity.rs 的 retention/redaction。
@@ -195,9 +195,6 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 本地串行命令
 
 受机器资源限制，所有 Rust 命令必须逐条等待结束，使用单 job/单测试线程；不得并行 build/test/run，也不得在构建时同时启动应用。每个阶段按以下顺序执行适用项：
-
-     受机器资源限制，所有 Rust 命令必须逐条等待结束，使用单 job/单测试线程；不得并行
-     build/test/run，也不得在构建时同时启动应用。每个阶段按以下顺序执行适用项：
 
      cargo fmt --all -- --check
      cargo check --workspace --all-targets --locked --jobs 1

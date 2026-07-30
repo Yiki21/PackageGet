@@ -6,7 +6,7 @@ Updater使用编译时显式注册的package manager扩展。manager实现依赖
 
 - `updater-manager-api`：稳定ID、descriptor、配置、package模型、progress与typed error契约。
 - `updater-managers`：Updater自带的manager实现，以及`builtin_managers()` catalog。
-- `updater_core`：`ManagerRegistry`、duplicate/capability检查和应用组合入口。
+- `updater_core`：`ManagerRegistry`、duplicate/capability检查、配置检测和跨manager串行执行。
 - 第三方manager crate：实现`PackageManager`，由最终应用显式注册。
 
 同一workspace中的第三方实现可以继承workspace依赖，不需要建立额外的`crates/`分组目录：
@@ -106,7 +106,7 @@ UI只使用`ManagerId`作为state、message、selection和operation outcome中�
 
 Config中的unknown manager ID不会被过滤。当前build未注册对应实现时，Settings仍显示稳定ID与unavailable状态，保存时也保留原`ManagerConfig`；只有用户显式移除时才删除。第三方manager接入最终应用后，应同时加入该应用创建UI catalog所使用的registry。
 
-当前UI执行任务仍在调用旧core API前，将built-in `ManagerId`临时解析为`PackageManagerType`。因此第三方trait object现在可以注册、查询metadata并保留配置，但还不能通过UI执行search/install/update/remove。该限制会在registry执行引擎cutover后移除，第三方实现不应自行增加enum映射作为绕过方案。
+UI catalog与执行任务共享同一个`ManagerRegistry`。已注册且已配置的第三方trait object可以直接参与availability、installed/count、updates、search与execute；调用前由registry拒绝unknown ID或未广告的capability。跨manager写操作通过`updater_core::execute_package_groups`保持输入顺序、首次失败停止、部分结果和组间协作取消，不需要也不允许增加闭合enum映射。
 
 ## 实现要求
 
@@ -121,5 +121,5 @@ Config中的unknown manager ID不会被过滤。当前build未注册对应实现
 - 命令、HTTP和文件系统边界使用固定timeout与结构化`ManagerErrorKind`。
 - 默认测试离线；真实宿主或网络smoke必须显式`#[ignore]`且保持只读。
 
-仓库中的可执行外部manager契约测试见`core/tests/manager_registry.rs`，built-in catalog契约见`managers/tests/builtin_catalog.rs`。
+仓库中的可执行外部manager契约测试见`core/tests/manager_registry.rs`，跨manager执行契约见`core/tests/execution.rs`，built-in catalog契约见`managers/tests/builtin_catalog.rs`。
 Config磁盘schema和失败语义见[`configuration.md`](configuration.md)。
