@@ -1,7 +1,7 @@
 # Iteration 019：Settings Executable Validation 与发布检查点
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段3 manager设置闭环与发布准备评估
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -18,7 +18,7 @@
 - [x] 保留未注册manager配置；缺失实现不能导致用户修改其他设置时丢失配置或无法保存。
 - [x] 补充路径重置、失败保留draft和保存快照的聚焦测试。
 - [x] 更新ROADMAP和本记录，冻结Linux preview与完整跨平台正式版的不同门槛。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁。
 
 ## 行为约束
 
@@ -58,11 +58,13 @@
 - 新增3项聚焦测试，连同原有Settings测试共7项通过，覆盖路径重置、验证失败和保存快照/stale status。
 - 隔离GUI验证尝试在Gamescope headless中启动应用，但wgpu因headless Wayland surface返回`ERROR_SURFACE_LOST_KHR`；未连接宿主桌面，GUI实机检查保留为Iteration 023发布门禁。
 - 发布判断冻结为：当前`main`不直接发stable；Iteration 023门禁通过后可发`0.3.0-beta.1` Linux preview，完整stable继续等待ROADMAP阶段4/5/6。
+- 完整workspace串行门禁通过：174项测试成功、14项真实环境测试显式ignored、0失败，check/clippy/build均无warning。
 
 ## Git提交
 
 - `455759a docs: plan settings executable validation`
 - `11ca059 feat: validate manager executable settings`
+- `bfdc115 docs: record settings validation progress`
 
 ## 验证记录
 
@@ -70,7 +72,11 @@
 - `cargo check -p updater --all-targets --locked --jobs 1`：通过。
 - `cargo clippy -p updater --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build -p updater --locked --jobs 1`：通过。
-- workspace完整串行门禁待执行。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，174项成功、14项显式ignored、0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 
