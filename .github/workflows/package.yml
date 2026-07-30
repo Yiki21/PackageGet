@@ -160,11 +160,13 @@ jobs:
             test "$_upstream_version" = "$version"
           )
 
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git archive \
             --format=tar \
             --prefix="PackageGet-Build-v${version}/" \
-            "$GITHUB_SHA" \
-            | gzip -n > "packaging/arch/updater-${arch_version}.tar.gz"
+            --output="packaging/arch/updater-${arch_version}.tar" \
+            "$GITHUB_SHA"
+          gzip -n "packaging/arch/updater-${arch_version}.tar"
 
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
