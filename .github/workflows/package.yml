@@ -52,7 +52,7 @@ jobs:
         run: |
           package="$(find target/debian -maxdepth 1 -name '*.deb' -print -quit)"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
-          test "$(dpkg-deb -f "$package" Version)" = "${version/-/~}-1"
+          test "$(dpkg-deb -f "$package" Version)" = "${version/-/\~}-1"
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v7
@@ -111,7 +111,7 @@ jobs:
         run: |
           package="$(find target/generate-rpm -maxdepth 1 -name '*.rpm' -print -quit)"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
-          test "$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$package")" = "${version/-/~}-1"
+          test "$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$package")" = "${version/-/\~}-1"
 
       - name: Upload rpm artifact
         uses: actions/upload-artifact@v7
