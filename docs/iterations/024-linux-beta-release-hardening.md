@@ -1,7 +1,7 @@
 # Iteration 024：Linux Beta 发布硬化
 
 - 日期：2026-07-30
-- 状态：本地实施完成，等待CI验证
+- 状态：已完成，`Build-v0.3.0-beta.1`已发布为prerelease
 - ROADMAP阶段：阶段4 Linux X11启动与阶段6 Linux发布物
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -53,6 +53,9 @@
 - DEB/RPM/Arch均显式声明通过`dlopen`使用的Wayland/X11/XKB依赖、Polkit和hicolor图标主题；DEB不再依赖跨发行版构建时不可靠的`$auto`映射。
 - 用户已完成旧schema恢复页视觉验收；本轮隔离clean config自动生成当前schema，随后同一配置在X11启动中成功加载。
 - 本地所有验证完成后执行清理；`cargo clean`受容器子UID文件阻塞后，通过已确认范围的rootless Podman user namespace移除整个`target/`，从17 GiB降为不存在。
+- 首轮远端矩阵暴露Arch容器`safe.directory`与Bash prerelease版本替换问题；修复后DEB/RPM两个架构及Arch包均通过严格元数据检查。
+- CI和package workflow不再把本机资源限制错误延伸为Cargo单job；runner使用默认并行度后，CI约2分半钟完成，arm64 DEB由超过45分钟未完成缩短为约5分钟成功。
+- tag workflow成功创建`Build-v0.3.0-beta.1` prerelease。GitHub会将asset名称中的`~`规范为`.`，bundle现于生成校验和前统一文件名；已发布release的`SHA256SUMS`也已替换并从公开下载路径复验。
 
 ## Git提交
 
@@ -60,6 +63,10 @@
 - `a5005e4 feat: prepare portable 0.3.0 beta packages`
 - `9a40625 build: add Arch Linux release package`
 - `9d31c3a fix: declare package runtime dependencies`
+- `0d56002 fix: make Arch source archive failures visible`
+- `79cbc9b fix: verify prerelease package versions literally`
+- `9495408 ci: use runner parallelism for Rust builds`
+- `04b4137 fix: normalize prerelease asset filenames`
 
 ## 验证记录
 
@@ -77,9 +84,12 @@
 - RPM：`updater-0.3.0~beta.1-1.x86_64.rpm`，SHA-256 `42623bdfa2751a4b27db34ef3bd5e5ec464b25dd97443811471a25676c6a8`。
 - Arch：`updater-0.3.0beta.1-1-x86_64.pkg.tar.zst`，SHA-256 `d5c522c400dba96e0ff94620d5e7e9cbdf4a513ce7febde7de0314ce23d15f4b`。
 - 三个本地包的临时`SHA256SUMS`均由`sha256sum -c`复验为`OK`；随后按要求清理本地`target/`。
+- CI run `30550829379`：默认Cargo并行度下五个包与bundle全部成功；下载`linux-packages-main`后，五个包的checksum、版本和架构元数据全部通过。
+- tag run `30552243129`：五个构建、bundle与release job全部成功，发布`Build-v0.3.0-beta.1` prerelease；`Build-v0.2.4`继续保持Latest stable。
+- 最终workflow回归run `30554098747`：文件名规范化后的bundle全部成功，下载后确认不存在`~`文件名且五项`sha256sum -c`均为`OK`。
+- 公开release包含两个DEB、两个RPM、一个Arch包和`SHA256SUMS`；公开文件名使用`0.3.0.beta.1`，包内DEB/RPM版本仍为`0.3.0~beta.1-1`。最终checksum manifest的SHA-256为`567c4f08fdc6ab96eb7c2d3726ed977c466487dc897aa82c83c5a615d8c8d56f`。
 
 ## 遗留项 / 下一轮
 
-- 当前代码已达到`0.3.0-beta.1`本地候选标准，但还不是已验证发布：先将提交同步到远端，通过`workflow_dispatch`运行原生amd64/arm64五包矩阵与bundle job。
-- 只有远端五个包和`SHA256SUMS`全部通过后才创建`Build-v0.3.0-beta.1` tag；tag workflow将其标记为prerelease并使用`RELEASE_NOTES.md`。
-- 本轮仍是unsigned Linux preview。Windows/macOS产物、签名和ROADMAP stable完成标准继续留在后续阶段。
+- 本轮发布目标已完成，无剩余发布阻塞项。
+- 当前仍是unsigned Linux preview。Windows/macOS产物、签名和ROADMAP stable完成标准继续留在后续阶段。
