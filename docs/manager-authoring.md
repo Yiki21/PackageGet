@@ -100,6 +100,14 @@ registry.register(Arc::new(ExampleManager::new()))?;
 
 内置manager由`updater_managers::builtin_managers()`提供，并由`updater_core::register_builtin_managers`注册。第三方manager不应修改built-in catalog，而应在应用组合层追加注册。
 
+## UI identity与缺失manager
+
+UI只使用`ManagerId`作为state、message、selection和operation outcome中的manager identity。display name、description、category、platform、capability与authorization均从已注册manager的`ManagerDescriptor`读取，不能把display name当作key。
+
+Config中的unknown manager ID不会被过滤。当前build未注册对应实现时，Settings仍显示稳定ID与unavailable状态，保存时也保留原`ManagerConfig`；只有用户显式移除时才删除。第三方manager接入最终应用后，应同时加入该应用创建UI catalog所使用的registry。
+
+当前UI执行任务仍在调用旧core API前，将built-in `ManagerId`临时解析为`PackageManagerType`。因此第三方trait object现在可以注册、查询metadata并保留配置，但还不能通过UI执行search/install/update/remove。该限制会在registry执行引擎cutover后移除，第三方实现不应自行增加enum映射作为绕过方案。
+
 ## 实现要求
 
 - ID使用稳定的小写namespace格式，例如`org.example:packages`；发布后不要复用ID表示另一种manager。

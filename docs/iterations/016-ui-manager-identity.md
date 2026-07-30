@@ -12,17 +12,17 @@
 ## 实施计划
 
 - [x] 审计App、Finding、Installed、Updates、Settings、shared、workflows、activity与status中的`PackageManagerType`状态和fallback调用面。
-- [ ] 建立UI manager catalog/context：注册direct built-ins，按`ManagerId`解析descriptor、display name、description、category、capability和当前runtime支持状态。
-- [ ] 将shared `PackageSelectionKey`、keyboard navigation、inspector和manager filter组件改为`ManagerId`，删除DNF display fallback。
-- [ ] 将Finding的selected/searching/results/errors/messages/inspector/install progress改为`ManagerId`。
-- [ ] 将Installed的selected/loading/results/errors/messages/inspector/remove progress改为`ManagerId`。
-- [ ] 将Updates的selected/loading/results/errors/messages/update plan/progress/retry state改为`ManagerId`。
-- [ ] 将workflows的grouping、batch progress、operation outcome和failure identity改为`ManagerId`；只在调用旧core执行函数前解析built-in runtime type。
-- [ ] 将App初始化任务、reload reconciliation、progress logs与Content路由改为`ManagerId`。
-- [ ] 将Settings detection、availability、path selection和manager渲染key改为`ManagerId`；unknown configured manager保持可见且保存不丢失。
-- [ ] 将Activity/Status消费的manager identity改为`ManagerId`，display统一通过catalog解析或稳定ID fallback。
-- [ ] 增加catalog metadata、unknown manager fallback、selection reconciliation、page state和operation grouping contracts。
-- [ ] 更新ROADMAP/manager authoring与本轮进度，记录仍存在的静态core执行边界。
+- [x] 建立UI manager catalog/context：注册direct built-ins，按`ManagerId`解析descriptor、display name、description、category、capability和当前runtime支持状态。
+- [x] 将shared `PackageSelectionKey`、keyboard navigation、inspector和manager filter组件改为`ManagerId`，删除DNF display fallback。
+- [x] 将Finding的selected/searching/results/errors/messages/inspector/install progress改为`ManagerId`。
+- [x] 将Installed的selected/loading/results/errors/messages/inspector/remove progress改为`ManagerId`。
+- [x] 将Updates的selected/loading/results/errors/messages/update plan/progress/retry state改为`ManagerId`。
+- [x] 将workflows的grouping、batch progress、operation outcome和failure identity改为`ManagerId`；只在调用旧core执行函数前解析built-in runtime type。
+- [x] 将App初始化任务、reload reconciliation、progress logs与Content路由改为`ManagerId`。
+- [x] 将Settings detection、availability、path selection和manager渲染key改为`ManagerId`；unknown configured manager保持可见且保存不丢失。
+- [x] 将Activity/Status消费的manager identity改为`ManagerId`，display统一通过catalog解析或稳定ID fallback。
+- [x] 增加catalog metadata、unknown manager fallback、selection reconciliation、page state和operation grouping contracts。
+- [x] 更新ROADMAP/manager authoring与本轮进度，记录仍存在的静态core执行边界。
 - [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity决策
@@ -60,15 +60,28 @@
 - 当前UI共有大量`PackageManagerType`状态引用，集中在三个package页面、App初始化、shared selection/inspector、workflows和Settings。
 - Finding、Installed与Updates当前在找不到source时使用`PackageManagerType::Dnf`作为display fallback，本轮必须删除。
 - direct registry已有稳定descriptor排序和capability检查，可作为UI metadata source；静态core执行边界继续作为本轮非目标。
+- 新增UI `ManagerCatalog`，从direct built-in registry缓存descriptor；unknown ID显示稳定ID，平台注册状态从descriptor解析。
+- Finding、Installed、Updates、Settings、shared、workflows、App init、Activity和Status的manager identity已统一切换为`ManagerId`。
+- Config中的unknown manager不会再被`filter_map(PackageManagerType::from_manager_id)`丢弃；Settings保持可见并保留原配置，初始化/read task返回带原ID的明确错误。
+- Finding、Installed和Updates已删除DNF fallback；旧core上报的progress manager不再覆盖当前group的`ManagerId`。
+- Activity新记录升级为version 2并持久化`ManagerId`，仍读取version 1的display-name failure记录；时间戳留给后续迭代。
+- UI package测试25项通过；完整workspace门禁等待文档检查点提交后执行。
 
 ## Git提交
 
-- Iteration 016计划检查点：本次提交。
+- `fc893e0 docs: plan ui manager identity cutover`
+- `112b02e refactor(ui): use stable manager identities`
 
 ## 验证记录
 
-待实施后填写。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check -p updater --jobs 1`：通过，无warning。
+- `cargo test -p updater --jobs 1 -- --test-threads=1`：通过，25项测试全部成功。
+- 静态identity检查：UI中的`PackageManagerType`只剩App/Finding/Installed/Updates/workflows最终旧core执行边界；无DNF fallback、unknown-ID `filter_map`或manager state集合残留。
+- 完整workspace check/test/clippy/build与GitHub Actions：待最终验证。
 
 ## 遗留项 / 下一轮
 
-本轮完成后填写。
+- `PackageManagerType`与旧静态core read/write API仍存在；下一轮应将执行引擎改为registry/capability驱动，再删除UI中的最终ID转换边界。
+- Config load error仍只写日志；需要单独实现可见恢复页面。
+- Activity记录尚无时间戳，Settings executable path尚未完成通用validation/reset交互。
