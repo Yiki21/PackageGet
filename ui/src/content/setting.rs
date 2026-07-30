@@ -55,11 +55,20 @@ pub enum Message {
     /// Config-save message.
     SaveConfig,
     /// Config-save result message.
-    SaveConfigResult(Result<(), String>),
+    SaveConfigResult {
+        /// Configuration snapshot passed to persistent storage.
+        config: updater_core::Config,
+        /// Availability results for custom executable paths.
+        validation: Vec<(ManagerId, Result<ManagerAvailability, String>)>,
+        /// Validation or persistence result.
+        result: Result<(), String>,
+    },
     /// Manager-path dialog message.
     OpenDialog(ManagerId),
     /// Manager-path selection message.
     SelectedPath(FileHandle),
+    /// Restore a manager to executable discovery through PATH.
+    ResetExecutable(ManagerId),
     /// Selection-cancel message.
     CancelSelection,
     /// Go-bin directory dialog message.
@@ -105,6 +114,7 @@ impl Settings {
 
     pub fn discard_changes(&mut self) {
         self.draft.clone_from(&self.baseline);
+        self.availability.clear();
         self.save_status = None;
         self.selecting_manager = None;
     }
@@ -225,6 +235,8 @@ impl Settings {
                 self.draft
                     .managers
                     .retain(|configured| configured.id != manager);
+                self.availability.remove(&manager);
+                self.save_status = None;
                 Action::None
             }
             Message::SaveConfig => {
@@ -234,22 +246,73 @@ impl Settings {
                 self.is_saving = true;
                 self.save_status = None;
                 let config = self.draft.clone();
-                Action::Run(iced::Task::perform(
-                    async move { config.save().await.map_err(|error| error.to_string()) },
-                    Message::SaveConfigResult,
-                ))
+                let registry = catalog.registry();
+                let managers_to_validate = config
+                    .managers
+                    .iter()
+                    .filter(|configured| configured.executable().is_some())
+                    .filter(|configured| catalog.supports_current_platform(&configured.id))
+                    .filter_map(|configured| {
+                        registry
+                            .get(&configured.id)
+                            .map(|manager| (manager, configured.clone()))
+                    })
+                    .collect::<Vec<_>>();
+
+                Action::Run(Task::future(async move {
+                    let mut validation = Vec::with_capacity(managers_to_validate.len());
+                    for (manager, configured) in managers_to_validate {
+                        let id = configured.id.clone();
+                        let availability = manager
+                            .availability(&configured)
+                            .await
+                            .map_err(|error| error.to_string());
+                        validation.push((id, availability));
+                    }
+
+                    let invalid_count = validation
+                        .iter()
+                        .filter(|(_, availability)| {
+                            !availability
+                                .as_ref()
+                                .is_ok_and(ManagerAvailability::is_available)
+                        })
+                        .count();
+                    let result = if invalid_count == 0 {
+                        config.save().await.map_err(|error| error.to_string())
+                    } else {
+                        Err(format!(
+                            "{invalid_count} custom executable path(s) failed validation"
+                        ))
+                    };
+
+                    Message::SaveConfigResult {
+                        config,
+                        validation,
+                        result,
+                    }
+                }))
             }
-            Message::SaveConfigResult(result) => {
+            Message::SaveConfigResult {
+                config,
+                validation,
+                result,
+            } => {
                 self.is_saving = false;
+                for (manager, availability) in validation {
+                    if self.draft.manager(&manager) == config.manager(&manager) {
+                        self.availability.insert(manager, availability);
+                    }
+                }
                 match result {
                     Ok(()) => {
                         log::debug!("Configuration saved successfully");
-                        self.baseline.clone_from(&self.draft);
+                        self.baseline.clone_from(&config);
                         self.save_status = Some(SaveStatus::Success);
-                        Action::ApplySavedConfig(self.draft.clone())
+                        Action::ApplySavedConfig(config)
                     }
                     Err(e) => {
-                        log::error!("Failed to save configuration: {}", e);
+                        log::error!("Configuration save rejected: {}", e);
                         self.save_status = Some(SaveStatus::Error(e));
                         Action::None
                     }
@@ -274,6 +337,7 @@ impl Settings {
                 if let Some(manager) = self.selecting_manager.take() {
                     let path = file_handle.path().to_path_buf();
                     self.availability.remove(&manager);
+                    self.save_status = None;
 
                     if let Some(existing) = self.draft.manager_mut(&manager) {
                         existing.executable = Some(path);
@@ -286,6 +350,14 @@ impl Settings {
                     log::error!("No package manager selected when handling SelectedPath");
                 }
 
+                Action::None
+            }
+            Message::ResetExecutable(manager) => {
+                if let Some(configured) = self.draft.manager_mut(&manager) {
+                    configured.executable = None;
+                    self.availability.remove(&manager);
+                    self.save_status = None;
+                }
                 Action::None
             }
             Message::CancelSelection => {
@@ -756,6 +828,32 @@ impl Settings {
             content_items.push(status);
         }
 
+        if let Some(config) = config {
+            use iced::Alignment;
+
+            let choose_label = if config.executable().is_some() {
+                "Change Path"
+            } else {
+                "Select Path"
+            };
+            let mut path_actions = row![Self::secondary_button(
+                choose_label,
+                13.0,
+                Some(Message::OpenDialog(manager.clone())),
+            )]
+            .spacing(10)
+            .align_y(Alignment::Center);
+
+            if config.executable().is_some() {
+                path_actions = path_actions.push(Self::secondary_button(
+                    "Use $PATH",
+                    13.0,
+                    Some(Message::ResetExecutable(manager.clone())),
+                ));
+            }
+            content_items.push(path_actions.into());
+        }
+
         // Go binary configuration.
         if is_configured && manager.as_str() == "builtin:go" {
             content_items.extend(self.view_go_bin_config(pm_config));
@@ -871,6 +969,10 @@ impl Settings {
 
         if let Some(status) = &self.save_status {
             let (message, is_success) = match status {
+                SaveStatus::Success if self.is_dirty() => (
+                    "✓ Saved previous changes; newer changes remain unsaved".to_string(),
+                    true,
+                ),
                 SaveStatus::Success => ("✓ Successfully Saved".to_string(), true),
                 SaveStatus::Error(e) => (format!("✗ Failed To Save: {e}"), false),
             };
@@ -985,5 +1087,117 @@ mod tests {
 
         assert_eq!(settings.draft.managers, active.managers);
         assert!(settings.is_dirty());
+    }
+
+    #[test]
+    fn reset_executable_restores_path_discovery_and_clears_stale_status() {
+        let mut active = config_with_manager("builtin:cargo");
+        active.managers[0].executable = Some("/custom/cargo".into());
+        let manager = manager_id("builtin:cargo");
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+        settings.availability.insert(
+            manager.clone(),
+            Ok(ManagerAvailability::Unavailable {
+                reason: AvailabilityReason::CommandMissing {
+                    command: "/custom/cargo".to_owned(),
+                },
+            }),
+        );
+
+        let action = settings.update(Message::ResetExecutable(manager.clone()), &active, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(settings.draft.manager_executable(&manager), None);
+        assert!(!settings.availability.contains_key(&manager));
+        assert!(settings.is_dirty());
+    }
+
+    #[test]
+    fn failed_executable_validation_keeps_draft_and_baseline() {
+        let active = config_with_manager("builtin:cargo");
+        let manager = manager_id("builtin:cargo");
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+        settings.draft.managers[0].executable = Some("/invalid/cargo".into());
+        settings.is_saving = true;
+        let attempted = settings.draft.clone();
+
+        let action = settings.update(
+            Message::SaveConfigResult {
+                config: attempted.clone(),
+                validation: vec![(
+                    manager.clone(),
+                    Ok(ManagerAvailability::Unavailable {
+                        reason: AvailabilityReason::NotExecutable {
+                            path: "/invalid/cargo".into(),
+                        },
+                    }),
+                )],
+                result: Err("1 custom executable path(s) failed validation".to_owned()),
+            },
+            &active,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(!settings.is_saving);
+        assert_eq!(settings.baseline, active);
+        assert_eq!(settings.draft, attempted);
+        assert!(settings.is_dirty());
+        assert!(settings.availability.get(&manager).is_some_and(|result| {
+            result
+                .as_ref()
+                .is_ok_and(|availability| !availability.is_available())
+        }));
+        assert!(matches!(settings.save_status, Some(SaveStatus::Error(_))));
+    }
+
+    #[test]
+    fn successful_save_applies_snapshot_without_absorbing_newer_draft() {
+        let active = config_with_manager("builtin:cargo");
+        let manager = manager_id("builtin:cargo");
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+
+        let mut saved = active.clone();
+        saved.appearance = "dark".to_owned();
+        saved.managers[0].executable = Some("/saved/cargo".into());
+        settings.draft.clone_from(&saved);
+        settings.draft.notifications_enabled = true;
+        settings.draft.managers[0].executable = Some("/newer/cargo".into());
+        settings.is_saving = true;
+
+        let action = settings.update(
+            Message::SaveConfigResult {
+                config: saved.clone(),
+                validation: vec![(
+                    manager.clone(),
+                    Ok(ManagerAvailability::Available {
+                        version: Some("1.0.0".to_owned()),
+                    }),
+                )],
+                result: Ok(()),
+            },
+            &active,
+            &catalog,
+        );
+
+        let Action::ApplySavedConfig(applied) = action else {
+            panic!("successful save must apply the persisted snapshot");
+        };
+        assert_eq!(applied, saved);
+        assert_eq!(settings.baseline, saved);
+        assert!(settings.draft.notifications_enabled);
+        assert_eq!(
+            settings.draft.manager_executable(&manager),
+            Some("/newer/cargo".into())
+        );
+        assert!(!settings.availability.contains_key(&manager));
+        assert!(settings.is_dirty());
+        assert!(!settings.is_saving);
     }
 }
