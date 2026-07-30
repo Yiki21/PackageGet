@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use directories_next::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use updater_manager_api::ManagerId;
 
-use crate::content::OperationOutcome;
+use crate::{content::OperationOutcome, manager_catalog::ManagerCatalog};
 
 const MAX_ACTIVITY_RECORDS: usize = 50;
 
@@ -19,6 +20,10 @@ pub struct ActivityRecord {
     pub total_packages: usize,
     pub completed_managers: usize,
     pub total_managers: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_manager_id: Option<ManagerId>,
+    /// Legacy v1 display name retained for existing history files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_manager: Option<String>,
     pub error: Option<String>,
 }
@@ -35,30 +40,29 @@ pub struct CancelledProgress {
 impl ActivityRecord {
     pub fn from_outcome(id: u64, outcome: &OperationOutcome) -> Self {
         Self {
-            version: 1,
+            version: 2,
             id,
             action: outcome.action.label().to_owned(),
             completed_packages: outcome.completed_packages,
             total_packages: outcome.total_packages,
             completed_managers: outcome.completed_managers,
             total_managers: outcome.total_managers,
-            failed_manager: outcome
-                .failed_manager
-                .as_ref()
-                .map(|manager| manager.name().to_owned()),
+            failed_manager_id: outcome.failed_manager.clone(),
+            failed_manager: None,
             error: outcome.error.as_deref().map(redact_detail),
         }
     }
 
     pub fn cancelled(id: u64, progress: CancelledProgress) -> Self {
         Self {
-            version: 1,
+            version: 2,
             id,
             action: progress.action.to_owned(),
             completed_packages: progress.completed_packages.min(progress.total_packages),
             total_packages: progress.total_packages,
             completed_managers: progress.completed_managers.min(progress.total_managers),
             total_managers: progress.total_managers,
+            failed_manager_id: None,
             failed_manager: None,
             error: Some("Cancelled by user".to_owned()),
         }
@@ -68,10 +72,13 @@ impl ActivityRecord {
         format!("Operation #{} · {}", self.id, self.action)
     }
 
-    pub fn summary(&self) -> String {
-        let manager_suffix = self
-            .failed_manager
-            .as_deref()
+    pub fn summary(&self, catalog: &ManagerCatalog) -> String {
+        let manager_name = self
+            .failed_manager_id
+            .as_ref()
+            .map(|manager| catalog.display_name(manager))
+            .or(self.failed_manager.as_deref());
+        let manager_suffix = manager_name
             .map(|manager| format!(" · failed at {manager}"))
             .unwrap_or_default();
         let error_suffix = self
@@ -110,7 +117,7 @@ impl ActivityHistory {
         Self {
             records: records
                 .into_iter()
-                .filter(|record| record.version == 1)
+                .filter(|record| matches!(record.version, 1 | 2))
                 .take(MAX_ACTIVITY_RECORDS)
                 .collect(),
         }
@@ -194,6 +201,7 @@ mod tests {
                 total_packages: 1,
                 completed_managers: 1,
                 total_managers: 1,
+                failed_manager_id: None,
                 failed_manager: None,
                 error: None,
             });
@@ -209,5 +217,16 @@ mod tests {
             redact_detail("failed /home/user/private token=secret safe"),
             "failed <redacted> <redacted> safe"
         );
+    }
+
+    #[test]
+    fn legacy_v1_failed_manager_name_remains_readable() {
+        let record: ActivityRecord = serde_json::from_str(
+            r#"{"version":1,"id":4,"action":"Update","completed_packages":0,"total_packages":1,"completed_managers":0,"total_managers":1,"failed_manager":"DNF","error":"failed"}"#,
+        )
+        .unwrap();
+
+        assert!(record.failed_manager_id.is_none());
+        assert_eq!(record.failed_manager.as_deref(), Some("DNF"));
     }
 }

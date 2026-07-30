@@ -2,14 +2,13 @@ use std::collections::HashMap;
 
 use iced::Task;
 use rfd::FileHandle;
-use updater_core::{
-    ALL_APP_PACKAGE_MANAGERS, ALL_PACKAGE_MANAGERS, ManagerConfig, PackageManagerAvailability,
-    PackageManagerType,
-};
+use updater_core::{ALL_PACKAGE_MANAGERS, ManagerConfig, PackageManagerAvailability};
+use updater_manager_api::{ManagerCategory, ManagerId};
 
 use crate::{
     content::shared::SharedUi,
     icon::{ADD_ICON, REFRESH_ICON, SAVE_ICON},
+    manager_catalog::ManagerCatalog,
     theme,
 };
 
@@ -26,11 +25,11 @@ pub struct Settings {
     /// Whether package-manager auto detection is in progress.
     pub is_detecting: bool,
     /// Manager currently waiting for custom-path selection.
-    pub selecting_manager: Option<PackageManagerType>,
+    pub selecting_manager: Option<ManagerId>,
     /// Managers detected from PATH scan.
-    pub detected_in_path: Vec<PackageManagerType>,
+    pub detected_in_path: Vec<ManagerId>,
     /// Last availability result for each manager.
-    pub availability: HashMap<PackageManagerType, PackageManagerAvailability>,
+    pub availability: HashMap<ManagerId, PackageManagerAvailability>,
     /// Last save result shown in UI.
     pub save_status: Option<SaveStatus>,
 }
@@ -48,17 +47,17 @@ pub enum Message {
     /// Package-manager detection message.
     DetectPackageManagers,
     /// Detection result message.
-    FinishDetect(Vec<(PackageManagerType, PackageManagerAvailability)>),
+    FinishDetect(Vec<(ManagerId, PackageManagerAvailability)>),
     /// Manager-add message.
-    AddDetectedManager(PackageManagerType),
+    AddDetectedManager(ManagerId),
     /// Manager-remove message.
-    UnloadManager(PackageManagerType),
+    UnloadManager(ManagerId),
     /// Config-save message.
     SaveConfig,
     /// Config-save result message.
     SaveConfigResult(Result<(), String>),
     /// Manager-path dialog message.
-    OpenDialog(PackageManagerType),
+    OpenDialog(ManagerId),
     /// Manager-path selection message.
     SelectedPath(FileHandle),
     /// Selection-cancel message.
@@ -179,7 +178,7 @@ impl Settings {
                     let mut results = Vec::with_capacity(ALL_PACKAGE_MANAGERS.len());
                     for manager_type in ALL_PACKAGE_MANAGERS {
                         let availability = manager_type.availability_with_config(&config).await;
-                        results.push((*manager_type, availability));
+                        results.push((manager_type.manager_id(), availability));
                     }
                     results
                 })
@@ -190,25 +189,25 @@ impl Settings {
                 self.is_detecting = false;
                 self.detected_in_path = results
                     .iter()
-                    .filter_map(|(manager_type, availability)| {
-                        availability.is_available().then_some(*manager_type)
+                    .filter_map(|(manager, availability)| {
+                        availability.is_available().then_some(manager.clone())
                     })
                     .collect();
                 self.availability = results.into_iter().collect();
                 Action::None
             }
-            Message::AddDetectedManager(manager_type) => {
-                let id = manager_type.manager_id();
-                let exists = self.draft.manager(&id).is_some();
+            Message::AddDetectedManager(manager) => {
+                let exists = self.draft.manager(&manager).is_some();
 
                 if !exists {
-                    self.draft.managers.push(ManagerConfig::new(id));
+                    self.draft.managers.push(ManagerConfig::new(manager));
                 }
                 Action::None
             }
-            Message::UnloadManager(manager_type) => {
-                let id = manager_type.manager_id();
-                self.draft.managers.retain(|manager| manager.id != id);
+            Message::UnloadManager(manager) => {
+                self.draft
+                    .managers
+                    .retain(|configured| configured.id != manager);
                 Action::None
             }
             Message::SaveConfig => {
@@ -235,8 +234,8 @@ impl Settings {
                     }
                 }
             }
-            Message::OpenDialog(manager_type) => {
-                self.selecting_manager = Some(manager_type);
+            Message::OpenDialog(manager) => {
+                self.selecting_manager = Some(manager);
 
                 let task = Task::future(
                     rfd::AsyncFileDialog::new()
@@ -251,23 +250,21 @@ impl Settings {
                 Action::Run(task)
             }
             Message::SelectedPath(file_handle) => {
-                if let Some(manager_type) = self.selecting_manager {
+                if let Some(manager) = self.selecting_manager.take() {
                     let path = file_handle.path().to_path_buf();
-                    self.availability.remove(&manager_type);
-                    let id = manager_type.manager_id();
+                    self.availability.remove(&manager);
 
-                    if let Some(existing) = self.draft.manager_mut(&id) {
+                    if let Some(existing) = self.draft.manager_mut(&manager) {
                         existing.executable = Some(path);
                     } else {
                         self.draft
                             .managers
-                            .push(ManagerConfig::new(id).with_executable(path));
+                            .push(ManagerConfig::new(manager).with_executable(path));
                     }
                 } else {
-                    log::error!("No package manager type selected when handling SelectedPath");
+                    log::error!("No package manager selected when handling SelectedPath");
                 }
 
-                self.selecting_manager = None;
                 Action::None
             }
             Message::CancelSelection => {
@@ -317,7 +314,11 @@ impl Settings {
         }
     }
 
-    pub fn view(&self, _active_config: &updater_core::Config) -> iced::Element<'static, Message> {
+    pub fn view(
+        &self,
+        _active_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
+    ) -> iced::Element<'static, Message> {
         use iced::Length;
         use iced::widget::{column, container, scrollable};
 
@@ -329,10 +330,10 @@ impl Settings {
                 format!("{} package managers configured", pm_config.managers.len()),
                 theme::colors::SETTINGS,
             ),
-            self.view_system_manager_section(pm_config),
+            self.view_system_manager_section(pm_config, catalog),
             self.view_appearance_section(pm_config),
-            self.view_app_manager_section(pm_config),
-            self.view_selection_list(pm_config),
+            self.view_app_manager_section(pm_config, catalog),
+            self.view_selection_list(pm_config, catalog),
             self.view_buttons(),
             self.view_status(),
         ]
@@ -368,43 +369,43 @@ impl Settings {
     fn view_system_manager_section(
         &self,
         pm_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
-        use iced::widget::{column, row, text};
+        use iced::widget::{column, text};
 
-        let system_manager = pm_config.managers.iter().find_map(|manager| {
-            let manager_type = PackageManagerType::from_manager_id(&manager.id)?;
-            manager_type
-                .is_system_manager()
-                .then_some((manager_type, manager))
-        });
+        let system_managers = pm_config
+            .managers
+            .iter()
+            .filter(|manager| {
+                catalog
+                    .descriptor(&manager.id)
+                    .is_some_and(|descriptor| descriptor.category() == ManagerCategory::System)
+            })
+            .collect::<Vec<_>>();
 
-        let content = if let Some((manager_type, manager)) = system_manager {
-            let path_info = manager
-                .executable()
-                .as_ref()
-                .map(|path| format!("Path: {}", path.display()))
-                .unwrap_or_else(|| "Path: $PATH (System Default)".to_string());
-
-            column![
-                row![
-                    text(manager_type.name()).size(16),
-                    text("✓").size(16).style(theme::text_success),
-                ]
-                .spacing(10),
-                text(path_info)
-                    .size(13)
-                    .font(theme::FONT_MONO)
-                    .style(theme::text_on_surface_muted),
-                self.availability_text(manager_type),
-            ]
-            .spacing(8)
-        } else {
+        let content = if system_managers.is_empty() {
             column![
                 text("Not detected")
                     .size(16)
                     .style(theme::text_on_surface_muted)
             ]
             .spacing(8)
+        } else {
+            column(
+                system_managers
+                    .into_iter()
+                    .map(|manager| {
+                        self.view_manager_item(
+                            &manager.id,
+                            Some(manager),
+                            false,
+                            pm_config,
+                            catalog,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .spacing(12)
         };
 
         column![
@@ -455,6 +456,7 @@ impl Settings {
     fn view_app_manager_section(
         &self,
         pm_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
         use iced::widget::{column, container, row, text};
@@ -462,9 +464,10 @@ impl Settings {
         let configured_managers = pm_config
             .managers
             .iter()
-            .filter_map(|manager| {
-                let manager_type = PackageManagerType::from_manager_id(&manager.id)?;
-                (!manager_type.is_system_manager()).then_some((manager_type, manager))
+            .filter(|manager| {
+                catalog.descriptor(&manager.id).map_or(true, |descriptor| {
+                    descriptor.category() != ManagerCategory::System
+                })
             })
             .collect::<Vec<_>>();
 
@@ -477,20 +480,21 @@ impl Settings {
         } else {
             column(
                 configured_managers
-                    .iter()
-                    .map(|(manager_type, manager)| {
+                    .into_iter()
+                    .map(|manager| {
                         let unload_btn = Self::secondary_button(
                             "Unload",
                             14.0,
-                            Some(Message::UnloadManager(*manager_type)),
+                            Some(Message::UnloadManager(manager.id.clone())),
                         );
 
                         row![
                             container(self.view_manager_item(
-                                *manager_type,
+                                &manager.id,
                                 Some(manager),
                                 false,
                                 pm_config,
+                                catalog,
                             ))
                             .width(iced::Length::Fill),
                             unload_btn
@@ -517,19 +521,25 @@ impl Settings {
     fn view_selection_list(
         &self,
         pm_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
 
-        let selection_list: Vec<PackageManagerType> = ALL_APP_PACKAGE_MANAGERS
+        let selection_list: Vec<ManagerId> = ALL_PACKAGE_MANAGERS
             .iter()
-            .copied()
-            .filter(|manager_type| pm_config.manager(&manager_type.manager_id()).is_none())
+            .map(|manager_type| manager_type.manager_id())
+            .filter(|manager| {
+                catalog
+                    .descriptor(manager)
+                    .is_some_and(|descriptor| descriptor.category() != ManagerCategory::System)
+            })
+            .filter(|manager| pm_config.manager(manager).is_none())
             .collect();
 
         let detected_count = selection_list
             .iter()
-            .filter(|manager_type| self.detected_in_path.contains(manager_type))
+            .filter(|manager| self.detected_in_path.contains(manager))
             .count();
 
         let detect_tip = if self.is_detecting {
@@ -554,13 +564,13 @@ impl Settings {
             column(
                 selection_list
                     .iter()
-                    .map(|manager_type| {
-                        let detected_in_path = self.detected_in_path.contains(manager_type);
+                    .map(|manager| {
+                        let detected_in_path = self.detected_in_path.contains(manager);
 
                         let action_message = if detected_in_path {
-                            Message::AddDetectedManager(*manager_type)
+                            Message::AddDetectedManager(manager.clone())
                         } else {
-                            Message::OpenDialog(*manager_type)
+                            Message::OpenDialog(manager.clone())
                         };
 
                         let action_label = if detected_in_path {
@@ -578,10 +588,11 @@ impl Settings {
 
                         row![
                             container(self.view_manager_item(
-                                *manager_type,
+                                manager,
                                 None,
                                 detected_in_path,
-                                pm_config
+                                pm_config,
+                                catalog,
                             ))
                             .width(iced::Length::Fill),
                             add_btn
@@ -611,22 +622,24 @@ impl Settings {
 
     fn view_manager_item(
         &self,
-        manager_type: PackageManagerType,
+        manager: &ManagerId,
         config: Option<&ManagerConfig>,
         detected_in_path: bool,
         pm_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
         use iced::widget::{column, row, text};
 
         let is_configured = config.is_some();
+        let display_name = catalog.display_name(manager).to_owned();
         let name_row = if is_configured {
             row![
-                text(manager_type.name()).size(16),
+                text(display_name).size(16),
                 text("✓").size(16).style(theme::text_success)
             ]
             .spacing(10)
         } else {
-            row![text(manager_type.name()).size(16)].spacing(10)
+            row![text(display_name).size(16)].spacing(10)
         };
 
         let info_text = if let Some(config) = config {
@@ -637,7 +650,10 @@ impl Settings {
         } else if detected_in_path {
             "Detected in $PATH. Click Add to use system default path.".to_string()
         } else {
-            manager_type.description().to_string()
+            catalog.descriptor(manager).map_or_else(
+                || manager.as_str().to_owned(),
+                |descriptor| descriptor.description().to_owned(),
+            )
         };
 
         let mut content_items = vec![
@@ -653,25 +669,36 @@ impl Settings {
                 .into(),
         ];
 
-        if is_configured || detected_in_path || self.availability.contains_key(&manager_type) {
-            content_items.push(self.availability_text(manager_type));
+        if !catalog.is_registered(manager) {
+            content_items.push(
+                text("Status: unregistered / unavailable")
+                    .size(13)
+                    .style(theme::text_warning)
+                    .into(),
+            );
+        } else if !catalog.supports_current_platform(manager) {
+            content_items.push(
+                text("Status: unsupported on this platform")
+                    .size(13)
+                    .style(theme::text_warning)
+                    .into(),
+            );
+        } else if is_configured || detected_in_path || self.availability.contains_key(manager) {
+            content_items.push(self.availability_text(manager));
         }
 
         // Go binary configuration.
-        if is_configured && manager_type == PackageManagerType::Go {
+        if is_configured && manager.as_str() == "builtin:go" {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
 
         SharedUi::styled_container(column(content_items).spacing(8)).into()
     }
 
-    fn availability_text(
-        &self,
-        manager_type: PackageManagerType,
-    ) -> iced::Element<'static, Message> {
+    fn availability_text(&self, manager: &ManagerId) -> iced::Element<'static, Message> {
         use iced::widget::text;
 
-        let Some(availability) = self.availability.get(&manager_type) else {
+        let Some(availability) = self.availability.get(manager) else {
             return text("Status: not scanned")
                 .size(13)
                 .style(theme::text_on_surface_alt)
@@ -850,23 +877,27 @@ impl Settings {
 mod tests {
     use super::*;
 
-    fn config_with_manager(manager_type: PackageManagerType) -> updater_core::Config {
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
+
+    fn config_with_manager(manager: &str) -> updater_core::Config {
         updater_core::Config {
-            managers: vec![ManagerConfig::new(manager_type.manager_id())],
+            managers: vec![ManagerConfig::new(manager_id(manager))],
             ..updater_core::Config::default()
         }
     }
 
     #[test]
     fn draft_changes_do_not_mutate_active_config() {
-        let active = config_with_manager(PackageManagerType::Cargo);
+        let active = config_with_manager("builtin:cargo");
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
 
         settings
             .draft
             .managers
-            .push(ManagerConfig::new(PackageManagerType::Flatpak.manager_id()));
+            .push(ManagerConfig::new(manager_id("builtin:flatpak")));
 
         assert!(settings.is_dirty());
         assert_eq!(active.managers.len(), 1);
@@ -875,7 +906,7 @@ mod tests {
 
     #[test]
     fn discard_restores_last_baseline() {
-        let active = config_with_manager(PackageManagerType::Cargo);
+        let active = config_with_manager("builtin:cargo");
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
         settings.draft.managers[0].executable = Some("/tmp/cargo".into());
@@ -888,8 +919,8 @@ mod tests {
 
     #[test]
     fn external_sync_does_not_overwrite_dirty_draft() {
-        let active = config_with_manager(PackageManagerType::Cargo);
-        let replacement = config_with_manager(PackageManagerType::Flatpak);
+        let active = config_with_manager("builtin:cargo");
+        let replacement = config_with_manager("builtin:flatpak");
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
         settings.draft.managers[0].executable = Some("/tmp/cargo".into());
@@ -902,5 +933,17 @@ mod tests {
             settings.draft.managers[0].executable(),
             Some(std::path::Path::new("/tmp/cargo"))
         );
+    }
+
+    #[test]
+    fn unknown_configured_manager_is_preserved_in_draft() {
+        let active = config_with_manager("org.example:custom");
+        let mut settings = Settings::default();
+
+        settings.sync_from_config(&active);
+        settings.draft.notifications_enabled = true;
+
+        assert_eq!(settings.draft.managers, active.managers);
+        assert!(settings.is_dirty());
     }
 }

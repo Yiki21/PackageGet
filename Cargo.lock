@@ -4370,6 +4370,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "updater-manager-api",
  "updater_core",
  "url",
 ]

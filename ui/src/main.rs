@@ -3,6 +3,7 @@ mod app;
 mod content;
 mod icon;
 mod init_workflows;
+mod manager_catalog;
 mod shortcut;
 mod sidebar;
 mod status_panel;

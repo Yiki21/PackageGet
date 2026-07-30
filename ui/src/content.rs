@@ -104,6 +104,7 @@ impl Content {
         installed_info: &mut InstalledInfo,
         updates_info: &mut UpdatesInfo,
         finding_info: &mut FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
         let pm_config_ref: &updater_core::Config = pm_config;
 
@@ -123,9 +124,9 @@ impl Content {
                 }
             }
             Message::Installed(installed_msg) => {
-                let action = self
-                    .installed
-                    .update(installed_msg, pm_config_ref, installed_info);
+                let action =
+                    self.installed
+                        .update(installed_msg, pm_config_ref, installed_info, catalog);
                 match action {
                     installed::Action::Run(task) => Action::Run(task.map(Message::Installed)),
                     installed::Action::CancellableRun(task, cancellation) => {
@@ -144,7 +145,7 @@ impl Content {
             Message::Updates(updates_msg) => {
                 let action = self
                     .updates
-                    .update(updates_msg, pm_config_ref, updates_info);
+                    .update(updates_msg, pm_config_ref, updates_info, catalog);
                 match action {
                     updates::Action::Run(task) => Action::Run(task.map(Message::Updates)),
                     updates::Action::CancellableRun(task, cancellation) => {
@@ -163,7 +164,7 @@ impl Content {
             Message::Finding(finding_msg) => {
                 let action = self
                     .finding
-                    .update(finding_msg, pm_config_ref, finding_info);
+                    .update(finding_msg, pm_config_ref, finding_info, catalog);
                 match action {
                     finding::Action::Run(task) => Action::Run(task.map(Message::Finding)),
                     finding::Action::CancellableRun(task, cancellation) => {
@@ -265,19 +266,20 @@ impl Content {
         installed_info: &InstalledInfo,
         updates_info: &UpdatesInfo,
         finding_info: &FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Option<Message> {
         match self.active_content {
             ActiveContentPage::Finding => self
                 .finding
-                .move_keyboard_selection(finding_info, direction)
+                .move_keyboard_selection(finding_info, catalog, direction)
                 .map(Message::Finding),
             ActiveContentPage::Updates => self
                 .updates
-                .move_keyboard_selection(updates_info, direction)
+                .move_keyboard_selection(updates_info, catalog, direction)
                 .map(Message::Updates),
             ActiveContentPage::Installed => self
                 .installed
-                .move_keyboard_selection(installed_info, direction)
+                .move_keyboard_selection(installed_info, catalog, direction)
                 .map(Message::Installed),
             ActiveContentPage::Settings => None,
         }
@@ -321,23 +323,45 @@ impl Content {
         installed_info: &'a InstalledInfo,
         updates_info: &'a UpdatesInfo,
         finding_info: &'a FindingInfo,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
         match self.active_content {
             ActiveContentPage::Finding => self
                 .finding
-                .view(finding_info, pm_config, show_inspector, inspector_drawer)
+                .view(
+                    finding_info,
+                    pm_config,
+                    catalog,
+                    show_inspector,
+                    inspector_drawer,
+                )
                 .map(Message::Finding),
             ActiveContentPage::Updates => self
                 .updates
-                .view(updates_info, pm_config, show_inspector, inspector_drawer)
+                .view(
+                    updates_info,
+                    pm_config,
+                    catalog,
+                    show_inspector,
+                    inspector_drawer,
+                )
                 .map(Message::Updates),
             ActiveContentPage::Installed => self
                 .installed
-                .view(installed_info, pm_config, show_inspector, inspector_drawer)
+                .view(
+                    installed_info,
+                    pm_config,
+                    catalog,
+                    show_inspector,
+                    inspector_drawer,
+                )
                 .map(Message::Installed),
-            ActiveContentPage::Settings => self.settings.view(pm_config).map(Message::Settings),
+            ActiveContentPage::Settings => self
+                .settings
+                .view(pm_config, catalog)
+                .map(Message::Settings),
         }
     }
 }

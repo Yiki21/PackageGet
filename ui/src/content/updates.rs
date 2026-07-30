@@ -4,14 +4,16 @@ use std::collections::{HashMap, HashSet};
 
 use iced::Task;
 use updater_core::{PackageManagerType, PackageUpdate};
+use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{PackageSelectionKey, SharedUi},
     content::workflows::{
         BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
-        collect_selected_package_groups, push_command_log, run_grouped_package_action,
+        collect_selected_package_groups, run_grouped_package_action,
     },
+    manager_catalog::ManagerCatalog,
     theme,
 };
 
@@ -24,17 +26,17 @@ pub struct Updates {
     /// Last inspector action error shown in UI.
     inspector_error: Option<String>,
     /// Sources still refreshing for an Update All preflight.
-    update_all_refreshing: HashSet<PackageManagerType>,
+    update_all_refreshing: HashSet<ManagerId>,
     /// Full source scope used to build the current preflight plan.
-    update_all_scope: HashSet<PackageManagerType>,
+    update_all_scope: HashSet<ManagerId>,
     /// Frozen Update All plan waiting for confirmation.
     pending_update_all: Option<UpdatePlan>,
 }
 
 #[derive(Debug, Clone)]
 struct UpdatePlan {
-    manager_groups: Vec<(PackageManagerType, Vec<String>)>,
-    failed_sources: Vec<PackageManagerType>,
+    manager_groups: Vec<(ManagerId, Vec<String>)>,
+    failed_sources: Vec<ManagerId>,
 }
 
 impl UpdatePlan {
@@ -53,15 +55,15 @@ impl UpdatePlan {
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Package-manager selection message.
-    SelectPackageManager(PackageManagerType, bool),
+    SelectPackageManager(ManagerId, bool),
     /// Updates-load result message.
-    LoadUpdatesResult(PackageManagerType, Result<Vec<PackageUpdate>, String>),
+    LoadUpdatesResult(ManagerId, Result<Vec<PackageUpdate>, String>),
     /// Search-query change message.
     SearchQueryChanged(String),
     /// Sort-option change message.
     SortOptionChanged(SortOption),
     /// Package-selection toggle message.
-    TogglePackageSelection(PackageManagerType, String, bool),
+    TogglePackageSelection(ManagerId, String, bool),
     /// Select-all toggle message.
     ToggleSelectAll(bool),
     /// Update-selected message.
@@ -73,7 +75,7 @@ pub enum Message {
         /// Total packages to update.
         total: usize,
         /// Manager currently executing command.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Current package being processed.
         current_package: String,
         /// Optional command output/status line.
@@ -86,9 +88,9 @@ pub enum Message {
     /// Full refresh message.
     RefreshAll,
     /// Retry loading one package manager.
-    RetryLoad(PackageManagerType),
+    RetryLoad(ManagerId),
     /// Show an update in the package inspector.
-    InspectPackage(PackageManagerType, String),
+    InspectPackage(ManagerId, String),
     /// Copy text from the inspector.
     CopyInspectorText(String),
     /// Refresh all sources and prepare an Update All plan.
@@ -104,15 +106,15 @@ pub enum Message {
 #[derive(Debug, Clone, Default)]
 pub struct UpdatesInfo {
     /// Updates cache by manager `(count, updates)`.
-    pub updates_by_manager: HashMap<PackageManagerType, (usize, Vec<PackageUpdate>)>,
+    pub updates_by_manager: HashMap<ManagerId, (usize, Vec<PackageUpdate>)>,
     /// Initial update-loading failures grouped by manager.
     pub init_errors: ManagerErrors,
     /// Full update-list loading failures grouped by manager.
     pub load_errors: ManagerErrors,
     /// Managers selected in the filter panel.
-    pub selected_managers: HashSet<PackageManagerType>,
+    pub selected_managers: HashSet<ManagerId>,
     /// Managers currently loading update list.
-    pub loading_updates: HashSet<PackageManagerType>,
+    pub loading_updates: HashSet<ManagerId>,
     /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
     /// Whether counts have ever been loaded.
@@ -128,13 +130,13 @@ pub struct UpdatesInfo {
     /// Whether update operation is in progress.
     pub is_updating: bool,
     /// Update progress `(completed, total, manager, package)`.
-    pub update_progress: Option<(usize, usize, PackageManagerType, String)>,
+    pub update_progress: Option<(usize, usize, ManagerId, String)>,
     /// Update command logs.
     pub update_logs: Vec<String>,
     /// Last update error shown in UI.
     pub last_update_error: Option<String>,
     /// Source that failed during the most recent update operation.
-    pub failed_update_manager: Option<PackageManagerType>,
+    pub failed_update_manager: Option<ManagerId>,
 }
 
 pub enum Action {
@@ -175,12 +177,43 @@ impl SortOption {
     ];
 }
 
+fn push_update_command_log(
+    logs: &mut Vec<String>,
+    catalog: &ManagerCatalog,
+    manager: &ManagerId,
+    package_name: &str,
+    command_message: String,
+) {
+    let command_message = command_message.trim();
+    if command_message.is_empty() {
+        return;
+    }
+
+    logs.push(format!(
+        "[Update][{}][{}] {}",
+        catalog.display_name(manager),
+        if package_name.is_empty() {
+            "batch"
+        } else {
+            package_name
+        },
+        command_message
+    ));
+
+    const MAX_COMMAND_LOGS: usize = 120;
+    if logs.len() > MAX_COMMAND_LOGS {
+        let overflow = logs.len() - MAX_COMMAND_LOGS;
+        logs.drain(0..overflow);
+    }
+}
+
 impl Updates {
     pub fn update(
         &mut self,
         message: Message,
         pm_config: &updater_core::Config,
         info: &mut UpdatesInfo,
+        catalog: &ManagerCatalog,
     ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
@@ -190,32 +223,32 @@ impl Updates {
                         return Action::None;
                     }
 
-                    info.selected_managers.insert(pm_type);
+                    info.selected_managers.insert(pm_type.clone());
 
                     if info.init_errors.contains_key(&pm_type)
                         || info.load_errors.contains_key(&pm_type)
                     {
                         info.init_errors.remove(&pm_type);
                         info.load_errors.remove(&pm_type);
-                        info.loading_updates.insert(pm_type);
-                        Action::Run(Self::create_load_task(pm_config, pm_type, true))
+                        info.loading_updates.insert(pm_type.clone());
+                        Action::Run(Self::create_load_task(pm_config, pm_type, catalog, true))
                     } else if info.loading_updates.contains(&pm_type) {
                         Action::None
                     } else if let Some((count, packages)) = info.updates_by_manager.get(&pm_type) {
                         if *count == packages.len() {
                             Action::None
                         } else {
-                            info.loading_updates.insert(pm_type);
-                            Action::Run(Self::create_load_task(pm_config, pm_type, false))
+                            info.loading_updates.insert(pm_type.clone());
+                            Action::Run(Self::create_load_task(pm_config, pm_type, catalog, false))
                         }
                     } else {
-                        info.loading_updates.insert(pm_type);
-                        Action::Run(Self::create_load_task(pm_config, pm_type, false))
+                        info.loading_updates.insert(pm_type.clone());
+                        Action::Run(Self::create_load_task(pm_config, pm_type, catalog, false))
                     }
                 } else {
                     info.selected_managers.remove(&pm_type);
                     info.selected_packages
-                        .retain(|(manager, _)| *manager != pm_type);
+                        .retain(|(manager, _)| manager != &pm_type);
                     Action::None
                 }
             }
@@ -224,15 +257,18 @@ impl Updates {
                 apply_manager_counted_items_result(
                     &mut info.updates_by_manager,
                     &mut info.load_errors,
-                    pm_type,
+                    pm_type.clone(),
                     result,
                 );
 
                 if self.update_all_refreshing.remove(&pm_type)
                     && self.update_all_refreshing.is_empty()
                 {
-                    self.pending_update_all =
-                        Some(Self::build_update_plan(info, &self.update_all_scope));
+                    self.pending_update_all = Some(Self::build_update_plan(
+                        info,
+                        &self.update_all_scope,
+                        catalog,
+                    ));
                 }
                 Action::None
             }
@@ -241,7 +277,7 @@ impl Updates {
                 Action::None
             }
             Message::InspectPackage(pm_type, package_name) => {
-                self.inspected_package = Some(SharedUi::selection_key(pm_type, &package_name));
+                self.inspected_package = Some(SharedUi::selection_key(&pm_type, &package_name));
                 self.inspector_error = None;
                 Action::None
             }
@@ -257,7 +293,7 @@ impl Updates {
                 if info.is_updating {
                     return Action::None;
                 }
-                let key = SharedUi::selection_key(pm_type, &package_name);
+                let key = SharedUi::selection_key(&pm_type, &package_name);
                 if selected {
                     info.selected_packages.insert(key);
                 } else {
@@ -278,7 +314,7 @@ impl Updates {
                                 continue;
                             }
 
-                            let key = SharedUi::selection_key(*pm_type, &pkg.name);
+                            let key = SharedUi::selection_key(pm_type, &pkg.name);
                             if select_all {
                                 info.selected_packages.insert(key);
                             } else {
@@ -304,15 +340,18 @@ impl Updates {
                     .selected_packages
                     .iter()
                     .next()
-                    .map(|(pm_type, _)| *pm_type)
-                    .unwrap_or(PackageManagerType::Dnf);
+                    .map(|(manager, _)| manager.clone());
+                let Some(initial_manager) = initial_manager else {
+                    info.is_updating = false;
+                    return Action::None;
+                };
                 info.update_progress = Some((
                     0,
                     info.selected_packages.len(),
                     initial_manager,
                     String::new(),
                 ));
-                Self::update_packages_action(pm_config, info)
+                Self::update_packages_action(pm_config, info, catalog)
             }
             Message::UpdateProgress {
                 completed,
@@ -321,12 +360,12 @@ impl Updates {
                 current_package,
                 command_message,
             } => {
-                info.update_progress = Some((completed, total, manager, current_package));
+                info.update_progress = Some((completed, total, manager.clone(), current_package));
                 if let Some(command_message) = command_message {
-                    push_command_log(
+                    push_update_command_log(
                         &mut info.update_logs,
-                        PackageBatchAction::Update,
-                        manager,
+                        catalog,
+                        &manager,
                         info.update_progress
                             .as_ref()
                             .map_or("", |(_, _, _, package)| package.as_str()),
@@ -350,7 +389,7 @@ impl Updates {
                         reload: true,
                     }
                 } else {
-                    info.failed_update_manager = outcome.failed_manager;
+                    info.failed_update_manager = outcome.failed_manager.clone();
                     let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
                     log::error!("Failed to update packages: {}", error);
                     info.last_update_error = Some(error);
@@ -364,22 +403,21 @@ impl Updates {
                 if info.is_updating || !self.update_all_refreshing.is_empty() {
                     return Action::None;
                 }
-                let pm_types: Vec<PackageManagerType> =
-                    info.selected_managers.iter().copied().collect();
+                let managers: Vec<ManagerId> = info.selected_managers.iter().cloned().collect();
 
-                if pm_types.is_empty() {
+                if managers.is_empty() {
                     return Action::None;
                 }
 
                 // Mark selected managers as loading.
-                for pm_type in &pm_types {
-                    info.loading_updates.insert(*pm_type);
+                for manager in &managers {
+                    info.loading_updates.insert(manager.clone());
                 }
 
                 // Create load tasks for selected managers.
-                let tasks: Vec<Task<Message>> = pm_types
+                let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|pm_type| Self::create_load_task(pm_config, pm_type, true))
+                    .map(|manager| Self::create_load_task(pm_config, manager, catalog, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -394,13 +432,13 @@ impl Updates {
                     return Action::None;
                 }
 
-                for pm_type in &pm_types {
-                    info.loading_updates.insert(*pm_type);
+                for manager in &pm_types {
+                    info.loading_updates.insert(manager.clone());
                 }
 
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|pm_type| Self::create_load_task(pm_config, pm_type, true))
+                    .map(|manager| Self::create_load_task(pm_config, manager, catalog, true))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -414,8 +452,8 @@ impl Updates {
                 }
                 info.init_errors.remove(&pm_type);
                 info.load_errors.remove(&pm_type);
-                info.loading_updates.insert(pm_type);
-                Action::Run(Self::create_load_task(pm_config, pm_type, true))
+                info.loading_updates.insert(pm_type.clone());
+                Action::Run(Self::create_load_task(pm_config, pm_type, catalog, true))
             }
             Message::PrepareUpdateAll => {
                 if info.is_updating
@@ -430,19 +468,17 @@ impl Updates {
                 }
 
                 self.pending_update_all = None;
-                self.update_all_scope = managers.iter().copied().collect();
+                self.update_all_scope = managers.iter().cloned().collect();
                 self.update_all_refreshing = self.update_all_scope.clone();
                 for manager in &managers {
                     info.init_errors.remove(manager);
                     info.load_errors.remove(manager);
-                    info.loading_updates.insert(*manager);
+                    info.loading_updates.insert(manager.clone());
                 }
 
-                Action::Run(Task::batch(
-                    managers
-                        .into_iter()
-                        .map(|manager| Self::create_load_task(pm_config, manager, true)),
-                ))
+                Action::Run(Task::batch(managers.into_iter().map(|manager| {
+                    Self::create_load_task(pm_config, manager, catalog, true)
+                })))
             }
             Message::ConfirmUpdateAll => {
                 let Some(plan) = self.pending_update_all.take() else {
@@ -453,7 +489,7 @@ impl Updates {
                 }
 
                 let total = plan.package_count();
-                let initial_manager = plan.manager_groups[0].0;
+                let initial_manager = plan.manager_groups[0].0.clone();
                 info.is_updating = true;
                 info.last_update_error = None;
                 info.update_logs.clear();
@@ -477,12 +513,12 @@ impl Updates {
                 };
 
                 self.pending_update_all = None;
-                self.update_all_scope = HashSet::from([manager]);
+                self.update_all_scope = HashSet::from([manager.clone()]);
                 self.update_all_refreshing = self.update_all_scope.clone();
                 info.init_errors.remove(&manager);
                 info.load_errors.remove(&manager);
-                info.loading_updates.insert(manager);
-                Action::Run(Self::create_load_task(pm_config, manager, true))
+                info.loading_updates.insert(manager.clone());
+                Action::Run(Self::create_load_task(pm_config, manager, catalog, true))
             }
         }
     }
@@ -524,10 +560,11 @@ impl Updates {
     pub fn move_keyboard_selection(
         &self,
         info: &UpdatesInfo,
+        catalog: &ManagerCatalog,
         direction: crate::shortcut::SelectionDirection,
     ) -> Option<Message> {
         crate::content::shared::next_keyboard_package(
-            &self.keyboard_packages(info),
+            &self.keyboard_packages(info, catalog),
             self.inspected_package.as_ref(),
             direction,
         )
@@ -541,18 +578,27 @@ impl Updates {
         }
         let selected = !info
             .selected_packages
-            .contains(&SharedUi::selection_key(*manager, name));
+            .contains(&SharedUi::selection_key(manager, name));
         Some(Message::TogglePackageSelection(
-            *manager,
+            manager.clone(),
             name.clone(),
             selected,
         ))
     }
 
-    fn keyboard_packages(&self, info: &UpdatesInfo) -> Vec<PackageSelectionKey> {
+    fn keyboard_packages(
+        &self,
+        info: &UpdatesInfo,
+        catalog: &ManagerCatalog,
+    ) -> Vec<PackageSelectionKey> {
         let query = self.search_query.trim().to_lowercase();
-        let mut managers: Vec<_> = info.selected_managers.iter().copied().collect();
-        managers.sort_by_key(|manager| manager.name());
+        let mut managers: Vec<_> = info.selected_managers.iter().cloned().collect();
+        managers.sort_by(|left, right| {
+            catalog
+                .display_name(left)
+                .cmp(catalog.display_name(right))
+                .then_with(|| left.cmp(right))
+        });
         managers
             .into_iter()
             .flat_map(|manager| {
@@ -566,7 +612,7 @@ impl Updates {
                     .filter(move |package| {
                         query.is_empty() || package.name.to_lowercase().contains(&query)
                     })
-                    .map(move |package| (manager, package.name.clone()))
+                    .map(move |package| (manager.clone(), package.name.clone()))
             })
             .collect()
     }
@@ -575,6 +621,7 @@ impl Updates {
         &'a self,
         info: &'a UpdatesInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -600,7 +647,7 @@ impl Updates {
                 .spacing(theme::spacing::MD)
                 .align_y(iced::Alignment::End),
                 row![
-                    container(self.manager_filter_view(info, pm_config))
+                    container(self.manager_filter_view(info, pm_config, catalog))
                         .width(iced::Length::FillPortion(2)),
                     container(self.sort_order_view(info)).width(iced::Length::FillPortion(1)),
                 ]
@@ -641,9 +688,9 @@ impl Updates {
             ),
             SharedUi::summary_row(summary_items),
             toolbar,
-            self.batch_actions_view(info),
-            self.update_all_confirmation_view(),
-            self.updates_list_view(info, show_inspector, inspector_drawer),
+            self.batch_actions_view(info, catalog),
+            self.update_all_confirmation_view(catalog),
+            self.updates_list_view(info, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -656,10 +703,12 @@ impl Updates {
         &self,
         info: &'a UpdatesInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         let filters_content = if !info.has_loading_count {
             SharedUi::loading_manager_filter_view(
                 pm_config,
+                catalog,
                 if info.is_loading_count {
                     "Loading update information..."
                 } else {
@@ -680,12 +729,12 @@ impl Updates {
 
             let entries = managers
                 .iter()
-                .map(|pm_type| {
+                .map(|manager| {
                     let count = info
                         .updates_by_manager
-                        .get(pm_type)
+                        .get(manager)
                         .map_or(0, |(count, _)| *count);
-                    (*pm_type, count)
+                    (manager.clone(), count)
                 })
                 .collect();
 
@@ -693,8 +742,9 @@ impl Updates {
                 entries,
                 &info.selected_managers,
                 &info.loading_updates,
-                move |pm_type| {
-                    info.is_loading_count && !info.updates_by_manager.contains_key(&pm_type)
+                catalog,
+                move |manager| {
+                    info.is_loading_count && !info.updates_by_manager.contains_key(manager)
                 },
                 Message::SelectPackageManager,
             )
@@ -762,6 +812,7 @@ impl Updates {
     fn updates_list_view<'a>(
         &'a self,
         info: &'a UpdatesInfo,
+        catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -790,10 +841,10 @@ impl Updates {
         let filtered_managers: Vec<_> = info
             .selected_managers
             .iter()
-            .filter_map(|pm_type| {
+            .filter_map(|manager| {
                 info.updates_by_manager
-                    .get(pm_type)
-                    .map(|entry| (*pm_type, entry))
+                    .get(manager)
+                    .map(|entry| (manager.clone(), entry))
             })
             .collect();
 
@@ -821,8 +872,8 @@ impl Updates {
 
         let updates_sections: Vec<iced::Element<'_, Message>> = filtered_managers
             .into_iter()
-            .map(|(pm_type, (count, packages))| {
-                self.package_manager_section(pm_type, *count, packages, info)
+            .map(|(manager, (count, packages))| {
+                self.package_manager_section(manager, *count, packages, info, catalog)
             })
             .collect();
 
@@ -834,7 +885,7 @@ impl Updates {
                 .get(manager)
                 .and_then(|(_, packages)| packages.iter().find(|package| package.name == *name))
                 .map(|package| crate::content::shared::PackageInspector {
-                    manager: *manager,
+                    manager: manager.clone(),
                     name: &package.name,
                     version: &package.current_version,
                     available_version: Some(&package.new_version),
@@ -846,6 +897,7 @@ impl Updates {
         });
         let inspector = SharedUi::package_inspector(
             inspected,
+            catalog,
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::CopyInspectorText,
@@ -886,12 +938,13 @@ impl Updates {
 
     fn package_manager_section<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager: ManagerId,
         count: usize,
         packages: &'a [PackageUpdate],
         info: &'a UpdatesInfo,
+        catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
-        let is_loading = info.loading_updates.contains(&pm_type);
+        let is_loading = info.loading_updates.contains(&manager);
         let filtered_packages = self.filter_and_sort_updates(packages, info.sort_by);
         let subtitle = if is_loading {
             "(Loading...)".to_owned()
@@ -903,22 +956,23 @@ impl Updates {
             iced::widget::column(
                 filtered_packages
                     .into_iter()
-                    .map(|pkg| self.package_item_view(pm_type, pkg, info)),
+                    .map(|pkg| self.package_item_view(manager.clone(), pkg, info)),
             )
             .spacing(8)
             .into()
         });
 
         SharedUi::manager_section(
-            pm_type,
+            manager.clone(),
+            catalog,
             subtitle,
             theme::colors::UPDATES,
             "Failed to load updates",
             info.load_errors
-                .get(&pm_type)
-                .or_else(|| info.init_errors.get(&pm_type))
+                .get(&manager)
+                .or_else(|| info.init_errors.get(&manager))
                 .map(String::as_str),
-            || Message::RetryLoad(pm_type),
+            || Message::RetryLoad(manager),
             body,
         )
     }
@@ -957,7 +1011,7 @@ impl Updates {
 
     fn package_item_view<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager: ManagerId,
         package: &'a PackageUpdate,
         info: &'a UpdatesInfo,
     ) -> iced::Element<'a, Message> {
@@ -966,13 +1020,14 @@ impl Updates {
         let package_name = package.name.clone();
         let is_selected = info
             .selected_packages
-            .contains(&SharedUi::selection_key(pm_type, &package.name));
+            .contains(&SharedUi::selection_key(&manager, &package.name));
 
         let package_checkbox = checkbox(is_selected)
             .on_toggle_maybe((!info.is_updating).then_some({
                 let package_name = package_name.clone();
+                let manager = manager.clone();
                 move |selected| {
-                    Message::TogglePackageSelection(pm_type, package_name.clone(), selected)
+                    Message::TogglePackageSelection(manager.clone(), package_name.clone(), selected)
                 }
             }))
             .size(18)
@@ -1010,10 +1065,12 @@ impl Updates {
         .align_y(iced::Alignment::Center)
         .width(iced::Length::Fill);
 
-        let is_inspected = self
-            .inspected_package
-            .as_ref()
-            .is_some_and(|(manager, name)| *manager == pm_type && name == &package.name);
+        let is_inspected =
+            self.inspected_package
+                .as_ref()
+                .is_some_and(|(selected_manager, name)| {
+                    selected_manager == &manager && name == &package.name
+                });
         let details = button(
             column![
                 text(&package.name)
@@ -1028,7 +1085,7 @@ impl Updates {
         .padding([8, 10])
         .width(iced::Length::Fill)
         .style(theme::list_row(is_inspected))
-        .on_press(Message::InspectPackage(pm_type, package_name));
+        .on_press(Message::InspectPackage(manager, package_name));
 
         row![package_checkbox, details]
             .spacing(theme::spacing::SM)
@@ -1036,7 +1093,10 @@ impl Updates {
             .into()
     }
 
-    fn update_all_confirmation_view<'a>(&self) -> iced::Element<'a, Message> {
+    fn update_all_confirmation_view<'a>(
+        &'a self,
+        catalog: &'a ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
         use iced::widget::{button, column, container, row, text};
 
         let Some(plan) = &self.pending_update_all else {
@@ -1049,7 +1109,7 @@ impl Updates {
         let failed_names = plan
             .failed_sources
             .iter()
-            .map(PackageManagerType::name)
+            .map(|manager| catalog.display_name(manager))
             .collect::<Vec<_>>()
             .join(", ");
         let detail = if package_count == 0 && failed_count == 0 {
@@ -1114,7 +1174,11 @@ impl Updates {
         .into()
     }
 
-    fn batch_actions_view<'a>(&self, info: &'a UpdatesInfo) -> iced::Element<'a, Message> {
+    fn batch_actions_view<'a>(
+        &self,
+        info: &'a UpdatesInfo,
+        catalog: &'a ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
         use iced::widget::{button, checkbox, column, row, text};
 
         let selected_count = info.selected_packages.len();
@@ -1133,7 +1197,7 @@ impl Updates {
                     total_visible += 1;
                     if info
                         .selected_packages
-                        .contains(&SharedUi::selection_key(*pm_type, &package.name))
+                        .contains(&SharedUi::selection_key(pm_type, &package.name))
                     {
                         selected_visible += 1;
                     }
@@ -1153,7 +1217,7 @@ impl Updates {
                         completed,
                         total,
                         package,
-                        manager.name()
+                        catalog.display_name(manager)
                     )
                 }
             } else {
@@ -1217,7 +1281,7 @@ impl Updates {
             .align_y(iced::Alignment::Center);
 
         if let Some(error) = &info.last_update_error {
-            let retry = info.failed_update_manager.map(|_| {
+            let retry = info.failed_update_manager.as_ref().map(|_| {
                 button(
                     text("Re-scan Failed Source")
                         .size(13)
@@ -1246,21 +1310,30 @@ impl Updates {
 
     fn create_load_task(
         pm_config: &updater_core::Config,
-        pm_type: PackageManagerType,
+        manager: ManagerId,
+        catalog: &ManagerCatalog,
         force_refresh: bool,
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
+        let manager_name = catalog.display_name(&manager).to_owned();
+        let result_manager = manager.clone();
 
         Task::future(async move {
+            let pm_type = PackageManagerType::from_manager_id(&manager)
+                .ok_or_else(|| format!("Manager is not available in this build: {manager}"))?;
             pm_type
                 .list_updates_with_refresh(&pm_config, force_refresh)
                 .await
-                .map_err(|e| format!("Failed to load updates for {}: {}", pm_type.name(), e))
+                .map_err(|e| format!("Failed to load updates for {manager_name}: {e}"))
         })
-        .then(move |result| Task::done(Message::LoadUpdatesResult(pm_type, result)))
+        .then(move |result| Task::done(Message::LoadUpdatesResult(result_manager.clone(), result)))
     }
 
-    fn build_update_plan(info: &UpdatesInfo, scope: &HashSet<PackageManagerType>) -> UpdatePlan {
+    fn build_update_plan(
+        info: &UpdatesInfo,
+        scope: &HashSet<ManagerId>,
+        catalog: &ManagerCatalog,
+    ) -> UpdatePlan {
         let mut manager_groups: Vec<_> = info
             .updates_by_manager
             .iter()
@@ -1275,19 +1348,29 @@ impl Updates {
                     .map(|package| package.name.clone())
                     .collect();
                 names.sort();
-                (*manager, names)
+                (manager.clone(), names)
             })
             .collect();
-        manager_groups.sort_by_key(|(manager, _)| manager.name());
+        manager_groups.sort_by(|(left, _), (right, _)| {
+            catalog
+                .display_name(left)
+                .cmp(catalog.display_name(right))
+                .then_with(|| left.cmp(right))
+        });
 
         let mut failed_sources: Vec<_> = info
             .init_errors
             .keys()
             .chain(info.load_errors.keys())
             .filter(|manager| scope.contains(manager))
-            .copied()
+            .cloned()
             .collect();
-        failed_sources.sort_by_key(|manager| manager.name());
+        failed_sources.sort_by(|left, right| {
+            catalog
+                .display_name(left)
+                .cmp(catalog.display_name(right))
+                .then_with(|| left.cmp(right))
+        });
         failed_sources.dedup();
 
         UpdatePlan {
@@ -1298,7 +1381,7 @@ impl Updates {
 
     fn update_plan_action(
         pm_config: &updater_core::Config,
-        manager_groups: Vec<(PackageManagerType, Vec<String>)>,
+        manager_groups: Vec<(ManagerId, Vec<String>)>,
     ) -> Action {
         let cancellation = CancellationToken::default();
         let task = run_grouped_package_action(
@@ -1324,14 +1407,19 @@ impl Updates {
         Action::CancellableRun(task, cancellation)
     }
 
-    fn update_packages_action(pm_config: &updater_core::Config, info: &UpdatesInfo) -> Action {
+    fn update_packages_action(
+        pm_config: &updater_core::Config,
+        info: &UpdatesInfo,
+        catalog: &ManagerCatalog,
+    ) -> Action {
         let manager_groups = collect_selected_package_groups(
-            info.selected_managers.iter().filter_map(|pm_type| {
+            info.selected_managers.iter().filter_map(|manager| {
                 info.updates_by_manager
-                    .get(pm_type)
-                    .map(|(_, packages)| (*pm_type, packages.as_slice()))
+                    .get(manager)
+                    .map(|(_, packages)| (manager.clone(), packages.as_slice()))
             }),
             &info.selected_packages,
+            catalog,
             |package| package.name.as_str(),
         );
 
@@ -1342,6 +1430,10 @@ impl Updates {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
 
     fn update(name: &str) -> PackageUpdate {
         PackageUpdate {
@@ -1354,38 +1446,40 @@ mod tests {
     #[test]
     fn update_all_plan_excludes_failed_sources() {
         let mut info = UpdatesInfo::default();
-        info.updates_by_manager.insert(
-            PackageManagerType::Dnf,
-            (2, vec![update("alpha"), update("beta")]),
-        );
+        let dnf = manager_id("builtin:dnf");
+        let flatpak = manager_id("builtin:flatpak");
         info.updates_by_manager
-            .insert(PackageManagerType::Flatpak, (1, vec![update("gamma")]));
+            .insert(dnf.clone(), (2, vec![update("alpha"), update("beta")]));
+        info.updates_by_manager
+            .insert(flatpak.clone(), (1, vec![update("gamma")]));
         info.load_errors
-            .insert(PackageManagerType::Flatpak, "network error".to_owned());
-        let scope = HashSet::from([PackageManagerType::Dnf, PackageManagerType::Flatpak]);
+            .insert(flatpak.clone(), "network error".to_owned());
+        let scope = HashSet::from([dnf.clone(), flatpak.clone()]);
 
-        let plan = Updates::build_update_plan(&info, &scope);
+        let plan = Updates::build_update_plan(&info, &scope, &ManagerCatalog::builtin());
 
         assert_eq!(plan.package_count(), 2);
         assert_eq!(plan.manager_count(), 1);
-        assert_eq!(plan.manager_groups[0].0, PackageManagerType::Dnf);
-        assert_eq!(plan.failed_sources, vec![PackageManagerType::Flatpak]);
+        assert_eq!(plan.manager_groups[0].0, dnf);
+        assert_eq!(plan.failed_sources, vec![flatpak]);
     }
 
     #[test]
     fn failed_source_retry_plan_does_not_repeat_successful_sources() {
         let mut info = UpdatesInfo::default();
+        let dnf = manager_id("builtin:dnf");
+        let flatpak = manager_id("builtin:flatpak");
         info.updates_by_manager
-            .insert(PackageManagerType::Dnf, (1, vec![update("already-done")]));
+            .insert(dnf, (1, vec![update("already-done")]));
         info.updates_by_manager
-            .insert(PackageManagerType::Flatpak, (1, vec![update("retry-me")]));
-        let scope = HashSet::from([PackageManagerType::Flatpak]);
+            .insert(flatpak.clone(), (1, vec![update("retry-me")]));
+        let scope = HashSet::from([flatpak.clone()]);
 
-        let plan = Updates::build_update_plan(&info, &scope);
+        let plan = Updates::build_update_plan(&info, &scope, &ManagerCatalog::builtin());
 
         assert_eq!(plan.package_count(), 1);
         assert_eq!(plan.manager_count(), 1);
-        assert_eq!(plan.manager_groups[0].0, PackageManagerType::Flatpak);
+        assert_eq!(plan.manager_groups[0].0, flatpak);
         assert_eq!(plan.manager_groups[0].1, vec!["retry-me"]);
     }
 }

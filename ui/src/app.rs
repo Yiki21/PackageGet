@@ -5,10 +5,12 @@ use std::time::Instant;
 
 use iced::{Length, Subscription, Task};
 use updater_core::{PackageManagerType, PackageUpdate};
+use updater_manager_api::ManagerId;
 
 use crate::{
     content::{self, Content, FindingInfo, InstalledInfo, UpdatesInfo},
     init_workflows::{InitProgress, ManagerInitTask, run_manager_init_task},
+    manager_catalog::ManagerCatalog,
     shortcut::Shortcut,
     sidebar::{self, SideBar},
     status_panel::{self, StatusPanel},
@@ -40,6 +42,8 @@ pub struct App {
     pub sidebar: SideBar,
     /// Content state.
     pub content: Content,
+    /// Registered manager metadata used for UI identity and display.
+    manager_catalog: ManagerCatalog,
 
     /// Package manager configuration.
     pub pm_config: updater_core::Config,
@@ -127,14 +131,14 @@ pub enum Message {
         /// Total manager count.
         total: usize,
         /// Reporting manager.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Progress detail message.
         command_message: String,
     },
     /// Installed count payload for one manager.
     InitInstalledCount {
         /// Source manager.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Installed package count value or failure detail.
         result: Result<usize, String>,
     },
@@ -147,14 +151,14 @@ pub enum Message {
         /// Total manager count.
         total: usize,
         /// Reporting manager.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Progress detail message.
         command_message: String,
     },
     /// Updates payload for one manager.
     InitUpdatesCount {
         /// Source manager.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Update entries or failure detail.
         result: Result<Vec<PackageUpdate>, String>,
     },
@@ -170,6 +174,7 @@ impl App {
         let app = Self {
             sidebar: SideBar::default(),
             content: Content::default(),
+            manager_catalog: ManagerCatalog::builtin(),
             pm_config: updater_core::Config::default(),
             installed_info: InstalledInfo::default(),
             updates_info: UpdatesInfo::default(),
@@ -227,6 +232,7 @@ impl App {
                 &self.installed_info,
                 &self.updates_info,
                 &self.finding_info,
+                &self.manager_catalog,
             );
         }
         task
@@ -262,6 +268,7 @@ impl App {
                     &mut self.installed_info,
                     &mut self.updates_info,
                     &mut self.finding_info,
+                    &self.manager_catalog,
                 );
 
                 task = match action {
@@ -311,6 +318,7 @@ impl App {
                     &self.installed_info,
                     &self.updates_info,
                     &self.finding_info,
+                    &self.manager_catalog,
                 );
             }
             Message::CancelActiveOperation => {
@@ -486,6 +494,7 @@ impl App {
                     &self.installed_info,
                     &self.updates_info,
                     &self.finding_info,
+                    &self.manager_catalog,
                 ))
             }
             Shortcut::ToggleSelection => {
@@ -719,6 +728,7 @@ impl App {
                 &self.installed_info,
                 &self.updates_info,
                 &self.finding_info,
+                &self.manager_catalog,
                 show_inspector,
                 mode != LayoutMode::Wide,
             )
@@ -836,7 +846,7 @@ impl App {
                         iced::widget::text(record.title())
                             .size(13)
                             .font(crate::theme::FONT_SEMIBOLD),
-                        iced::widget::text(record.summary())
+                        iced::widget::text(record.summary(&self.manager_catalog))
                             .size(12)
                             .style(crate::theme::text_on_surface_muted),
                     ]
@@ -932,11 +942,7 @@ impl App {
         crate::shortcut::capture(layout.into())
     }
 
-    fn apply_init_installed_count(
-        &mut self,
-        manager: PackageManagerType,
-        result: Result<usize, String>,
-    ) {
+    fn apply_init_installed_count(&mut self, manager: ManagerId, result: Result<usize, String>) {
         self.installed_info.has_loading_count = true;
         match result {
             Ok(count) => {
@@ -948,7 +954,7 @@ impl App {
             Err(error) => {
                 self.installed_info
                     .installed_packages
-                    .entry(manager)
+                    .entry(manager.clone())
                     .or_insert_with(|| (0, Vec::new()));
                 self.installed_info.init_errors.insert(manager, error);
             }
@@ -964,7 +970,7 @@ impl App {
             .installed_info
             .selected_managers
             .iter()
-            .copied()
+            .cloned()
             .filter(|manager| !self.installed_info.init_errors.contains_key(manager))
             .collect();
         if managers.is_empty() {
@@ -972,23 +978,29 @@ impl App {
         }
 
         for manager in &managers {
-            self.installed_info.loading_installed.insert(*manager);
+            self.installed_info
+                .loading_installed
+                .insert(manager.clone());
         }
 
         Task::batch(managers.into_iter().map(|manager| {
             let config = self.pm_config.clone();
+            let task_manager = manager.clone();
             Task::future(async move {
-                manager.list_installed(&config).await.map_err(|error| {
+                let runtime =
+                    PackageManagerType::from_manager_id(&task_manager).ok_or_else(|| {
+                        format!("Manager is not available in this build: {task_manager}")
+                    })?;
+                runtime.list_installed(&config).await.map_err(|error| {
                     format!(
                         "Failed to load installed packages for {}: {}",
-                        manager.name(),
-                        error
+                        task_manager, error
                     )
                 })
             })
             .then(move |result| {
                 Task::done(Message::Content(content::Message::Installed(
-                    content::InstalledMessage::LoadInstalledResult(manager, result),
+                    content::InstalledMessage::LoadInstalledResult(manager.clone(), result),
                 )))
             })
         }))
@@ -996,7 +1008,7 @@ impl App {
 
     fn apply_init_updates_count(
         &mut self,
-        manager: PackageManagerType,
+        manager: ManagerId,
         result: Result<Vec<PackageUpdate>, String>,
     ) {
         self.updates_info.has_loading_count = true;
@@ -1011,7 +1023,7 @@ impl App {
             Err(error) => {
                 self.updates_info
                     .updates_by_manager
-                    .entry(manager)
+                    .entry(manager.clone())
                     .or_insert_with(|| (0, Vec::new()));
                 self.updates_info.init_errors.insert(manager, error);
             }
@@ -1028,14 +1040,15 @@ impl App {
         &mut self,
         completed: usize,
         total: usize,
-        manager: PackageManagerType,
+        manager: ManagerId,
         command_message: String,
     ) {
         self.installed_info.init_progress = Some((completed.min(total), total));
+        let manager_name = self.manager_catalog.display_name(&manager).to_owned();
         Self::push_init_log(
             &mut self.installed_info.init_logs,
             "InitInstalled",
-            manager,
+            &manager_name,
             command_message,
         );
     }
@@ -1044,14 +1057,15 @@ impl App {
         &mut self,
         completed: usize,
         total: usize,
-        manager: PackageManagerType,
+        manager: ManagerId,
         command_message: String,
     ) {
         self.updates_info.init_progress = Some((completed.min(total), total));
+        let manager_name = self.manager_catalog.display_name(&manager).to_owned();
         Self::push_init_log(
             &mut self.updates_info.init_logs,
             "InitUpdates",
-            manager,
+            &manager_name,
             command_message,
         );
     }
@@ -1059,7 +1073,7 @@ impl App {
     fn push_init_log(
         logs: &mut Vec<String>,
         phase: &str,
-        manager: PackageManagerType,
+        manager_name: &str,
         command_message: String,
     ) {
         let command_message = command_message.trim();
@@ -1067,12 +1081,7 @@ impl App {
             return;
         }
 
-        logs.push(format!(
-            "[{}][{}] {}",
-            phase,
-            manager.name(),
-            command_message
-        ));
+        logs.push(format!("[{phase}][{manager_name}] {command_message}"));
 
         const MAX_INIT_LOGS: usize = 120;
         if logs.len() > MAX_INIT_LOGS {
@@ -1081,11 +1090,11 @@ impl App {
         }
     }
 
-    fn configured_managers(config: &updater_core::Config) -> Vec<PackageManagerType> {
+    fn configured_managers(config: &updater_core::Config) -> Vec<ManagerId> {
         config
             .managers
             .iter()
-            .filter_map(|manager| PackageManagerType::from_manager_id(&manager.id))
+            .map(|manager| manager.id.clone())
             .collect()
     }
 
@@ -1102,8 +1111,8 @@ impl App {
     }
 
     fn reconcile_selected_managers(
-        selected: &mut HashSet<PackageManagerType>,
-        configured: &HashSet<PackageManagerType>,
+        selected: &mut HashSet<ManagerId>,
+        configured: &HashSet<ManagerId>,
         preserve: bool,
     ) {
         if preserve {
@@ -1180,7 +1189,7 @@ impl App {
 
     fn start_init_installed_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
         let managers = Self::configured_managers(&config);
-        let manager_set: HashSet<_> = managers.iter().copied().collect();
+        let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.installed_info
             .installed_packages
             .retain(|pm_type, _| manager_set.contains(pm_type));
@@ -1198,16 +1207,19 @@ impl App {
             managers,
             ManagerInitTask {
                 start_label: |_| "Running count_installed".to_string(),
-                complete_label: |pm: PackageManagerType, result: &Result<usize, String>| {
-                    match result {
-                        Ok(count) => format!("Done count_installed -> {}", count),
-                        Err(error) => {
-                            format!("count_installed failed for {} -> {}", pm.name(), error)
-                        }
-                    }
+                complete_label: |manager, result: &Result<usize, String>| match result {
+                    Ok(count) => format!("Done count_installed -> {}", count),
+                    Err(error) => format!("count_installed failed for {manager} -> {error}"),
                 },
-                work: |pm: PackageManagerType, config| async move {
-                    pm.count_installed(&config).await.map_err(|e| e.to_string())
+                work: |manager: ManagerId, config| async move {
+                    let runtime =
+                        PackageManagerType::from_manager_id(&manager).ok_or_else(|| {
+                            format!("Manager is not available in this build: {manager}")
+                        })?;
+                    runtime
+                        .count_installed(&config)
+                        .await
+                        .map_err(|error| error.to_string())
                 },
                 item_message: |manager, result| Message::InitInstalledCount { manager, result },
                 progress_message: |progress: InitProgress| Message::InitInstalledProgress {
@@ -1223,7 +1235,7 @@ impl App {
 
     fn start_init_updates_counts_task(&mut self, config: updater_core::Config) -> Task<Message> {
         let managers = Self::configured_managers(&config);
-        let manager_set: HashSet<_> = managers.iter().copied().collect();
+        let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.updates_info
             .updates_by_manager
             .retain(|pm_type, _| manager_set.contains(pm_type));
@@ -1242,21 +1254,24 @@ impl App {
             managers,
             ManagerInitTask {
                 start_label: |_| "Running list_updates".to_string(),
-                complete_label:
-                    |pm: PackageManagerType, result: &Result<Vec<PackageUpdate>, String>| {
-                        match result {
-                            Ok(updates) => {
-                                format!("Done list_updates -> {} updates", updates.len())
-                            }
-                            Err(error) => {
-                                format!("list_updates failed for {} -> {}", pm.name(), error)
-                            }
-                        }
-                    },
-                work: |pm: PackageManagerType, config| async move {
-                    pm.list_updates_with_refresh(&config, false)
+                complete_label: |manager, result: &Result<Vec<PackageUpdate>, String>| match result
+                {
+                    Ok(updates) => {
+                        format!("Done list_updates -> {} updates", updates.len())
+                    }
+                    Err(error) => {
+                        format!("list_updates failed for {manager} -> {error}")
+                    }
+                },
+                work: |manager: ManagerId, config| async move {
+                    let runtime =
+                        PackageManagerType::from_manager_id(&manager).ok_or_else(|| {
+                            format!("Manager is not available in this build: {manager}")
+                        })?;
+                    runtime
+                        .list_updates_with_refresh(&config, false)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(|error| error.to_string())
                 },
                 item_message: |manager, result| Message::InitUpdatesCount { manager, result },
                 progress_message: |progress: InitProgress| Message::InitUpdatesProgress {
@@ -1275,13 +1290,17 @@ impl App {
 mod tests {
     use super::*;
 
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
+
     #[test]
     fn preserving_context_prunes_unconfigured_managers() {
-        let configured = HashSet::from([PackageManagerType::Dnf, PackageManagerType::Flatpak]);
+        let configured = HashSet::from([manager_id("builtin:dnf"), manager_id("builtin:flatpak")]);
         let mut selected = HashSet::from([
-            PackageManagerType::Dnf,
-            PackageManagerType::Flatpak,
-            PackageManagerType::Cargo,
+            manager_id("builtin:dnf"),
+            manager_id("builtin:flatpak"),
+            manager_id("builtin:cargo"),
         ]);
 
         App::reconcile_selected_managers(&mut selected, &configured, true);
@@ -1291,11 +1310,22 @@ mod tests {
 
     #[test]
     fn resetting_context_clears_manager_selection() {
-        let configured = HashSet::from([PackageManagerType::Dnf]);
-        let mut selected = HashSet::from([PackageManagerType::Dnf]);
+        let configured = HashSet::from([manager_id("builtin:dnf")]);
+        let mut selected = HashSet::from([manager_id("builtin:dnf")]);
 
         App::reconcile_selected_managers(&mut selected, &configured, false);
 
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn preserving_context_keeps_configured_unknown_manager() {
+        let unknown = manager_id("org.example:custom");
+        let configured = HashSet::from([unknown.clone()]);
+        let mut selected = HashSet::from([unknown.clone(), manager_id("builtin:dnf")]);
+
+        App::reconcile_selected_managers(&mut selected, &configured, true);
+
+        assert_eq!(selected, HashSet::from([unknown]));
     }
 }

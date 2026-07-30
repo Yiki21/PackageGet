@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -7,8 +7,9 @@ use std::sync::{
 use futures::channel::mpsc;
 use iced::Task;
 use updater_core::{Config, InstallProgress, PackageManagerType};
+use updater_manager_api::ManagerId;
 
-use crate::content::shared::PackageSelectionKey;
+use crate::{content::shared::PackageSelectionKey, manager_catalog::ManagerCatalog};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken(Arc<AtomicBool>);
@@ -60,7 +61,7 @@ impl PackageBatchAction {
 
     pub async fn run_with_progress<F>(
         self,
-        pm_type: PackageManagerType,
+        manager: &ManagerId,
         pm_config: &Config,
         package_names: &[String],
         on_progress: F,
@@ -68,6 +69,8 @@ impl PackageBatchAction {
     where
         F: FnMut(InstallProgress),
     {
+        let pm_type = PackageManagerType::from_manager_id(manager)
+            .ok_or_else(|| format!("Manager is not available in this build: {manager}"))?;
         let result = match self {
             Self::Install => {
                 pm_type
@@ -90,7 +93,7 @@ impl PackageBatchAction {
             format!(
                 "Failed to {} packages from {}: {}",
                 self.error_verb(),
-                pm_type.name(),
+                manager,
                 e
             )
         })
@@ -101,7 +104,7 @@ impl PackageBatchAction {
 pub struct BatchProgress {
     pub completed: usize,
     pub total: usize,
-    pub manager: PackageManagerType,
+    pub manager: ManagerId,
     pub current_package: String,
     pub command_message: Option<String>,
 }
@@ -113,7 +116,7 @@ pub struct OperationOutcome {
     pub total_packages: usize,
     pub completed_managers: usize,
     pub total_managers: usize,
-    pub failed_manager: Option<PackageManagerType>,
+    pub failed_manager: Option<ManagerId>,
     pub error: Option<String>,
 }
 
@@ -152,20 +155,21 @@ enum BatchActionEvent {
 pub fn collect_selected_package_groups<'a, T: 'a, I, N>(
     package_sets: I,
     selected_packages: &HashSet<PackageSelectionKey>,
+    catalog: &ManagerCatalog,
     package_name: N,
-) -> Vec<(PackageManagerType, Vec<String>)>
+) -> Vec<(ManagerId, Vec<String>)>
 where
-    I: IntoIterator<Item = (PackageManagerType, &'a [T])>,
+    I: IntoIterator<Item = (ManagerId, &'a [T])>,
     N: Fn(&T) -> &str,
 {
-    let mut packages_by_manager: HashMap<PackageManagerType, Vec<String>> = HashMap::new();
+    let mut packages_by_manager: BTreeMap<ManagerId, Vec<String>> = BTreeMap::new();
 
-    for (pm_type, packages) in package_sets {
+    for (manager, packages) in package_sets {
         for package in packages {
             let name = package_name(package);
-            if selected_packages.contains(&(pm_type, name.to_owned())) {
+            if selected_packages.contains(&(manager.clone(), name.to_owned())) {
                 packages_by_manager
-                    .entry(pm_type)
+                    .entry(manager.clone())
                     .or_default()
                     .push(name.to_owned());
             }
@@ -173,7 +177,12 @@ where
     }
 
     let mut manager_groups: Vec<_> = packages_by_manager.into_iter().collect();
-    manager_groups.sort_by_key(|(pm_type, _)| pm_type.name());
+    manager_groups.sort_by(|(left, _), (right, _)| {
+        catalog
+            .display_name(left)
+            .cmp(catalog.display_name(right))
+            .then_with(|| left.cmp(right))
+    });
     for (_, package_names) in &mut manager_groups {
         package_names.sort();
     }
@@ -184,7 +193,7 @@ where
 pub fn run_grouped_package_action<Message, ProgressMessage, DoneMessage>(
     pm_config: &Config,
     action: PackageBatchAction,
-    manager_groups: Vec<(PackageManagerType, Vec<String>)>,
+    manager_groups: Vec<(ManagerId, Vec<String>)>,
     cancellation: CancellationToken,
     progress_message: ProgressMessage,
     done_message: DoneMessage,
@@ -220,7 +229,7 @@ where
         let mut global_offset = 0usize;
         let mut completed_managers = 0usize;
 
-        for (pm_type, package_names) in manager_groups {
+        for (manager, package_names) in manager_groups {
             if cancellation.is_cancelled() {
                 let _ = runner_sender.unbounded_send(BatchActionEvent::Done(OperationOutcome {
                     action,
@@ -235,16 +244,17 @@ where
             }
             let offset = global_offset;
             let progress_sender = runner_sender.clone();
+            let progress_manager = manager.clone();
             let mut manager_completed = 0usize;
 
             let result = action
-                .run_with_progress(pm_type, &pm_config, &package_names, |progress| {
+                .run_with_progress(&manager, &pm_config, &package_names, |progress| {
                     manager_completed = manager_completed.max(progress.completed);
                     let _ =
                         progress_sender.unbounded_send(BatchActionEvent::Progress(BatchProgress {
                             completed: offset + progress.completed,
                             total: total_packages,
-                            manager: progress.manager,
+                            manager: progress_manager.clone(),
                             current_package: progress.current_package,
                             command_message: progress.command_message,
                         }));
@@ -265,7 +275,7 @@ where
                             total_packages,
                             completed_managers,
                             total_managers,
-                            failed_manager: Some(pm_type),
+                            failed_manager: Some(manager),
                             error: Some(error),
                         }));
                     return;
@@ -296,7 +306,8 @@ where
 pub fn push_command_log(
     logs: &mut Vec<String>,
     action: PackageBatchAction,
-    manager: PackageManagerType,
+    manager: &ManagerId,
+    catalog: &ManagerCatalog,
     package_name: &str,
     command_message: String,
 ) {
@@ -314,7 +325,7 @@ pub fn push_command_log(
     logs.push(format!(
         "[{}][{}][{}] {}",
         action.log_label(),
-        manager.name(),
+        catalog.display_name(manager),
         package_name,
         command_message
     ));
@@ -329,6 +340,10 @@ pub fn push_command_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
 
     #[test]
     fn successful_outcome_has_natural_summary() {
@@ -354,7 +369,7 @@ mod tests {
             total_packages: 5,
             completed_managers: 1,
             total_managers: 2,
-            failed_manager: Some(PackageManagerType::Flatpak),
+            failed_manager: Some(manager_id("builtin:flatpak")),
             error: Some("network error".to_owned()),
         };
 
@@ -363,5 +378,22 @@ mod tests {
             outcome.summary(),
             "2 of 5 packages installed before the operation stopped"
         );
+    }
+
+    #[test]
+    fn grouping_preserves_unknown_manager_identity() {
+        let catalog = ManagerCatalog::builtin();
+        let unknown = manager_id("org.example:custom");
+        let packages = ["tool".to_owned()];
+        let selected = HashSet::from([(unknown.clone(), "tool".to_owned())]);
+
+        let groups = collect_selected_package_groups(
+            [(unknown.clone(), packages.as_slice())],
+            &selected,
+            &catalog,
+            String::as_str,
+        );
+
+        assert_eq!(groups, vec![(unknown, vec!["tool".to_owned()])]);
     }
 }

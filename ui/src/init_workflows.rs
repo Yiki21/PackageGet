@@ -6,13 +6,14 @@ use std::sync::{
 
 use futures::channel::mpsc;
 use iced::Task;
-use updater_core::{Config, PackageManagerType};
+use updater_core::Config;
+use updater_manager_api::ManagerId;
 
 #[derive(Debug, Clone)]
 pub struct InitProgress {
     pub completed: usize,
     pub total: usize,
-    pub manager: PackageManagerType,
+    pub manager: ManagerId,
     pub command_message: String,
 }
 
@@ -20,16 +21,16 @@ pub struct InitProgress {
 enum InitEvent<Item> {
     Started {
         total: usize,
-        manager: PackageManagerType,
+        manager: ManagerId,
         command_message: String,
     },
     Item {
-        manager: PackageManagerType,
+        manager: ManagerId,
         result: Result<Item, String>,
     },
     Completed {
         total: usize,
-        manager: PackageManagerType,
+        manager: ManagerId,
         command_message: String,
     },
     Finished,
@@ -63,7 +64,7 @@ pub fn run_manager_init_task<
     DoneMessage,
 >(
     config: Config,
-    managers: Vec<PackageManagerType>,
+    managers: Vec<ManagerId>,
     task: ManagerInitTask<
         StartLabel,
         CompleteLabel,
@@ -76,11 +77,11 @@ pub fn run_manager_init_task<
 where
     Message: Send + 'static,
     Item: Send + 'static,
-    StartLabel: Fn(PackageManagerType) -> String + Copy + Send + 'static,
-    CompleteLabel: Fn(PackageManagerType, &Result<Item, String>) -> String + Copy + Send + 'static,
-    Work: Fn(PackageManagerType, Config) -> WorkFuture + Copy + Send + 'static,
+    StartLabel: Fn(ManagerId) -> String + Copy + Send + 'static,
+    CompleteLabel: Fn(ManagerId, &Result<Item, String>) -> String + Copy + Send + 'static,
+    Work: Fn(ManagerId, Config) -> WorkFuture + Copy + Send + 'static,
     WorkFuture: Future<Output = Result<Item, String>> + Send + 'static,
-    ItemMessage: Fn(PackageManagerType, Result<Item, String>) -> Message + Copy + Send + 'static,
+    ItemMessage: Fn(ManagerId, Result<Item, String>) -> Message + Copy + Send + 'static,
     ProgressMessage: Fn(InitProgress) -> Message + Copy + Send + 'static,
     DoneMessage: Fn() -> Message + Copy + Send + 'static,
 {
@@ -140,14 +141,17 @@ where
         let task = Task::future(async move {
             let _ = sender_for_task.unbounded_send(InitEvent::Started {
                 total,
-                manager,
-                command_message: start_label(manager),
+                manager: manager.clone(),
+                command_message: start_label(manager.clone()),
             });
 
-            let result = work(manager, config).await;
-            let completed_message = complete_label(manager, &result);
+            let result = work(manager.clone(), config).await;
+            let completed_message = complete_label(manager.clone(), &result);
 
-            let _ = sender_for_task.unbounded_send(InitEvent::Item { manager, result });
+            let _ = sender_for_task.unbounded_send(InitEvent::Item {
+                manager: manager.clone(),
+                result,
+            });
             let _ = sender_for_task.unbounded_send(InitEvent::Completed {
                 total,
                 manager,

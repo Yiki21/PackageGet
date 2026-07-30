@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
-use updater_core::{Config, PackageInfo, PackageManagerType};
+use updater_core::{Config, PackageInfo};
+use updater_manager_api::ManagerId;
 
-use crate::theme;
+use crate::{manager_catalog::ManagerCatalog, theme};
 
 fn validate_http_url(value: &str) -> Result<url::Url, String> {
     let url = url::Url::parse(value).map_err(|error| format!("Invalid URL: {error}"))?;
@@ -42,10 +43,10 @@ pub async fn open_http_url(value: String) -> Result<(), String> {
         .unwrap_or_else(|| "No desktop URL opener was found (tried gio and xdg-open)".to_owned()))
 }
 
-pub type PackageSelectionKey = (PackageManagerType, String);
+pub type PackageSelectionKey = (ManagerId, String);
 
 pub fn next_keyboard_package(
-    packages: &[(PackageManagerType, String)],
+    packages: &[(ManagerId, String)],
     current: Option<&PackageSelectionKey>,
     direction: crate::shortcut::SelectionDirection,
 ) -> Option<PackageSelectionKey> {
@@ -77,7 +78,7 @@ pub fn search_input_id(page: crate::content::ActiveContentPage) -> iced::widget:
 }
 
 pub struct PackageInspector<'a> {
-    pub manager: PackageManagerType,
+    pub manager: ManagerId,
     pub name: &'a str,
     pub version: &'a str,
     pub available_version: Option<&'a str>,
@@ -91,8 +92,8 @@ pub struct PackageInspector<'a> {
 pub struct SharedUi;
 
 impl SharedUi {
-    pub fn selection_key(pm_type: PackageManagerType, package_name: &str) -> PackageSelectionKey {
-        (pm_type, package_name.to_owned())
+    pub fn selection_key(manager: &ManagerId, package_name: &str) -> PackageSelectionKey {
+        (manager.clone(), package_name.to_owned())
     }
 
     pub fn package_summary<'a, Message>(
@@ -175,11 +176,11 @@ impl SharedUi {
         .padding([2, 0])
     }
 
-    pub fn configured_managers(pm_config: &Config) -> Vec<PackageManagerType> {
+    pub fn configured_managers(pm_config: &Config) -> Vec<ManagerId> {
         pm_config
             .managers
             .iter()
-            .filter_map(|manager| PackageManagerType::from_manager_id(&manager.id))
+            .map(|manager| manager.id.clone())
             .collect()
     }
 
@@ -425,6 +426,7 @@ impl SharedUi {
 
     pub fn package_inspector<'a, Message>(
         package: Option<PackageInspector<'a>>,
+        catalog: &'a ManagerCatalog,
         on_copy_name: impl FnOnce(String) -> Message,
         on_copy_homepage: impl FnOnce(String) -> Message,
         on_open_homepage: impl Fn(String) -> Message + Copy + 'a,
@@ -447,10 +449,13 @@ impl SharedUi {
         };
 
         let mut details = column![
-            text(format!("Source · {}", package.manager.name()))
-                .size(12)
-                .font(theme::FONT_SEMIBOLD)
-                .style(theme::text_on_surface_muted),
+            text(format!(
+                "Source · {}",
+                catalog.display_name(&package.manager)
+            ))
+            .size(12)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface_muted),
             text(package.name)
                 .size(22)
                 .font(theme::FONT_SEMIBOLD)
@@ -638,7 +643,8 @@ impl SharedUi {
     }
 
     pub fn manager_section<'a, Message>(
-        pm_type: PackageManagerType,
+        manager: ManagerId,
+        catalog: &'a ManagerCatalog,
         subtitle: String,
         accent: iced::Color,
         error_prefix: &'static str,
@@ -651,8 +657,9 @@ impl SharedUi {
     {
         use iced::widget::{column, row};
 
+        let manager_name = catalog.display_name(&manager).to_owned();
         let header = row![
-            text(pm_type.name())
+            text(manager_name.clone())
                 .size(15)
                 .font(theme::FONT_SEMIBOLD)
                 .color(accent),
@@ -665,7 +672,7 @@ impl SharedUi {
             return column![
                 header,
                 Self::error_card(
-                    format!("{}: {}", error_prefix, pm_type.name()),
+                    format!("{}: {}", error_prefix, manager_name),
                     error,
                     retry()
                 ),
@@ -685,6 +692,7 @@ impl SharedUi {
 
     pub fn loading_manager_filter_view<'a, Message>(
         pm_config: &Config,
+        catalog: &'a ManagerCatalog,
         loading_text: &'static str,
     ) -> Element<'a, Message>
     where
@@ -703,9 +711,9 @@ impl SharedUi {
                 .into(),
         ];
 
-        let checkboxes = all_managers.iter().map(|pm_type| {
+        let checkboxes = all_managers.iter().map(|manager| {
             iced::widget::checkbox(false)
-                .label(pm_type.name())
+                .label(catalog.display_name(manager).to_owned())
                 .spacing(10)
                 .text_size(13)
                 .style(move |iced_theme, _status| {
@@ -739,27 +747,29 @@ impl SharedUi {
     }
 
     pub fn active_manager_filter_view<'a, Message>(
-        entries: Vec<(PackageManagerType, usize)>,
-        selected_managers: &'a HashSet<PackageManagerType>,
-        loading_managers: &'a HashSet<PackageManagerType>,
-        is_initializing: impl Fn(PackageManagerType) -> bool + Copy + 'a,
-        on_toggle: impl Fn(PackageManagerType, bool) -> Message + Copy + 'a,
+        entries: Vec<(ManagerId, usize)>,
+        selected_managers: &'a HashSet<ManagerId>,
+        loading_managers: &'a HashSet<ManagerId>,
+        catalog: &'a ManagerCatalog,
+        is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
+        on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
     ) -> Element<'a, Message>
     where
         Message: 'a,
     {
-        row(entries.into_iter().map(move |(pm_type, count)| {
-            let is_selected = selected_managers.contains(&pm_type);
-            let is_loading = loading_managers.contains(&pm_type);
-            let is_initializing = is_initializing(pm_type);
+        row(entries.into_iter().map(move |(manager, count)| {
+            let is_selected = selected_managers.contains(&manager);
+            let is_loading = loading_managers.contains(&manager);
+            let is_initializing = is_initializing(&manager);
             let is_disabled = is_loading || is_initializing;
+            let manager_name = catalog.display_name(&manager);
 
             let label = if is_loading {
-                format!("{} (Loading...)", pm_type.name())
+                format!("{manager_name} (Loading...)")
             } else if is_initializing {
-                format!("{} (Initializing...)", pm_type.name())
+                format!("{manager_name} (Initializing...)")
             } else {
-                format!("{} ({})", pm_type.name(), count)
+                format!("{manager_name} ({count})")
             };
 
             let checkbox = iced::widget::checkbox(is_selected)
@@ -772,7 +782,7 @@ impl SharedUi {
                 checkbox.into()
             } else {
                 checkbox
-                    .on_toggle(move |selected| on_toggle(pm_type, selected))
+                    .on_toggle(move |selected| on_toggle(manager.clone(), selected))
                     .into()
             }
         }))
@@ -856,13 +866,17 @@ impl SharedUi {
 #[cfg(test)]
 mod tests {
     use super::validate_http_url;
-    use updater_core::PackageManagerType;
+    use updater_manager_api::ManagerId;
+
+    fn manager_id(value: &str) -> ManagerId {
+        ManagerId::parse(value).unwrap()
+    }
 
     #[test]
     fn keyboard_package_navigation_is_bounded() {
         let packages = vec![
-            (PackageManagerType::Dnf, "alpha".to_owned()),
-            (PackageManagerType::Flatpak, "beta".to_owned()),
+            (manager_id("builtin:dnf"), "alpha".to_owned()),
+            (manager_id("builtin:flatpak"), "beta".to_owned()),
         ];
 
         assert_eq!(

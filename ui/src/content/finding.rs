@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use iced::Task;
 use updater_core::{PackageInfo, PackageManagerType};
+use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_items_result},
@@ -30,17 +31,17 @@ pub struct Finding {
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Package-manager selection message.
-    SelectPackageManager(PackageManagerType, bool),
+    SelectPackageManager(ManagerId, bool),
     /// Search-query change message.
     SearchQueryChanged(String),
     /// Search execution message.
     ExecuteSearch,
     /// Search result message.
-    SearchResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
+    SearchResult(ManagerId, Result<Vec<PackageInfo>, String>),
     /// Retry search for one package manager.
-    RetrySearch(PackageManagerType),
+    RetrySearch(ManagerId),
     /// Show a search result in the package inspector.
-    InspectPackage(PackageManagerType, String),
+    InspectPackage(ManagerId, String),
     /// Copy text from the inspector.
     CopyInspectorText(String),
     /// Open a validated homepage URL.
@@ -50,7 +51,7 @@ pub enum Message {
     /// Sort-option change message.
     SortOptionChanged(SortOption),
     /// Package-selection toggle message.
-    TogglePackageSelection(PackageManagerType, String, bool),
+    TogglePackageSelection(ManagerId, String, bool),
     /// Select-all visible packages toggle message.
     ToggleSelectAll(bool),
     /// Install-selected message.
@@ -62,7 +63,7 @@ pub enum Message {
         /// Total packages to install.
         total: usize,
         /// Manager currently executing command.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Current package being processed.
         current_package: String,
         /// Optional command output/status line.
@@ -75,13 +76,13 @@ pub enum Message {
 #[derive(Debug, Clone, Default)]
 pub struct FindingInfo {
     /// Search results grouped by manager.
-    pub search_results: HashMap<PackageManagerType, Vec<PackageInfo>>,
+    pub search_results: HashMap<ManagerId, Vec<PackageInfo>>,
     /// Search errors grouped by manager.
     pub search_errors: ManagerErrors,
     /// Managers selected in the filter panel.
-    pub selected_managers: HashSet<PackageManagerType>,
+    pub selected_managers: HashSet<ManagerId>,
     /// Managers currently running search.
-    pub searching_managers: HashSet<PackageManagerType>,
+    pub searching_managers: HashSet<ManagerId>,
     /// Current sort option.
     pub sort_by: SortOption,
     /// Selected package keys for batch operations.
@@ -89,7 +90,7 @@ pub struct FindingInfo {
     /// Whether install operation is in progress.
     pub is_installing: bool,
     /// Install progress `(completed, total, manager, package)`.
-    pub install_progress: Option<(usize, usize, PackageManagerType, String)>,
+    pub install_progress: Option<(usize, usize, ManagerId, String)>,
     /// Install command logs.
     pub install_logs: Vec<String>,
     /// Last install error shown in UI.
@@ -135,6 +136,7 @@ impl Finding {
         message: Message,
         pm_config: &updater_core::Config,
         info: &mut FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
@@ -145,7 +147,7 @@ impl Finding {
                     info.searching_managers.remove(&pm_type);
                     info.search_errors.remove(&pm_type);
                     info.selected_packages
-                        .retain(|(manager, _)| *manager != pm_type);
+                        .retain(|(manager, _)| manager != &pm_type);
                     info.search_results.remove(&pm_type);
                 }
                 Action::None
@@ -173,8 +175,8 @@ impl Finding {
                 self.last_search_query = query.to_string();
 
                 // Mark selected managers as searching.
-                for pm_type in info.selected_managers.iter() {
-                    info.searching_managers.insert(*pm_type);
+                for manager_id in &info.selected_managers {
+                    info.searching_managers.insert(manager_id.clone());
                 }
 
                 Action::Run(Self::execute_search_task(
@@ -201,7 +203,7 @@ impl Finding {
                     return Action::None;
                 }
                 info.search_errors.remove(&pm_type);
-                info.searching_managers.insert(pm_type);
+                info.searching_managers.insert(pm_type.clone());
                 Action::Run(Self::execute_search_task(
                     pm_config,
                     &HashSet::from([pm_type]),
@@ -209,7 +211,7 @@ impl Finding {
                 ))
             }
             Message::InspectPackage(pm_type, package_name) => {
-                self.inspected_package = Some(SharedUi::selection_key(pm_type, &package_name));
+                self.inspected_package = Some(SharedUi::selection_key(&pm_type, &package_name));
                 self.inspector_error = None;
                 Action::None
             }
@@ -236,7 +238,7 @@ impl Finding {
                 if info.is_installing {
                     return Action::None;
                 }
-                let key = SharedUi::selection_key(pm_type, &package_name);
+                let key = SharedUi::selection_key(&pm_type, &package_name);
                 if selected {
                     info.selected_packages.insert(key);
                 } else {
@@ -257,7 +259,7 @@ impl Finding {
                         .iter()
                         .filter(|package| package.version.trim() == "Not Installed")
                     {
-                        let key = SharedUi::selection_key(*pm_type, &package.name);
+                        let key = SharedUi::selection_key(pm_type, &package.name);
                         if select_all {
                             info.selected_packages.insert(key);
                         } else {
@@ -281,15 +283,15 @@ impl Finding {
                     .selected_packages
                     .iter()
                     .next()
-                    .map(|(pm_type, _)| *pm_type)
-                    .unwrap_or(PackageManagerType::Dnf);
+                    .map(|(manager_id, _)| manager_id.clone())
+                    .expect("non-empty package selection must contain a manager ID");
                 info.install_progress = Some((
                     0,
                     info.selected_packages.len(),
                     initial_manager,
                     String::new(),
                 ));
-                Self::install_packages_action(pm_config, info)
+                Self::install_packages_action(pm_config, info, catalog)
             }
             Message::InstallProgress {
                 completed,
@@ -298,12 +300,13 @@ impl Finding {
                 current_package,
                 command_message,
             } => {
-                info.install_progress = Some((completed, total, manager, current_package));
+                info.install_progress = Some((completed, total, manager.clone(), current_package));
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.install_logs,
                         PackageBatchAction::Install,
-                        manager,
+                        &manager,
+                        catalog,
                         info.install_progress
                             .as_ref()
                             .map_or("", |(_, _, _, package)| package.as_str()),
@@ -321,8 +324,8 @@ impl Finding {
                     let follow_up = if self.last_search_query.is_empty() {
                         Task::none()
                     } else {
-                        for pm_type in &info.selected_managers {
-                            info.searching_managers.insert(*pm_type);
+                        for manager_id in &info.selected_managers {
+                            info.searching_managers.insert(manager_id.clone());
                         }
                         Self::execute_search_task(
                             pm_config,
@@ -383,9 +386,10 @@ impl Finding {
     pub fn move_keyboard_selection(
         &self,
         info: &FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
         direction: crate::shortcut::SelectionDirection,
     ) -> Option<Message> {
-        let packages = self.keyboard_packages(info);
+        let packages = self.keyboard_packages(info, catalog);
         crate::content::shared::next_keyboard_package(
             &packages,
             self.inspected_package.as_ref(),
@@ -406,17 +410,26 @@ impl Finding {
         }
         let selected = !info
             .selected_packages
-            .contains(&SharedUi::selection_key(*manager, name));
+            .contains(&SharedUi::selection_key(manager, name));
         Some(Message::TogglePackageSelection(
-            *manager,
+            manager.clone(),
             name.clone(),
             selected,
         ))
     }
 
-    fn keyboard_packages(&self, info: &FindingInfo) -> Vec<(PackageManagerType, String)> {
-        let mut managers: Vec<_> = info.selected_managers.iter().copied().collect();
-        managers.sort_by_key(|manager| manager.name());
+    fn keyboard_packages(
+        &self,
+        info: &FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Vec<PackageSelectionKey> {
+        let mut managers: Vec<_> = info.selected_managers.iter().cloned().collect();
+        managers.sort_by(|left, right| {
+            catalog
+                .display_name(left)
+                .cmp(catalog.display_name(right))
+                .then_with(|| left.cmp(right))
+        });
         managers
             .into_iter()
             .flat_map(|manager| {
@@ -430,7 +443,9 @@ impl Finding {
                 if info.sort_by == SortOption::Name {
                     packages.sort();
                 }
-                packages.into_iter().map(move |name| (manager, name))
+                packages
+                    .into_iter()
+                    .map(move |name| (manager.clone(), name))
             })
             .collect()
     }
@@ -439,6 +454,7 @@ impl Finding {
         &'a self,
         info: &'a FindingInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -486,7 +502,7 @@ impl Finding {
                 .spacing(theme::spacing::MD)
                 .align_y(iced::Alignment::End),
                 row![
-                    container(self.manager_filter_view(info, pm_config))
+                    container(self.manager_filter_view(info, pm_config, catalog))
                         .width(iced::Length::FillPortion(2)),
                     container(self.sort_order_view(info)).width(iced::Length::FillPortion(1)),
                 ]
@@ -514,8 +530,8 @@ impl Finding {
                 ),
             ]),
             toolbar,
-            self.batch_actions_view(info),
-            self.search_results_view(info, show_inspector, inspector_drawer),
+            self.batch_actions_view(info, catalog),
+            self.search_results_view(info, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -528,10 +544,11 @@ impl Finding {
         &self,
         info: &'a FindingInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::column;
 
-        let filters_content = self.active_filter_view(info, pm_config);
+        let filters_content = self.active_filter_view(info, pm_config, catalog);
 
         column![SharedUi::section_title("Sources"), filters_content]
             .spacing(theme::spacing::SM)
@@ -542,6 +559,7 @@ impl Finding {
         &self,
         info: &'a FindingInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{row, text};
 
@@ -554,19 +572,20 @@ impl Finding {
                 .into();
         }
 
-        row(all_managers.iter().map(|pm_type| {
-            let pm_type = *pm_type;
-            let is_selected = info.selected_managers.contains(&pm_type);
-            let is_searching = info.searching_managers.contains(&pm_type);
+        row(all_managers.iter().map(|manager_id| {
+            let manager_id = manager_id.clone();
+            let display_name = catalog.display_name(&manager_id);
+            let is_selected = info.selected_managers.contains(&manager_id);
+            let is_searching = info.searching_managers.contains(&manager_id);
 
             let label = if is_searching {
-                format!("{} (Searching...)", pm_type.name())
-            } else if info.search_errors.contains_key(&pm_type) {
-                format!("{} (Failed)", pm_type.name())
-            } else if let Some(results) = info.search_results.get(&pm_type) {
-                format!("{} ({} results)", pm_type.name(), results.len())
+                format!("{display_name} (Searching...)")
+            } else if info.search_errors.contains_key(&manager_id) {
+                format!("{display_name} (Failed)")
+            } else if let Some(results) = info.search_results.get(&manager_id) {
+                format!("{display_name} ({} results)", results.len())
             } else {
-                pm_type.name().to_string()
+                display_name.to_owned()
             };
 
             let checkbox = iced::widget::checkbox(is_selected)
@@ -579,7 +598,9 @@ impl Finding {
                 checkbox.into()
             } else {
                 checkbox
-                    .on_toggle(move |selected| Message::SelectPackageManager(pm_type, selected))
+                    .on_toggle(move |selected| {
+                        Message::SelectPackageManager(manager_id.clone(), selected)
+                    })
                     .into()
             }
         }))
@@ -627,6 +648,7 @@ impl Finding {
     fn search_results_view<'a>(
         &'a self,
         info: &'a FindingInfo,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -649,12 +671,14 @@ impl Finding {
             .iter()
             .filter_map(|pm_type| {
                 if let Some(error) = info.search_errors.get(pm_type) {
-                    Some(self.error_section(*pm_type, error))
+                    Some(self.error_section(pm_type.clone(), error, catalog))
                 } else {
                     info.search_results
                         .get(pm_type)
                         .filter(|packages| !packages.is_empty())
-                        .map(|packages| self.package_manager_section(*pm_type, packages, info))
+                        .map(|packages| {
+                            self.package_manager_section(pm_type.clone(), packages, info, catalog)
+                        })
                 }
             })
             .collect();
@@ -671,7 +695,7 @@ impl Finding {
                 .get(manager)
                 .and_then(|packages| packages.iter().find(|package| package.name == *name))
                 .map(|package| crate::content::shared::PackageInspector {
-                    manager: *manager,
+                    manager: manager.clone(),
                     name: &package.name,
                     version: &package.version,
                     available_version: None,
@@ -683,6 +707,7 @@ impl Finding {
         });
         let mut inspector = column![SharedUi::package_inspector(
             inspected,
+            catalog,
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::OpenHomepage,
@@ -727,17 +752,21 @@ impl Finding {
 
     fn error_section<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager_id: ManagerId,
         error: &'a str,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, text};
 
+        let display_name = catalog.display_name(&manager_id).to_owned();
         column![
-            text(pm_type.name()).size(18).color(theme::colors::DISCOVER),
+            text(display_name.clone())
+                .size(18)
+                .color(theme::colors::DISCOVER),
             SharedUi::error_card(
-                format!("Search failed in {}", pm_type.name()),
+                format!("Search failed in {display_name}"),
                 error,
-                Message::RetrySearch(pm_type),
+                Message::RetrySearch(manager_id),
             )
         ]
         .spacing(12)
@@ -746,14 +775,17 @@ impl Finding {
 
     fn package_manager_section<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager_id: ManagerId,
         packages: &'a [PackageInfo],
         info: &'a FindingInfo,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, row, text};
 
         let header = row![
-            text(pm_type.name()).size(18).color(theme::colors::DISCOVER),
+            text(catalog.display_name(&manager_id).to_owned())
+                .size(18)
+                .color(theme::colors::DISCOVER),
             text(format!("({} results)", packages.len()))
                 .size(16)
                 .style(theme::text_on_surface_muted)
@@ -766,7 +798,7 @@ impl Finding {
         let packages_list = column(
             sorted_packages
                 .into_iter()
-                .map(|pkg| self.package_item_view(pm_type, pkg, info)),
+                .map(|pkg| self.package_item_view(manager_id.clone(), pkg, info)),
         )
         .spacing(8);
 
@@ -796,7 +828,7 @@ impl Finding {
 
     fn package_item_view<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager_id: ManagerId,
         package: &'a PackageInfo,
         info: &'a FindingInfo,
     ) -> iced::Element<'a, Message> {
@@ -805,7 +837,7 @@ impl Finding {
         let package_name = package.name.clone();
         let is_selected = info
             .selected_packages
-            .contains(&SharedUi::selection_key(pm_type, &package.name));
+            .contains(&SharedUi::selection_key(&manager_id, &package.name));
         let is_not_installed = package.version.trim() == "Not Installed";
 
         let enable_install = !info.is_installing && is_not_installed;
@@ -814,8 +846,13 @@ impl Finding {
             .on_toggle_maybe(if enable_install {
                 Some({
                     let package_name = package_name.clone();
+                    let manager_id = manager_id.clone();
                     move |selected| {
-                        Message::TogglePackageSelection(pm_type, package_name.clone(), selected)
+                        Message::TogglePackageSelection(
+                            manager_id.clone(),
+                            package_name.clone(),
+                            selected,
+                        )
                     }
                 })
             } else {
@@ -830,7 +867,7 @@ impl Finding {
         let is_inspected = self
             .inspected_package
             .as_ref()
-            .is_some_and(|(manager, name)| *manager == pm_type && name == &package.name);
+            .is_some_and(|(manager, name)| manager == &manager_id && name == &package.name);
         let mut summary = row![SharedUi::package_summary(package)];
         if is_not_installed {
             summary = summary.push(SharedUi::muted_badge("Not Installed"));
@@ -841,7 +878,7 @@ impl Finding {
             .padding([8, 10])
             .width(iced::Length::Fill)
             .style(theme::list_row(is_inspected))
-            .on_press(Message::InspectPackage(pm_type, package_name));
+            .on_press(Message::InspectPackage(manager_id, package_name));
 
         row![checkbox, details]
             .spacing(theme::spacing::SM)
@@ -849,7 +886,11 @@ impl Finding {
             .into()
     }
 
-    fn batch_actions_view<'a>(&self, info: &'a FindingInfo) -> iced::Element<'a, Message> {
+    fn batch_actions_view<'a>(
+        &self,
+        info: &'a FindingInfo,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
         use iced::widget::{button, checkbox, column, row, text};
 
         let selected_count = info.selected_packages.len();
@@ -873,7 +914,7 @@ impl Finding {
                         completed,
                         total,
                         package,
-                        manager.name()
+                        catalog.display_name(manager)
                     )
                 }
             } else {
@@ -936,38 +977,54 @@ impl Finding {
 
     fn execute_search_task(
         pm_config: &updater_core::Config,
-        selected_managers: &HashSet<PackageManagerType>,
+        selected_managers: &HashSet<ManagerId>,
         query: &str,
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
         let query = query.to_string();
-        let managers: Vec<_> = selected_managers.iter().copied().collect();
+        let managers: Vec<_> = selected_managers.iter().cloned().collect();
 
         let tasks: Vec<_> = managers
             .into_iter()
-            .map(|pm_type| {
+            .map(|manager_id| {
                 let pm_config = pm_config.clone();
                 let query = query.clone();
                 Task::future(async move {
-                    let result = pm_type
-                        .search_package(&pm_config, &query)
-                        .await
-                        .map_err(|e| format!("Failed to search in {}: {}", pm_type.name(), e));
-                    (pm_type, result)
+                    let result =
+                        match PackageManagerType::from_manager_id(&manager_id) {
+                            Some(pm_type) => pm_type
+                                .search_package(&pm_config, &query)
+                                .await
+                                .map_err(|error| {
+                                    format!("Failed to search in {}: {error}", manager_id.as_str())
+                                }),
+                            None => Err(format!(
+                                "No legacy search execution mapping exists for manager {}",
+                                manager_id.as_str()
+                            )),
+                        };
+                    (manager_id, result)
                 })
-                .then(move |(pm_type, result)| Task::done(Message::SearchResult(pm_type, result)))
+                .then(move |(manager_id, result)| {
+                    Task::done(Message::SearchResult(manager_id, result))
+                })
             })
             .collect();
 
         Task::batch(tasks)
     }
 
-    fn install_packages_action(pm_config: &updater_core::Config, info: &FindingInfo) -> Action {
+    fn install_packages_action(
+        pm_config: &updater_core::Config,
+        info: &FindingInfo,
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Action {
         let manager_groups = collect_selected_package_groups(
             info.search_results
                 .iter()
-                .map(|(pm_type, packages)| (*pm_type, packages.as_slice())),
+                .map(|(manager_id, packages)| (manager_id.clone(), packages.as_slice())),
             &info.selected_packages,
+            catalog,
             |package| package.name.as_str(),
         );
 

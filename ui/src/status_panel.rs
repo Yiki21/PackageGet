@@ -6,8 +6,12 @@
 use std::time::{Duration, Instant};
 
 use iced::{Animation, Border, Length, Subscription};
+use updater_manager_api::ManagerId;
 
-use crate::content::{FindingInfo, InstalledInfo, OperationOutcome, UpdatesInfo};
+use crate::{
+    content::{FindingInfo, InstalledInfo, OperationOutcome, UpdatesInfo},
+    manager_catalog::ManagerCatalog,
+};
 
 /// Stateful bottom panel that presents overall progress and command output.
 #[derive(Debug, Clone)]
@@ -124,6 +128,7 @@ impl StatusPanel {
         installed_info: &InstalledInfo,
         updates_info: &UpdatesInfo,
         finding_info: &FindingInfo,
+        catalog: &ManagerCatalog,
     ) {
         let at = message.at();
         let should_refresh_snapshot = matches!(message, Message::Sync(_));
@@ -157,7 +162,7 @@ impl StatusPanel {
         }
 
         if should_refresh_snapshot {
-            self.status_label = status_label(installed_info, updates_info, finding_info);
+            self.status_label = status_label(installed_info, updates_info, finding_info, catalog);
             self.progress_counts = progress_counts(installed_info, updates_info, finding_info);
             if is_active {
                 rebuild_command_logs(
@@ -372,6 +377,7 @@ fn status_label(
     installed_info: &InstalledInfo,
     updates_info: &UpdatesInfo,
     finding_info: &FindingInfo,
+    catalog: &ManagerCatalog,
 ) -> String {
     if installed_info.is_loading_count || updates_info.is_loading_count {
         return "Initializing package manager data...".to_string();
@@ -381,6 +387,7 @@ fn status_label(
         return operation_status_label(
             "Installing",
             finding_info.install_progress.as_ref(),
+            catalog,
             "Installing selected packages...",
         );
     }
@@ -389,6 +396,7 @@ fn status_label(
         return operation_status_label(
             "Updating",
             updates_info.update_progress.as_ref(),
+            catalog,
             "Updating selected packages...",
         );
     }
@@ -397,6 +405,7 @@ fn status_label(
         return operation_status_label(
             "Removing",
             installed_info.remove_progress.as_ref(),
+            catalog,
             "Removing selected packages...",
         );
     }
@@ -427,7 +436,8 @@ fn status_label(
 
 fn operation_status_label(
     verb: &str,
-    progress: Option<&(usize, usize, updater_core::PackageManagerType, String)>,
+    progress: Option<&(usize, usize, ManagerId, String)>,
+    catalog: &ManagerCatalog,
     fallback: &str,
 ) -> String {
     if let Some((completed, total, manager, package)) = progress {
@@ -435,7 +445,10 @@ fn operation_status_label(
             return format!("{verb} packages ({completed}/{total})...");
         }
 
-        return format!("{verb} {completed}/{total}: {package} ({})", manager.name());
+        return format!(
+            "{verb} {completed}/{total}: {package} ({})",
+            catalog.display_name(manager)
+        );
     }
 
     fallback.to_string()

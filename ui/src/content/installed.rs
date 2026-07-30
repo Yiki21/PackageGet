@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use iced::Task;
 use updater_core::{PackageInfo, PackageManagerType};
+use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
@@ -24,6 +25,7 @@ use crate::{
         BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
+    manager_catalog::ManagerCatalog,
     theme,
 };
 
@@ -38,19 +40,19 @@ pub struct Installed {
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Package-manager selection message.
-    SelectPackageManager(PackageManagerType, bool),
+    SelectPackageManager(ManagerId, bool),
     /// Installed-load result message.
-    LoadInstalledResult(PackageManagerType, Result<Vec<PackageInfo>, String>),
+    LoadInstalledResult(ManagerId, Result<Vec<PackageInfo>, String>),
     /// Installed refresh message.
     RefreshInfo,
     /// Retry loading one package manager.
-    RetryLoad(PackageManagerType),
+    RetryLoad(ManagerId),
     /// Search-query change message.
     SearchQueryChanged(String),
     /// Sort-option change message.
     SortOptionChanged(SortOption),
     /// Package-inspector selection message.
-    InspectPackage(PackageManagerType, String),
+    InspectPackage(ManagerId, String),
     /// Copy text from the inspector.
     CopyInspectorText(String),
     /// Open a validated homepage URL.
@@ -58,7 +60,7 @@ pub enum Message {
     /// Homepage opener result.
     HomepageOpened(Result<(), String>),
     /// Package-selection toggle message.
-    TogglePackageSelection(PackageManagerType, String, bool),
+    TogglePackageSelection(ManagerId, String, bool),
     /// Select-all toggle message.
     ToggleSelectAll(bool),
     /// Remove-selected message.
@@ -74,7 +76,7 @@ pub enum Message {
         /// Total packages to remove.
         total: usize,
         /// Manager currently executing command.
-        manager: PackageManagerType,
+        manager: ManagerId,
         /// Current package being processed.
         current_package: String,
         /// Optional command output/status line.
@@ -88,15 +90,15 @@ pub enum Message {
 #[derive(Debug, Clone, Default)]
 pub struct InstalledInfo {
     /// Installed package cache by manager `(count, packages)`.
-    pub installed_packages: HashMap<PackageManagerType, (usize, Vec<PackageInfo>)>,
+    pub installed_packages: HashMap<ManagerId, (usize, Vec<PackageInfo>)>,
     /// Initial count-loading failures grouped by manager.
     pub init_errors: ManagerErrors,
     /// Full installed-list loading failures grouped by manager.
     pub load_errors: ManagerErrors,
     /// Managers selected in the filter panel.
-    pub selected_managers: HashSet<PackageManagerType>,
+    pub selected_managers: HashSet<ManagerId>,
     /// Managers currently loading full installed package list.
-    pub loading_installed: HashSet<PackageManagerType>,
+    pub loading_installed: HashSet<ManagerId>,
     /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
     /// Whether counts have ever been loaded.
@@ -112,7 +114,7 @@ pub struct InstalledInfo {
     /// Whether remove operation is in progress.
     pub is_removing: bool,
     /// Remove progress `(completed, total, manager, package)`.
-    pub remove_progress: Option<(usize, usize, PackageManagerType, String)>,
+    pub remove_progress: Option<(usize, usize, ManagerId, String)>,
     /// Remove command logs.
     pub remove_logs: Vec<String>,
     /// Whether the removal confirmation is visible.
@@ -167,42 +169,43 @@ impl Installed {
         message: Message,
         pm_config: &updater_core::Config,
         info: &mut InstalledInfo,
+        catalog: &ManagerCatalog,
     ) -> Action {
         match message {
-            Message::SelectPackageManager(pm_type, selected) => {
+            Message::SelectPackageManager(manager, selected) => {
                 if selected {
                     // Managers still in init phase are not selectable yet.
-                    if info.is_loading_count && !info.installed_packages.contains_key(&pm_type) {
+                    if info.is_loading_count && !info.installed_packages.contains_key(&manager) {
                         return Action::None;
                     }
 
-                    info.selected_managers.insert(pm_type);
-                    if info.init_errors.contains_key(&pm_type)
-                        || info.load_errors.contains_key(&pm_type)
+                    info.selected_managers.insert(manager.clone());
+                    if info.init_errors.contains_key(&manager)
+                        || info.load_errors.contains_key(&manager)
                     {
-                        info.init_errors.remove(&pm_type);
-                        info.load_errors.remove(&pm_type);
-                        info.loading_installed.insert(pm_type);
-                        Action::Run(Self::create_load_task(pm_config, pm_type))
-                    } else if let Some((count, packages)) = info.installed_packages.get(&pm_type) {
+                        info.init_errors.remove(&manager);
+                        info.load_errors.remove(&manager);
+                        info.loading_installed.insert(manager.clone());
+                        Action::Run(Self::create_load_task(pm_config, manager))
+                    } else if let Some((count, packages)) = info.installed_packages.get(&manager) {
                         if *count == packages.len() {
                             Action::None
                         } else {
-                            info.loading_installed.insert(pm_type);
-                            Action::Run(Self::create_load_task(pm_config, pm_type))
+                            info.loading_installed.insert(manager.clone());
+                            Action::Run(Self::create_load_task(pm_config, manager))
                         }
                     } else {
-                        info.loading_installed.insert(pm_type);
-                        Action::Run(Self::create_load_task(pm_config, pm_type))
+                        info.loading_installed.insert(manager.clone());
+                        Action::Run(Self::create_load_task(pm_config, manager))
                     }
                 } else {
-                    info.selected_managers.remove(&pm_type);
+                    info.selected_managers.remove(&manager);
                     info.selected_packages
-                        .retain(|(manager, _)| *manager != pm_type);
+                        .retain(|(selected_manager, _)| selected_manager != &manager);
                     if self
                         .inspected_package
                         .as_ref()
-                        .is_some_and(|(manager, _)| *manager == pm_type)
+                        .is_some_and(|(inspected_manager, _)| inspected_manager == &manager)
                     {
                         self.inspected_package = None;
                     }
@@ -210,59 +213,57 @@ impl Installed {
                     Action::None
                 }
             }
-            Message::LoadInstalledResult(pm_type, result) => {
-                info.loading_installed.remove(&pm_type);
-                let inspected_package_missing = self
-                    .inspected_package
-                    .as_ref()
-                    .filter(|(manager, _)| *manager == pm_type)
-                    .is_some_and(|(_, inspected_name)| {
-                        result.as_ref().is_ok_and(|packages| {
-                            !packages
-                                .iter()
-                                .any(|package| package.name == *inspected_name)
-                        })
-                    });
+            Message::LoadInstalledResult(manager, result) => {
+                info.loading_installed.remove(&manager);
+                let inspected_package_missing = self.inspected_package.as_ref().is_some_and(
+                    |(inspected_manager, inspected_name)| {
+                        inspected_manager == &manager
+                            && result.as_ref().is_ok_and(|packages| {
+                                !packages
+                                    .iter()
+                                    .any(|package| package.name == *inspected_name)
+                            })
+                    },
+                );
                 if inspected_package_missing {
                     self.inspected_package = None;
                 }
                 apply_manager_counted_items_result(
                     &mut info.installed_packages,
                     &mut info.load_errors,
-                    pm_type,
+                    manager,
                     result,
                 );
                 Action::None
             }
             Message::RefreshInfo => {
-                let pm_types: Vec<PackageManagerType> =
-                    info.installed_packages.keys().copied().collect();
+                let managers: Vec<ManagerId> = info.installed_packages.keys().cloned().collect();
 
-                if pm_types.is_empty() {
+                if managers.is_empty() {
                     return Action::None;
                 }
 
                 // Mark all managers as loading.
-                for pm_type in &pm_types {
-                    info.loading_installed.insert(*pm_type);
+                for manager in &managers {
+                    info.loading_installed.insert(manager.clone());
                 }
 
                 // Create load tasks for all managers.
-                let tasks: Vec<Task<Message>> = pm_types
+                let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|pm_type| Self::create_load_task(pm_config, pm_type))
+                    .map(|manager| Self::create_load_task(pm_config, manager))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
             }
-            Message::RetryLoad(pm_type) => {
-                if info.loading_installed.contains(&pm_type) {
+            Message::RetryLoad(manager) => {
+                if info.loading_installed.contains(&manager) {
                     return Action::None;
                 }
-                info.init_errors.remove(&pm_type);
-                info.load_errors.remove(&pm_type);
-                info.loading_installed.insert(pm_type);
-                Action::Run(Self::create_load_task(pm_config, pm_type))
+                info.init_errors.remove(&manager);
+                info.load_errors.remove(&manager);
+                info.loading_installed.insert(manager.clone());
+                Action::Run(Self::create_load_task(pm_config, manager))
             }
             Message::SearchQueryChanged(query) => {
                 self.search_query = query;
@@ -272,8 +273,8 @@ impl Installed {
                 info.sort_by = sort_option;
                 Action::None
             }
-            Message::InspectPackage(pm_type, package_name) => {
-                self.inspected_package = Some(SharedUi::selection_key(pm_type, &package_name));
+            Message::InspectPackage(manager, package_name) => {
+                self.inspected_package = Some(SharedUi::selection_key(&manager, &package_name));
                 info.inspector_error = None;
                 Action::None
             }
@@ -289,11 +290,11 @@ impl Installed {
                 info.inspector_error = result.err();
                 Action::None
             }
-            Message::TogglePackageSelection(pm_type, package_name, selected) => {
+            Message::TogglePackageSelection(manager, package_name, selected) => {
                 if info.is_removing {
                     return Action::None;
                 }
-                let key = SharedUi::selection_key(pm_type, &package_name);
+                let key = SharedUi::selection_key(&manager, &package_name);
                 if selected {
                     info.selected_packages.insert(key);
                 } else {
@@ -308,14 +309,14 @@ impl Installed {
                 }
 
                 let query = self.search_query.trim().to_lowercase();
-                for pm_type in &info.selected_managers {
-                    if let Some((_, packages)) = info.installed_packages.get(pm_type) {
+                for manager in &info.selected_managers {
+                    if let Some((_, packages)) = info.installed_packages.get(manager) {
                         for pkg in packages {
                             if !query.is_empty() && !pkg.name.to_lowercase().contains(&query) {
                                 continue;
                             }
 
-                            let key = SharedUi::selection_key(*pm_type, &pkg.name);
+                            let key = SharedUi::selection_key(manager, &pkg.name);
                             if select_all {
                                 info.selected_packages.insert(key);
                             } else {
@@ -343,19 +344,24 @@ impl Installed {
                 info.is_removing = true;
                 info.last_remove_error = None;
                 info.remove_logs.clear();
-                let initial_manager = info
+                let Some(initial_manager) = info
                     .selected_packages
                     .iter()
                     .next()
-                    .map(|(pm_type, _)| *pm_type)
-                    .unwrap_or(PackageManagerType::Dnf);
+                    .map(|(manager, _)| manager.clone())
+                else {
+                    info.is_removing = false;
+                    info.last_remove_error =
+                        Some("No package manager was selected for removal".to_owned());
+                    return Action::None;
+                };
                 info.remove_progress = Some((
                     0,
                     info.selected_packages.len(),
                     initial_manager,
                     String::new(),
                 ));
-                Self::remove_packages_action(pm_config, info)
+                Self::remove_packages_action(pm_config, info, catalog)
             }
             Message::CancelRemovePackages => {
                 info.confirming_remove = false;
@@ -368,12 +374,13 @@ impl Installed {
                 current_package,
                 command_message,
             } => {
-                info.remove_progress = Some((completed, total, manager, current_package));
+                info.remove_progress = Some((completed, total, manager.clone(), current_package));
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.remove_logs,
                         PackageBatchAction::Remove,
-                        manager,
+                        &manager,
+                        catalog,
                         info.remove_progress
                             .as_ref()
                             .map_or("", |(_, _, _, package)| package.as_str()),
@@ -434,10 +441,11 @@ impl Installed {
     pub fn move_keyboard_selection(
         &self,
         info: &InstalledInfo,
+        catalog: &ManagerCatalog,
         direction: crate::shortcut::SelectionDirection,
     ) -> Option<Message> {
         crate::content::shared::next_keyboard_package(
-            &self.keyboard_packages(info),
+            &self.keyboard_packages(info, catalog),
             self.inspected_package.as_ref(),
             direction,
         )
@@ -451,18 +459,27 @@ impl Installed {
         }
         let selected = !info
             .selected_packages
-            .contains(&SharedUi::selection_key(*manager, name));
+            .contains(&SharedUi::selection_key(manager, name));
         Some(Message::TogglePackageSelection(
-            *manager,
+            manager.clone(),
             name.clone(),
             selected,
         ))
     }
 
-    fn keyboard_packages(&self, info: &InstalledInfo) -> Vec<PackageSelectionKey> {
+    fn keyboard_packages(
+        &self,
+        info: &InstalledInfo,
+        catalog: &ManagerCatalog,
+    ) -> Vec<PackageSelectionKey> {
         let query = self.search_query.trim().to_lowercase();
-        let mut managers: Vec<_> = info.selected_managers.iter().copied().collect();
-        managers.sort_by_key(|manager| manager.name());
+        let mut managers: Vec<_> = info.selected_managers.iter().cloned().collect();
+        managers.sort_by(|left, right| {
+            catalog
+                .display_name(left)
+                .cmp(catalog.display_name(right))
+                .then_with(|| left.cmp(right))
+        });
         managers
             .into_iter()
             .flat_map(|manager| {
@@ -475,7 +492,7 @@ impl Installed {
                     .filter(|package| {
                         query.is_empty() || package.name.to_lowercase().contains(&query)
                     })
-                    .map(move |package| (manager, package.name.clone()))
+                    .map(move |package| (manager.clone(), package.name.clone()))
             })
             .collect()
     }
@@ -484,6 +501,7 @@ impl Installed {
         &self,
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -509,7 +527,7 @@ impl Installed {
                 .spacing(theme::spacing::MD)
                 .align_y(iced::Alignment::End),
                 row![
-                    container(self.manager_filter_view(info, pm_config))
+                    container(self.manager_filter_view(info, pm_config, catalog))
                         .width(iced::Length::FillPortion(2)),
                     container(self.sort_order_view(info)).width(iced::Length::FillPortion(1)),
                 ]
@@ -542,8 +560,8 @@ impl Installed {
                 ),
             ]),
             toolbar,
-            self.batch_actions_view(info),
-            self.packages_list_view(info, show_inspector, inspector_drawer),
+            self.batch_actions_view(info, catalog),
+            self.packages_list_view(info, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -556,12 +574,14 @@ impl Installed {
         &self,
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
+        catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::column;
 
         let filters_content = if !info.has_loading_count {
             SharedUi::loading_manager_filter_view(
                 pm_config,
+                catalog,
                 if info.is_loading_count {
                     "Loading package information..."
                 } else {
@@ -581,12 +601,12 @@ impl Installed {
 
             let entries = managers
                 .iter()
-                .map(|pm_type| {
+                .map(|manager| {
                     let count = info
                         .installed_packages
-                        .get(pm_type)
+                        .get(manager)
                         .map_or(0, |(count, _)| *count);
-                    (*pm_type, count)
+                    (manager.clone(), count)
                 })
                 .collect();
 
@@ -594,8 +614,9 @@ impl Installed {
                 entries,
                 &info.selected_managers,
                 &info.loading_installed,
-                move |pm_type| {
-                    info.is_loading_count && !info.installed_packages.contains_key(&pm_type)
+                catalog,
+                move |manager| {
+                    info.is_loading_count && !info.installed_packages.contains_key(manager)
                 },
                 Message::SelectPackageManager,
             )
@@ -654,6 +675,7 @@ impl Installed {
     fn packages_list_view<'a>(
         &self,
         info: &'a InstalledInfo,
+        catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
@@ -670,7 +692,7 @@ impl Installed {
         let filtered_managers: Vec<_> = info
             .installed_packages
             .iter()
-            .filter(|(pm_type, _)| info.selected_managers.contains(pm_type))
+            .filter(|(manager, _)| info.selected_managers.contains(*manager))
             .collect();
 
         if filtered_managers.is_empty() {
@@ -680,7 +702,7 @@ impl Installed {
         let search_query = self.search_query.trim().to_lowercase();
         let has_visible_errors = filtered_managers
             .iter()
-            .any(|(pm_type, _)| info.load_errors.contains_key(*pm_type));
+            .any(|(manager, _)| info.load_errors.contains_key(*manager));
 
         if !search_query.is_empty() {
             let has_any_match = filtered_managers.iter().any(|(_, (_, packages))| {
@@ -696,8 +718,8 @@ impl Installed {
 
         let packages_sections: Vec<iced::Element<'_, Message>> = filtered_managers
             .into_iter()
-            .map(|(pm_type, (count, packages))| {
-                self.package_manager_section(*pm_type, *count, packages, info)
+            .map(|(manager, (count, packages))| {
+                self.package_manager_section(manager, *count, packages, info, catalog)
             })
             .collect();
 
@@ -709,7 +731,7 @@ impl Installed {
             info.installed_packages
                 .get(manager)
                 .and_then(|(_, packages)| packages.iter().find(|package| package.name == *name))
-                .map(|package| (*manager, package))
+                .map(|package| (manager.clone(), package))
         });
 
         if !show_inspector {
@@ -719,9 +741,11 @@ impl Installed {
                 .into();
         }
 
-        let inspector = container(
-            self.package_inspector_view(inspected_package, info.inspector_error.as_deref()),
-        )
+        let inspector = container(self.package_inspector_view(
+            inspected_package,
+            info.inspector_error.as_deref(),
+            catalog,
+        ))
         .padding(theme::spacing::LG)
         .width(if inspector_drawer {
             iced::Length::Fill
@@ -749,12 +773,13 @@ impl Installed {
 
     fn package_manager_section<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager: &'a ManagerId,
         count: usize,
         packages: &'a [PackageInfo],
         info: &'a InstalledInfo,
+        catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
-        let is_loading = info.loading_installed.contains(&pm_type);
+        let is_loading = info.loading_installed.contains(manager);
         let filtered_packages = self.filter_and_sort_packages(packages, info.sort_by);
         let subtitle = if is_loading {
             "(Loading...)".to_owned()
@@ -766,22 +791,23 @@ impl Installed {
             iced::widget::column(
                 filtered_packages
                     .into_iter()
-                    .map(|pkg| self.package_item_view(pm_type, pkg, info)),
+                    .map(|pkg| self.package_item_view(manager, pkg, info)),
             )
             .spacing(8)
             .into()
         });
 
         SharedUi::manager_section(
-            pm_type,
+            manager.clone(),
+            catalog,
             subtitle,
             theme::colors::INSTALLED,
             "Failed to load installed packages",
             info.load_errors
-                .get(&pm_type)
-                .or_else(|| info.init_errors.get(&pm_type))
+                .get(manager)
+                .or_else(|| info.init_errors.get(manager))
                 .map(String::as_str),
-            || Message::RetryLoad(pm_type),
+            || Message::RetryLoad(manager.clone()),
             body,
         )
     }
@@ -825,7 +851,7 @@ impl Installed {
 
     fn package_item_view<'a>(
         &self,
-        pm_type: PackageManagerType,
+        manager: &'a ManagerId,
         package: &'a PackageInfo,
         info: &'a InstalledInfo,
     ) -> iced::Element<'a, Message> {
@@ -834,17 +860,20 @@ impl Installed {
         let package_name = package.name.clone();
         let is_selected = info
             .selected_packages
-            .contains(&SharedUi::selection_key(pm_type, &package.name));
-        let is_inspected = self
-            .inspected_package
-            .as_ref()
-            .is_some_and(|(manager, name)| *manager == pm_type && name == &package.name);
+            .contains(&SharedUi::selection_key(manager, &package.name));
+        let is_inspected =
+            self.inspected_package
+                .as_ref()
+                .is_some_and(|(inspected_manager, name)| {
+                    inspected_manager == manager && name == &package.name
+                });
 
         let package_checkbox = checkbox(is_selected)
             .on_toggle_maybe((!info.is_removing).then_some({
                 let package_name = package_name.clone();
+                let manager = manager.clone();
                 move |selected| {
-                    Message::TogglePackageSelection(pm_type, package_name.clone(), selected)
+                    Message::TogglePackageSelection(manager.clone(), package_name.clone(), selected)
                 }
             }))
             .size(18)
@@ -862,7 +891,7 @@ impl Installed {
         .padding([8, 10])
         .width(iced::Length::Fill)
         .style(theme::list_row(is_inspected))
-        .on_press(Message::InspectPackage(pm_type, package_name));
+        .on_press(Message::InspectPackage(manager.clone(), package_name));
 
         row![package_checkbox, details]
             .spacing(theme::spacing::SM)
@@ -872,8 +901,9 @@ impl Installed {
 
     fn package_inspector_view<'a>(
         &self,
-        inspected: Option<(PackageManagerType, &'a PackageInfo)>,
+        inspected: Option<(ManagerId, &'a PackageInfo)>,
         inspector_error: Option<&'a str>,
+        catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use crate::content::shared::PackageInspector;
         use iced::widget::{column, text};
@@ -890,6 +920,7 @@ impl Installed {
         });
         let mut content = column![SharedUi::package_inspector(
             package,
+            catalog,
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::OpenHomepage,
@@ -906,7 +937,11 @@ impl Installed {
         content.into()
     }
 
-    fn batch_actions_view<'a>(&self, info: &'a InstalledInfo) -> iced::Element<'a, Message> {
+    fn batch_actions_view<'a>(
+        &self,
+        info: &'a InstalledInfo,
+        catalog: &'a ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
         use iced::widget::{button, checkbox, column, row, text};
 
         let selected_count = info.selected_packages.len();
@@ -915,8 +950,8 @@ impl Installed {
         let query = self.search_query.trim().to_lowercase();
         let mut total_visible = 0;
         let mut selected_visible = 0;
-        for pm_type in &info.selected_managers {
-            if let Some((_, packages)) = info.installed_packages.get(pm_type) {
+        for manager in &info.selected_managers {
+            if let Some((_, packages)) = info.installed_packages.get(manager) {
                 for package in packages {
                     if !query.is_empty() && !package.name.to_lowercase().contains(&query) {
                         continue;
@@ -924,7 +959,7 @@ impl Installed {
                     total_visible += 1;
                     if info
                         .selected_packages
-                        .contains(&SharedUi::selection_key(*pm_type, &package.name))
+                        .contains(&SharedUi::selection_key(manager, &package.name))
                     {
                         selected_visible += 1;
                     }
@@ -944,7 +979,7 @@ impl Installed {
                         completed,
                         total,
                         package,
-                        manager.name()
+                        catalog.display_name(manager)
                     )
                 }
             } else {
@@ -1035,32 +1070,36 @@ impl Installed {
             .then(|result| Task::done(Message::HomepageOpened(result)))
     }
 
-    fn create_load_task(
-        pm_config: &updater_core::Config,
-        pm_type: PackageManagerType,
-    ) -> Task<Message> {
+    fn create_load_task(pm_config: &updater_core::Config, manager: ManagerId) -> Task<Message> {
         let pm_config = pm_config.clone();
+        let result_manager = manager.clone();
 
         Task::future(async move {
-            pm_type.list_installed(&pm_config).await.map_err(|e| {
-                format!(
-                    "Failed to load installed packages for {}: {}",
-                    pm_type.name(),
-                    e
-                )
-            })
+            let pm_type = PackageManagerType::from_manager_id(&manager)
+                .ok_or_else(|| format!("Manager is not available in this build: {manager}"))?;
+            pm_type
+                .list_installed(&pm_config)
+                .await
+                .map_err(|e| format!("Failed to load installed packages for {}: {}", manager, e))
         })
-        .then(move |result| Task::done(Message::LoadInstalledResult(pm_type, result)))
+        .then(move |result| {
+            Task::done(Message::LoadInstalledResult(result_manager.clone(), result))
+        })
     }
 
-    fn remove_packages_action(pm_config: &updater_core::Config, info: &InstalledInfo) -> Action {
+    fn remove_packages_action(
+        pm_config: &updater_core::Config,
+        info: &InstalledInfo,
+        catalog: &ManagerCatalog,
+    ) -> Action {
         let manager_groups = collect_selected_package_groups(
-            info.selected_managers.iter().filter_map(|pm_type| {
+            info.selected_managers.iter().filter_map(|manager| {
                 info.installed_packages
-                    .get(pm_type)
-                    .map(|(_, packages)| (*pm_type, packages.as_slice()))
+                    .get(manager)
+                    .map(|(_, packages)| (manager.clone(), packages.as_slice()))
             }),
             &info.selected_packages,
+            catalog,
             |package| package.name.as_str(),
         );
 
