@@ -15,9 +15,9 @@ pub use finding::FindingInfo;
 pub use installed::{InstalledInfo, Message as InstalledMessage};
 pub use setting::Message as SettingsMessage;
 pub(crate) use shared::search_input_id;
+pub(crate) use updater_core::CancellationToken;
+pub use updater_core::OperationOutcome;
 pub use updates::UpdatesInfo;
-pub(crate) use workflows::CancellationToken;
-pub use workflows::OperationOutcome;
 
 pub struct ViewOptions {
     pub show_inspector: bool,
@@ -69,7 +69,7 @@ pub enum Action {
     /// Asynchronous task action.
     Run(iced::Task<Message>),
     /// Cooperative package-operation task.
-    CancellableRun(iced::Task<Message>, workflows::CancellationToken),
+    CancellableRun(iced::Task<Message>, updater_core::CancellationToken),
     /// Reload package data and run an optional page follow-up task.
     ReloadPackageData {
         /// Why package data needs to be reloaded.
@@ -115,7 +115,7 @@ impl Content {
 
         match message {
             Message::Settings(settings_msg) => {
-                let action = self.settings.update(settings_msg, pm_config);
+                let action = self.settings.update(settings_msg, pm_config, catalog);
                 match action {
                     setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
                     setting::Action::ApplySavedConfig(config) => {

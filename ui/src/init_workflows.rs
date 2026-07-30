@@ -79,7 +79,7 @@ where
     Item: Send + 'static,
     StartLabel: Fn(ManagerId) -> String + Copy + Send + 'static,
     CompleteLabel: Fn(ManagerId, &Result<Item, String>) -> String + Copy + Send + 'static,
-    Work: Fn(ManagerId, Config) -> WorkFuture + Copy + Send + 'static,
+    Work: Fn(ManagerId, Config) -> WorkFuture + Clone + Send + 'static,
     WorkFuture: Future<Output = Result<Item, String>> + Send + 'static,
     ItemMessage: Fn(ManagerId, Result<Item, String>) -> Message + Copy + Send + 'static,
     ProgressMessage: Fn(InitProgress) -> Message + Copy + Send + 'static,
@@ -137,6 +137,7 @@ where
         let sender_for_task = sender.clone();
         let config = config.clone();
         let finished_count_for_task = Arc::clone(&finished_count);
+        let work = work.clone();
 
         let task = Task::future(async move {
             let _ = sender_for_task.unbounded_send(InitEvent::Started {

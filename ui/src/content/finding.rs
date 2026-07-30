@@ -3,14 +3,13 @@
 use std::collections::{HashMap, HashSet};
 
 use iced::Task;
-use updater_core::{PackageInfo, PackageManagerType};
-use updater_manager_api::ManagerId;
+use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
+use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageInfo};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_items_result},
     content::shared::{self, PackageSelectionKey},
     content::workflows::{
-        BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
     theme,
@@ -183,6 +182,7 @@ impl Finding {
                     pm_config,
                     &info.selected_managers,
                     query,
+                    catalog,
                 ))
             }
             Message::SearchResult(pm_type, result) => {
@@ -208,6 +208,7 @@ impl Finding {
                     pm_config,
                     &HashSet::from([pm_type]),
                     &self.last_search_query,
+                    catalog,
                 ))
             }
             Message::InspectPackage(pm_type, package_name) => {
@@ -302,11 +303,12 @@ impl Finding {
                 );
                 let cancellation = CancellationToken::default();
                 let task = run_grouped_package_action(
+                    catalog.registry(),
                     pm_config,
-                    PackageBatchAction::Install,
+                    PackageAction::Install,
                     manager_groups,
                     cancellation.clone(),
-                    |BatchProgress {
+                    |OperationProgress {
                          completed,
                          total,
                          manager,
@@ -334,7 +336,7 @@ impl Finding {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.install_logs,
-                        PackageBatchAction::Install,
+                        PackageAction::Install,
                         &manager,
                         catalog,
                         info.install_progress
@@ -361,6 +363,7 @@ impl Finding {
                             pm_config,
                             &info.selected_managers,
                             &self.last_search_query,
+                            catalog,
                         )
                     };
                     Action::PackageOperationFinished {
@@ -989,30 +992,35 @@ impl Finding {
         pm_config: &updater_core::Config,
         selected_managers: &HashSet<ManagerId>,
         query: &str,
+        catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
         let query = query.to_string();
         let managers: Vec<_> = selected_managers.iter().cloned().collect();
+        let registry = catalog.registry();
 
         let tasks: Vec<_> = managers
             .into_iter()
             .map(|manager_id| {
                 let pm_config = pm_config.clone();
                 let query = query.clone();
+                let registry = registry.clone();
                 Task::future(async move {
-                    let result =
-                        match PackageManagerType::from_manager_id(&manager_id) {
-                            Some(pm_type) => pm_type
-                                .search_package(&pm_config, &query)
-                                .await
-                                .map_err(|error| {
-                                    format!("Failed to search in {}: {error}", manager_id.as_str())
-                                }),
-                            None => Err(format!(
-                                "No legacy search execution mapping exists for manager {}",
-                                manager_id.as_str()
-                            )),
-                        };
+                    let result = async {
+                        let manager = registry
+                            .manager_for(&manager_id, ManagerCapability::Search)
+                            .map_err(|error| error.to_string())?;
+                        let manager_config = pm_config
+                            .manager(&manager_id)
+                            .ok_or_else(|| format!("Manager is not configured: {manager_id}"))?;
+                        manager
+                            .search(manager_config, &query)
+                            .await
+                            .map_err(|error| {
+                                format!("Failed to search in {}: {error}", manager_id.as_str())
+                            })
+                    }
+                    .await;
                     (manager_id, result)
                 })
                 .then(move |(manager_id, result)| {

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use iced::Task;
 use rfd::FileHandle;
-use updater_core::{ALL_PACKAGE_MANAGERS, ManagerConfig, PackageManagerAvailability};
-use updater_manager_api::{ManagerCategory, ManagerId};
+use updater_core::ManagerConfig;
+use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerCategory, ManagerId};
 
 use crate::{
     content::shared,
@@ -29,7 +29,7 @@ pub struct Settings {
     /// Managers detected from PATH scan.
     pub detected_in_path: Vec<ManagerId>,
     /// Last availability result for each manager.
-    pub availability: HashMap<ManagerId, PackageManagerAvailability>,
+    pub availability: HashMap<ManagerId, Result<ManagerAvailability, String>>,
     /// Last save result shown in UI.
     pub save_status: Option<SaveStatus>,
 }
@@ -47,7 +47,7 @@ pub enum Message {
     /// Package-manager detection message.
     DetectPackageManagers,
     /// Detection result message.
-    FinishDetect(Vec<(ManagerId, PackageManagerAvailability)>),
+    FinishDetect(Vec<(ManagerId, Result<ManagerAvailability, String>)>),
     /// Manager-add message.
     AddDetectedManager(ManagerId),
     /// Manager-remove message.
@@ -167,18 +167,32 @@ impl Settings {
         }
     }
 
-    pub fn update(&mut self, message: Message, active_config: &updater_core::Config) -> Action {
+    pub fn update(
+        &mut self,
+        message: Message,
+        active_config: &updater_core::Config,
+        catalog: &ManagerCatalog,
+    ) -> Action {
         self.sync_from_config(active_config);
 
         match message {
             Message::DetectPackageManagers => {
                 self.is_detecting = true;
                 let config = self.draft.clone();
+                let registry = catalog.registry();
                 let task = Task::future(async move {
-                    let mut results = Vec::with_capacity(ALL_PACKAGE_MANAGERS.len());
-                    for manager_type in ALL_PACKAGE_MANAGERS {
-                        let availability = manager_type.availability_with_config(&config).await;
-                        results.push((manager_type.manager_id(), availability));
+                    let mut results = Vec::with_capacity(registry.len());
+                    for manager in registry.managers() {
+                        let id = manager.descriptor().id().clone();
+                        let manager_config = config
+                            .manager(&id)
+                            .cloned()
+                            .unwrap_or_else(|| ManagerConfig::new(id.clone()));
+                        let availability = manager
+                            .availability(&manager_config)
+                            .await
+                            .map_err(|error| error.to_string());
+                        results.push((id, availability));
                     }
                     results
                 })
@@ -190,7 +204,10 @@ impl Settings {
                 self.detected_in_path = results
                     .iter()
                     .filter_map(|(manager, availability)| {
-                        availability.is_available().then_some(manager.clone())
+                        availability
+                            .as_ref()
+                            .is_ok_and(ManagerAvailability::is_available)
+                            .then_some(manager.clone())
                     })
                     .collect();
                 self.availability = results.into_iter().collect();
@@ -530,9 +547,11 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
 
-        let selection_list: Vec<ManagerId> = ALL_PACKAGE_MANAGERS
-            .iter()
-            .map(|manager_type| manager_type.manager_id())
+        let selection_list: Vec<ManagerId> = catalog
+            .registry()
+            .managers()
+            .into_iter()
+            .map(|manager| manager.descriptor().id().clone())
             .filter(|manager| {
                 catalog
                     .descriptor(manager)
@@ -688,7 +707,53 @@ impl Settings {
                     .into(),
             );
         } else if is_configured || detected_in_path || self.availability.contains_key(manager) {
-            content_items.push(self.availability_text(manager));
+            let status = match self.availability.get(manager) {
+                None => text("Status: not scanned")
+                    .size(13)
+                    .style(theme::text_on_surface_alt)
+                    .into(),
+                Some(availability) => {
+                    let (message, is_available) = match availability {
+                        Ok(ManagerAvailability::Available { version }) => (
+                            version.as_ref().map_or_else(
+                                || "Available".to_owned(),
+                                |version| format!("Available ({version})"),
+                            ),
+                            true,
+                        ),
+                        Ok(ManagerAvailability::Unavailable { reason }) => (
+                            match reason {
+                                AvailabilityReason::UnsupportedPlatform { .. } => {
+                                    "Unsupported on this platform".to_owned()
+                                }
+                                AvailabilityReason::CommandMissing { command } => {
+                                    format!("Not found: {command}")
+                                }
+                                AvailabilityReason::NotExecutable { path } => {
+                                    format!("Not executable: {}", path.display())
+                                }
+                                AvailabilityReason::VersionCheckFailed { detail } => {
+                                    format!("Version check failed: {detail}")
+                                }
+                                _ => "Unavailable".to_owned(),
+                            },
+                            false,
+                        ),
+                        Ok(_) => ("Unavailable".to_owned(), false),
+                        Err(error) => (format!("Check failed: {error}"), false),
+                    };
+
+                    text(format!("Status: {message}"))
+                        .size(13)
+                        .style(if is_available {
+                            theme::text_success
+                        } else {
+                            theme::text_warning
+                        })
+                        .into()
+                }
+            };
+            content_items.push(status);
         }
 
         // Go binary configuration.
@@ -697,26 +762,6 @@ impl Settings {
         }
 
         shared::styled_container(column(content_items).spacing(8)).into()
-    }
-
-    fn availability_text(&self, manager: &ManagerId) -> iced::Element<'static, Message> {
-        use iced::widget::text;
-
-        let Some(availability) = self.availability.get(manager) else {
-            return text("Status: not scanned")
-                .size(13)
-                .style(theme::text_on_surface_alt)
-                .into();
-        };
-
-        text(format!("Status: {}", availability.message()))
-            .size(13)
-            .style(if availability.is_available() {
-                theme::text_success
-            } else {
-                theme::text_warning
-            })
-            .into()
     }
 
     /// Go binary configuration rows.

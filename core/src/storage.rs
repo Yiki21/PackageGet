@@ -8,12 +8,9 @@ use directories_next::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
-use updater_manager_api::{ManagerConfig, ManagerId};
+use updater_manager_api::{ManagerCategory, ManagerConfig, ManagerId};
 
-use crate::{
-    ALL_APP_PACKAGE_MANAGERS, ALL_SYSTEM_PACKAGE_MANAGERS, CoreResult, PackageManagerType,
-    error::CoreError,
-};
+use crate::{CoreResult, ManagerRegistry, error::CoreError};
 
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -47,18 +44,21 @@ fn default_appearance() -> String {
 
 impl Config {
     /// Loads the configuration, or detects managers and creates it when absent.
-    pub async fn load() -> CoreResult<Self> {
-        Self::load_from_path(config_file_path()?).await
+    pub async fn load(registry: &ManagerRegistry) -> CoreResult<Self> {
+        Self::load_from_path(config_file_path()?, registry).await
     }
 
     /// Loads a configuration from `path`, creating a detected default when absent.
-    pub async fn load_from_path(path: impl AsRef<Path>) -> CoreResult<Self> {
+    pub async fn load_from_path(
+        path: impl AsRef<Path>,
+        registry: &ManagerRegistry,
+    ) -> CoreResult<Self> {
         let path = path.as_ref();
         if path.exists() {
             return Self::read_from_path(path).await;
         }
 
-        let config = Self::detect_package_managers().await;
+        let config = Self::detect_package_managers(registry).await;
         config.save_to_path(path).await?;
         Ok(config)
     }
@@ -79,47 +79,33 @@ impl Config {
     }
 
     /// Detects available built-in package managers and creates a configuration.
-    pub async fn detect_package_managers() -> Self {
-        let mut managers = Vec::new();
+    pub async fn detect_package_managers(registry: &ManagerRegistry) -> Self {
+        let mut system_manager = None;
+        let mut other_managers = Vec::new();
 
-        if let Some(manager_type) = Self::detect_system_manager_type().await {
-            managers.push(ManagerConfig::new(manager_type.manager_id()));
-        }
-
-        managers.extend(
-            Self::detect_available_app_managers()
+        for manager in registry.managers() {
+            let manager_config = ManagerConfig::new(manager.descriptor().id().clone());
+            let is_available = manager
+                .availability(&manager_config)
                 .await
-                .into_iter()
-                .map(|manager_type| ManagerConfig::new(manager_type.manager_id())),
-        );
+                .is_ok_and(|availability| availability.is_available());
+            if !is_available {
+                continue;
+            }
+
+            if manager.descriptor().category() == ManagerCategory::System {
+                if system_manager.is_none() {
+                    system_manager = Some(manager_config);
+                }
+            } else {
+                other_managers.push(manager_config);
+            }
+        }
 
         Self {
-            managers,
+            managers: system_manager.into_iter().chain(other_managers).collect(),
             ..Self::default()
         }
-    }
-
-    /// Detects the first available system manager in product priority order.
-    pub async fn detect_system_manager_type() -> Option<PackageManagerType> {
-        for manager_type in ALL_SYSTEM_PACKAGE_MANAGERS {
-            if manager_type.is_available().await {
-                return Some(*manager_type);
-            }
-        }
-        None
-    }
-
-    /// Detects all available application and development managers.
-    pub async fn detect_available_app_managers() -> Vec<PackageManagerType> {
-        let mut managers = Vec::new();
-
-        for manager_type in ALL_APP_PACKAGE_MANAGERS {
-            if manager_type.is_available().await {
-                managers.push(*manager_type);
-            }
-        }
-
-        managers
     }
 
     /// Reloads the configuration when its persistent file exists.
@@ -220,7 +206,7 @@ impl Config {
     /// Returns the configured Go binary directory, when explicitly set.
     #[must_use]
     pub fn go_bin_dir(&self) -> Option<&str> {
-        let id = PackageManagerType::Go.manager_id();
+        let id = ManagerId::parse("builtin:go").expect("built-in Go manager ID must be valid");
         self.manager(&id)
             .and_then(|manager| manager.settings.get("go_bin_dir"))
             .and_then(Value::as_str)
@@ -228,7 +214,7 @@ impl Config {
 
     /// Sets or clears the Go binary directory on the Go manager configuration.
     pub fn set_go_bin_dir(&mut self, directory: Option<String>) -> CoreResult<()> {
-        let id = PackageManagerType::Go.manager_id();
+        let id = ManagerId::parse("builtin:go").expect("built-in Go manager ID must be valid");
         let manager = self.manager_mut(&id).ok_or_else(|| {
             CoreError::ConfigError(
                 "cannot configure Go settings when builtin:go is disabled".into(),

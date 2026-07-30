@@ -9,15 +9,7 @@ name = "updater_core"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow.workspace = true
-async-trait.workspace = true
-chrono.workspace = true
 directories-next.workspace = true
-env_logger.workspace = true
-futures.workspace = true
-log.workspace = true
-regex.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -26,4 +18,5 @@ updater_manager_api.workspace = true
 updater_managers.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tempfile.workspace = true

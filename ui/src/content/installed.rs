@@ -15,14 +15,13 @@
 use std::collections::{HashMap, HashSet};
 
 use iced::Task;
-use updater_core::{PackageInfo, PackageManagerType};
-use updater_manager_api::ManagerId;
+use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
+use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageInfo};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
-        BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
     manager_catalog::ManagerCatalog,
@@ -186,17 +185,17 @@ impl Installed {
                         info.init_errors.remove(&manager);
                         info.load_errors.remove(&manager);
                         info.loading_installed.insert(manager.clone());
-                        Action::Run(Self::create_load_task(pm_config, manager))
+                        Action::Run(Self::create_load_task(pm_config, manager, catalog))
                     } else if let Some((count, packages)) = info.installed_packages.get(&manager) {
                         if *count == packages.len() {
                             Action::None
                         } else {
                             info.loading_installed.insert(manager.clone());
-                            Action::Run(Self::create_load_task(pm_config, manager))
+                            Action::Run(Self::create_load_task(pm_config, manager, catalog))
                         }
                     } else {
                         info.loading_installed.insert(manager.clone());
-                        Action::Run(Self::create_load_task(pm_config, manager))
+                        Action::Run(Self::create_load_task(pm_config, manager, catalog))
                     }
                 } else {
                     info.selected_managers.remove(&manager);
@@ -251,7 +250,7 @@ impl Installed {
                 // Create load tasks for all managers.
                 let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|manager| Self::create_load_task(pm_config, manager))
+                    .map(|manager| Self::create_load_task(pm_config, manager, catalog))
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -263,7 +262,7 @@ impl Installed {
                 info.init_errors.remove(&manager);
                 info.load_errors.remove(&manager);
                 info.loading_installed.insert(manager.clone());
-                Action::Run(Self::create_load_task(pm_config, manager))
+                Action::Run(Self::create_load_task(pm_config, manager, catalog))
             }
             Message::SearchQueryChanged(query) => {
                 self.search_query = query;
@@ -384,11 +383,12 @@ impl Installed {
                 );
                 let cancellation = CancellationToken::default();
                 let task = run_grouped_package_action(
+                    catalog.registry(),
                     pm_config,
-                    PackageBatchAction::Remove,
+                    PackageAction::Uninstall,
                     manager_groups,
                     cancellation.clone(),
-                    |BatchProgress {
+                    |OperationProgress {
                          completed,
                          total,
                          manager,
@@ -420,7 +420,7 @@ impl Installed {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.remove_logs,
-                        PackageBatchAction::Remove,
+                        PackageAction::Uninstall,
                         &manager,
                         catalog,
                         info.remove_progress
@@ -1109,15 +1109,24 @@ impl Installed {
         content.into()
     }
 
-    fn create_load_task(pm_config: &updater_core::Config, manager: ManagerId) -> Task<Message> {
+    fn create_load_task(
+        pm_config: &updater_core::Config,
+        manager: ManagerId,
+        catalog: &ManagerCatalog,
+    ) -> Task<Message> {
         let pm_config = pm_config.clone();
+        let registry = catalog.registry();
         let result_manager = manager.clone();
 
         Task::future(async move {
-            let pm_type = PackageManagerType::from_manager_id(&manager)
-                .ok_or_else(|| format!("Manager is not available in this build: {manager}"))?;
-            pm_type
-                .list_installed(&pm_config)
+            let runtime = registry
+                .manager_for(&manager, ManagerCapability::Installed)
+                .map_err(|error| error.to_string())?;
+            let manager_config = pm_config
+                .manager(&manager)
+                .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+            runtime
+                .installed(manager_config)
                 .await
                 .map_err(|e| format!("Failed to load installed packages for {}: {}", manager, e))
         })

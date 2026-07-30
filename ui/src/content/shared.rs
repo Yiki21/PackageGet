@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
-use updater_core::{Config, PackageInfo};
-use updater_manager_api::ManagerId;
+use updater_core::Config;
+use updater_manager_api::{ManagerId, PackageInfo};
 
 use crate::{manager_catalog::ManagerCatalog, theme};
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use directories_next::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use updater_manager_api::ManagerId;
+use updater_manager_api::{ManagerId, PackageAction};
 
 use crate::{content::OperationOutcome, manager_catalog::ManagerCatalog};
 
@@ -25,39 +25,23 @@ pub struct ActivityRecord {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CancelledProgress {
-    pub action: &'static str,
-    pub completed_packages: usize,
-    pub total_packages: usize,
-    pub completed_managers: usize,
-    pub total_managers: usize,
-}
-
 impl ActivityRecord {
     pub fn from_outcome(id: u64, outcome: &OperationOutcome) -> Self {
         Self {
             id,
-            action: outcome.action.label().to_owned(),
+            action: match outcome.action {
+                PackageAction::Install => "Install",
+                PackageAction::Update => "Update",
+                PackageAction::Uninstall => "Remove",
+                _ => "Package action",
+            }
+            .to_owned(),
             completed_packages: outcome.completed_packages,
             total_packages: outcome.total_packages,
             completed_managers: outcome.completed_managers,
             total_managers: outcome.total_managers,
             failed_manager: outcome.failed_manager.clone(),
             error: outcome.error.as_deref().map(redact_detail),
-        }
-    }
-
-    pub fn cancelled(id: u64, progress: CancelledProgress) -> Self {
-        Self {
-            id,
-            action: progress.action.to_owned(),
-            completed_packages: progress.completed_packages.min(progress.total_packages),
-            total_packages: progress.total_packages,
-            completed_managers: progress.completed_managers.min(progress.total_managers),
-            total_managers: progress.total_managers,
-            failed_manager: None,
-            error: Some("Cancelled by user".to_owned()),
         }
     }
 

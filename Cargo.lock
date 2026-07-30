@@ -4406,15 +4406,8 @@ dependencies = [
 name = "updater_core"
 version = "0.2.4"
 dependencies = [
- "anyhow",
  "async-trait",
- "chrono",
  "directories-next",
- "env_logger",
- "futures",
- "log",
- "regex",
- "reqwest",
  "serde",
  "serde_json",
  "tempfile",

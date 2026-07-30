@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use thiserror::Error;
-use updater_manager_api::{ManagerCapability, ManagerId, PackageManager};
+use updater_manager_api::{ManagerCapability, ManagerDescriptor, ManagerId, PackageManager};
 
 /// Deterministic registry for compile-time package manager extensions.
 ///
@@ -58,6 +58,12 @@ impl ManagerRegistry {
     #[must_use]
     pub fn get(&self, id: &ManagerId) -> Option<Arc<dyn PackageManager>> {
         self.managers.get(id).map(Arc::clone)
+    }
+
+    /// Returns registered descriptor metadata by ID.
+    #[must_use]
+    pub fn descriptor(&self, id: &ManagerId) -> Option<&ManagerDescriptor> {
+        self.managers.get(id).map(|manager| manager.descriptor())
     }
 
     /// Returns a manager after checking an advertised capability.

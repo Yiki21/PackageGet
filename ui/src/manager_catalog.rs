@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use updater_core::{ManagerRegistry, register_builtin_managers};
 use updater_manager_api::{ManagerDescriptor, ManagerId, Platform};
@@ -6,7 +6,7 @@ use updater_manager_api::{ManagerDescriptor, ManagerId, Platform};
 /// Read-only manager metadata used by the UI.
 #[derive(Debug, Clone)]
 pub struct ManagerCatalog {
-    descriptors: BTreeMap<ManagerId, ManagerDescriptor>,
+    registry: Arc<ManagerRegistry>,
 }
 
 impl ManagerCatalog {
@@ -17,22 +17,21 @@ impl ManagerCatalog {
         register_builtin_managers(&mut registry)
             .expect("the direct built-in manager catalog must contain unique IDs");
 
-        let descriptors = registry
-            .managers()
-            .into_iter()
-            .map(|manager| {
-                let descriptor = manager.descriptor().clone();
-                (descriptor.id().clone(), descriptor)
-            })
-            .collect();
+        Self {
+            registry: Arc::new(registry),
+        }
+    }
 
-        Self { descriptors }
+    /// Returns the shared execution registry backing this catalog.
+    #[must_use]
+    pub fn registry(&self) -> Arc<ManagerRegistry> {
+        Arc::clone(&self.registry)
     }
 
     /// Returns registered descriptor metadata for `id`.
     #[must_use]
     pub fn descriptor(&self, id: &ManagerId) -> Option<&ManagerDescriptor> {
-        self.descriptors.get(id)
+        self.registry.descriptor(id)
     }
 
     /// Returns a display label, falling back to the stable ID when missing.
@@ -45,29 +44,26 @@ impl ManagerCatalog {
     /// Returns whether an implementation is registered in this build.
     #[must_use]
     pub fn is_registered(&self, id: &ManagerId) -> bool {
-        self.descriptors.contains_key(id)
+        self.registry.contains(id)
     }
 
     /// Returns whether the descriptor supports the current target OS.
     #[must_use]
     pub fn supports_current_platform(&self, id: &ManagerId) -> bool {
-        let Some(platform) = current_platform() else {
+        let platform = if cfg!(target_os = "linux") {
+            Some(Platform::Linux)
+        } else if cfg!(target_os = "windows") {
+            Some(Platform::Windows)
+        } else if cfg!(target_os = "macos") {
+            Some(Platform::MacOs)
+        } else {
+            None
+        };
+        let Some(platform) = platform else {
             return false;
         };
         self.descriptor(id)
             .is_some_and(|descriptor| descriptor.platforms().contains(platform))
-    }
-}
-
-fn current_platform() -> Option<Platform> {
-    if cfg!(target_os = "linux") {
-        Some(Platform::Linux)
-    } else if cfg!(target_os = "windows") {
-        Some(Platform::Windows)
-    } else if cfg!(target_os = "macos") {
-        Some(Platform::MacOs)
-    } else {
-        None
     }
 }
 

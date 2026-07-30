@@ -3,14 +3,13 @@
 use std::collections::{HashMap, HashSet};
 
 use iced::Task;
-use updater_core::{PackageManagerType, PackageUpdate};
-use updater_manager_api::ManagerId;
+use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
+use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageUpdate};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
-        BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, push_command_log, run_grouped_package_action,
     },
     manager_catalog::ManagerCatalog,
@@ -290,9 +289,11 @@ impl Updates {
                             .iter()
                             .filter(|package| {
                                 query.is_empty()
-                                    || package.name.to_lowercase().contains(query.as_str())
+                                    || package.target.name.to_lowercase().contains(query.as_str())
                             })
-                            .map(move |package| shared::selection_key(manager, &package.name))
+                            .map(move |package| {
+                                shared::selection_key(manager, &package.target.name)
+                            })
                     });
                 if select_all {
                     info.selected_packages.extend(visible);
@@ -337,9 +338,9 @@ impl Updates {
                     }),
                     &info.selected_packages,
                     catalog,
-                    |package| package.name.as_str(),
+                    |package| package.target.name.as_str(),
                 );
-                Self::update_plan_action(pm_config, manager_groups)
+                Self::update_plan_action(pm_config, manager_groups, catalog)
             }
             Message::UpdateProgress {
                 completed,
@@ -352,7 +353,7 @@ impl Updates {
                 if let Some(command_message) = command_message {
                     push_command_log(
                         &mut info.update_logs,
-                        PackageBatchAction::Update,
+                        PackageAction::Update,
                         &manager,
                         catalog,
                         info.update_progress
@@ -483,7 +484,7 @@ impl Updates {
                 info.last_update_error = None;
                 info.update_logs.clear();
                 info.update_progress = Some((0, total, initial_manager, String::new()));
-                Self::update_plan_action(pm_config, plan.manager_groups)
+                Self::update_plan_action(pm_config, plan.manager_groups, catalog)
             }
             Message::CancelUpdateAll => {
                 self.pending_update_all = None;
@@ -599,9 +600,9 @@ impl Updates {
                 self.filter_and_sort_updates(packages, info.sort_by)
                     .into_iter()
                     .filter(move |package| {
-                        query.is_empty() || package.name.to_lowercase().contains(&query)
+                        query.is_empty() || package.target.name.to_lowercase().contains(&query)
                     })
-                    .map(move |package| (manager.clone(), package.name.clone()))
+                    .map(move |package| (manager.clone(), package.target.name.clone()))
             })
             .collect()
     }
@@ -847,7 +848,7 @@ impl Updates {
             let has_any_match = filtered_managers.iter().any(|(_, (_, packages))| {
                 packages
                     .iter()
-                    .any(|pkg| pkg.name.to_lowercase().contains(&search_query))
+                    .any(|pkg| pkg.target.name.to_lowercase().contains(&search_query))
             });
 
             if !has_any_match && !has_visible_errors {
@@ -868,12 +869,14 @@ impl Updates {
         let inspected = self.inspected_package.as_ref().and_then(|(manager, name)| {
             info.updates_by_manager
                 .get(manager)
-                .and_then(|(_, packages)| packages.iter().find(|package| package.name == *name))
+                .and_then(|(_, packages)| {
+                    packages.iter().find(|package| package.target.name == *name)
+                })
                 .map(|package| crate::content::shared::PackageInspector {
                     manager: manager.clone(),
-                    name: &package.name,
+                    name: &package.target.name,
                     version: &package.current_version,
-                    available_version: Some(&package.new_version),
+                    available_version: Some(&package.available_version),
                     description: None,
                     size: None,
                     install_date: None,
@@ -976,20 +979,20 @@ impl Updates {
                 if query.is_empty() {
                     true
                 } else {
-                    pkg.name.to_lowercase().contains(&query)
+                    pkg.target.name.to_lowercase().contains(&query)
                 }
             })
             .collect();
 
         match sort_by {
             SortOption::Name => {
-                filtered.sort_by(|a, b| a.name.cmp(&b.name));
+                filtered.sort_by(|a, b| a.target.name.cmp(&b.target.name));
             }
             SortOption::CurrentVersion => {
                 filtered.sort_by(|a, b| a.current_version.cmp(&b.current_version));
             }
             SortOption::NewVersion => {
-                filtered.sort_by(|a, b| a.new_version.cmp(&b.new_version));
+                filtered.sort_by(|a, b| a.available_version.cmp(&b.available_version));
             }
         }
 
@@ -1004,10 +1007,10 @@ impl Updates {
     ) -> iced::Element<'a, Message> {
         use iced::widget::{button, checkbox, column, row, text};
 
-        let package_name = package.name.clone();
+        let package_name = package.target.name.clone();
         let is_selected = info
             .selected_packages
-            .contains(&shared::selection_key(&manager, &package.name));
+            .contains(&shared::selection_key(&manager, &package.target.name));
 
         let package_checkbox = checkbox(is_selected)
             .on_toggle_maybe((!info.is_updating).then_some({
@@ -1038,7 +1041,7 @@ impl Updates {
                 text("Available")
                     .size(11)
                     .style(theme::text_on_surface_muted),
-                text(&package.new_version)
+                text(&package.available_version)
                     .size(13)
                     .font(theme::FONT_MONO)
                     .style(theme::text_on_surface)
@@ -1056,11 +1059,11 @@ impl Updates {
             self.inspected_package
                 .as_ref()
                 .is_some_and(|(selected_manager, name)| {
-                    selected_manager == &manager && name == &package.name
+                    selected_manager == &manager && name == &package.target.name
                 });
         let details = button(
             column![
-                text(&package.name)
+                text(&package.target.name)
                     .size(15)
                     .font(theme::FONT_SEMIBOLD)
                     .style(theme::text_on_surface),
@@ -1178,13 +1181,13 @@ impl Updates {
         for pm_type in &info.selected_managers {
             if let Some((_, packages)) = info.updates_by_manager.get(pm_type) {
                 for package in packages {
-                    if !query.is_empty() && !package.name.to_lowercase().contains(&query) {
+                    if !query.is_empty() && !package.target.name.to_lowercase().contains(&query) {
                         continue;
                     }
                     total_visible += 1;
                     if info
                         .selected_packages
-                        .contains(&shared::selection_key(pm_type, &package.name))
+                        .contains(&shared::selection_key(pm_type, &package.target.name))
                     {
                         selected_visible += 1;
                     }
@@ -1303,13 +1306,18 @@ impl Updates {
     ) -> Task<Message> {
         let pm_config = pm_config.clone();
         let manager_name = catalog.display_name(&manager).to_owned();
+        let registry = catalog.registry();
         let result_manager = manager.clone();
 
         Task::future(async move {
-            let pm_type = PackageManagerType::from_manager_id(&manager)
-                .ok_or_else(|| format!("Manager is not available in this build: {manager}"))?;
-            pm_type
-                .list_updates_with_refresh(&pm_config, force_refresh)
+            let runtime = registry
+                .manager_for(&manager, ManagerCapability::Updates)
+                .map_err(|error| error.to_string())?;
+            let manager_config = pm_config
+                .manager(&manager)
+                .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+            runtime
+                .updates(manager_config, force_refresh)
                 .await
                 .map_err(|e| format!("Failed to load updates for {manager_name}: {e}"))
         })
@@ -1332,7 +1340,7 @@ impl Updates {
             .map(|(manager, (_, packages))| {
                 let mut names: Vec<_> = packages
                     .iter()
-                    .map(|package| package.name.clone())
+                    .map(|package| package.target.name.clone())
                     .collect();
                 names.sort();
                 (manager.clone(), names)
@@ -1369,14 +1377,16 @@ impl Updates {
     fn update_plan_action(
         pm_config: &updater_core::Config,
         manager_groups: Vec<(ManagerId, Vec<String>)>,
+        catalog: &ManagerCatalog,
     ) -> Action {
         let cancellation = CancellationToken::default();
         let task = run_grouped_package_action(
+            catalog.registry(),
             pm_config,
-            PackageBatchAction::Update,
+            PackageAction::Update,
             manager_groups,
             cancellation.clone(),
-            |BatchProgress {
+            |OperationProgress {
                  completed,
                  total,
                  manager,
@@ -1398,17 +1408,14 @@ impl Updates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use updater_manager_api::PackageTarget;
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
     }
 
-    fn update(name: &str) -> PackageUpdate {
-        PackageUpdate {
-            name: name.to_owned(),
-            current_version: "1.0".to_owned(),
-            new_version: "2.0".to_owned(),
-        }
+    fn update(manager: &ManagerId, name: &str) -> PackageUpdate {
+        PackageUpdate::new(PackageTarget::new(manager.clone(), name), "1.0", "2.0")
     }
 
     #[test]
@@ -1416,10 +1423,12 @@ mod tests {
         let mut info = UpdatesInfo::default();
         let dnf = manager_id("builtin:dnf");
         let flatpak = manager_id("builtin:flatpak");
+        info.updates_by_manager.insert(
+            dnf.clone(),
+            (2, vec![update(&dnf, "alpha"), update(&dnf, "beta")]),
+        );
         info.updates_by_manager
-            .insert(dnf.clone(), (2, vec![update("alpha"), update("beta")]));
-        info.updates_by_manager
-            .insert(flatpak.clone(), (1, vec![update("gamma")]));
+            .insert(flatpak.clone(), (1, vec![update(&flatpak, "gamma")]));
         info.load_errors
             .insert(flatpak.clone(), "network error".to_owned());
         let scope = HashSet::from([dnf.clone(), flatpak.clone()]);
@@ -1438,9 +1447,9 @@ mod tests {
         let dnf = manager_id("builtin:dnf");
         let flatpak = manager_id("builtin:flatpak");
         info.updates_by_manager
-            .insert(dnf, (1, vec![update("already-done")]));
+            .insert(dnf.clone(), (1, vec![update(&dnf, "already-done")]));
         info.updates_by_manager
-            .insert(flatpak.clone(), (1, vec![update("retry-me")]));
+            .insert(flatpak.clone(), (1, vec![update(&flatpak, "retry-me")]));
         let scope = HashSet::from([flatpak.clone()]);
 
         let plan = Updates::build_update_plan(&info, &scope, &ManagerCatalog::builtin());

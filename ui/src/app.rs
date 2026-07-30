@@ -4,8 +4,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use iced::{Length, Subscription, Task};
-use updater_core::{PackageManagerType, PackageUpdate};
-use updater_manager_api::ManagerId;
+use updater_manager_api::{ManagerCapability, ManagerId, PackageUpdate};
 
 use crate::{
     content::{self, Content, FindingInfo, InstalledInfo, UpdatesInfo},
@@ -61,8 +60,6 @@ pub struct App {
     activity_center_open: bool,
     /// Monotonic operation record identifier.
     next_operation_id: u64,
-    /// Cooperative task-abort handle for the active operation.
-    active_operation_handle: Option<iced::task::Handle>,
     /// Cooperative cancellation token for the active package operation.
     active_operation_cancellation: Option<content::CancellationToken>,
     /// Current application window size.
@@ -170,11 +167,13 @@ impl App {
     /// Creates app state and starts config loading.
     pub fn new() -> (Self, Task<Message>) {
         let now = Instant::now();
+        let manager_catalog = ManagerCatalog::builtin();
+        let config_registry = manager_catalog.registry();
 
         let app = Self {
             sidebar: SideBar::default(),
             content: Content::default(),
-            manager_catalog: ManagerCatalog::builtin(),
+            manager_catalog,
             pm_config: updater_core::Config::default(),
             installed_info: InstalledInfo::default(),
             updates_info: UpdatesInfo::default(),
@@ -183,7 +182,6 @@ impl App {
             activity_history: crate::activity::ActivityHistory::default(),
             activity_center_open: false,
             next_operation_id: 1,
-            active_operation_handle: None,
             active_operation_cancellation: None,
             window_size: iced::Size::new(1200.0, 800.0),
             sidebar_expanded: false,
@@ -193,7 +191,10 @@ impl App {
         };
 
         let task = Task::batch(vec![
-            Task::perform(updater_core::Config::load(), Message::ConfigLoaded),
+            Task::perform(
+                async move { updater_core::Config::load(&config_registry).await },
+                Message::ConfigLoaded,
+            ),
             Task::perform(
                 crate::activity::ActivityHistory::load(),
                 Message::ActivityHistoryLoaded,
@@ -274,10 +275,8 @@ impl App {
                 task = match action {
                     content::Action::Run(content_task) => content_task.map(Message::Content),
                     content::Action::CancellableRun(content_task, cancellation) => {
-                        let (task, handle) = content_task.map(Message::Content).abortable();
-                        self.active_operation_handle = Some(handle);
                         self.active_operation_cancellation = Some(cancellation);
-                        task
+                        content_task.map(Message::Content)
                     }
                     content::Action::ReloadPackageData { reason, follow_up } => {
                         let reload = self.reload_package_data(reason);
@@ -295,7 +294,6 @@ impl App {
                         reload,
                         follow_up,
                     } => {
-                        self.active_operation_handle = None;
                         self.active_operation_cancellation = None;
                         let notification = self.record_operation(&outcome);
                         self.status_panel.record_outcome(outcome);
@@ -322,82 +320,8 @@ impl App {
                 );
             }
             Message::CancelActiveOperation => {
-                if let Some(handle) = self.active_operation_handle.take() {
-                    let progress = if self.finding_info.is_installing {
-                        let (completed, total) = self
-                            .finding_info
-                            .install_progress
-                            .as_ref()
-                            .map(|(completed, total, _, _)| (*completed, *total))
-                            .unwrap_or((0, self.finding_info.selected_packages.len()));
-                        Some(crate::activity::CancelledProgress {
-                            action: "Install",
-                            completed_packages: completed,
-                            total_packages: total,
-                            completed_managers: 0,
-                            total_managers: self.finding_info.selected_managers.len(),
-                        })
-                    } else if self.updates_info.is_updating {
-                        let (completed, total) = self
-                            .updates_info
-                            .update_progress
-                            .as_ref()
-                            .map(|(completed, total, _, _)| (*completed, *total))
-                            .unwrap_or((0, self.updates_info.selected_packages.len()));
-                        Some(crate::activity::CancelledProgress {
-                            action: "Update",
-                            completed_packages: completed,
-                            total_packages: total,
-                            completed_managers: 0,
-                            total_managers: self.updates_info.selected_managers.len(),
-                        })
-                    } else if self.installed_info.is_removing {
-                        let (completed, total) = self
-                            .installed_info
-                            .remove_progress
-                            .as_ref()
-                            .map(|(completed, total, _, _)| (*completed, *total))
-                            .unwrap_or((0, self.installed_info.selected_packages.len()));
-                        Some(crate::activity::CancelledProgress {
-                            action: "Remove",
-                            completed_packages: completed,
-                            total_packages: total,
-                            completed_managers: 0,
-                            total_managers: self.installed_info.selected_managers.len(),
-                        })
-                    } else {
-                        None
-                    };
-                    if let Some(cancellation) = self.active_operation_cancellation.take() {
-                        cancellation.cancel();
-                    }
-                    handle.abort();
-                    if self.finding_info.is_installing {
-                        self.finding_info.is_installing = false;
-                        self.finding_info.install_progress = None;
-                        self.finding_info.last_install_error =
-                            Some("Operation cancelled by user".to_owned());
-                    }
-                    if self.updates_info.is_updating {
-                        self.updates_info.is_updating = false;
-                        self.updates_info.update_progress = None;
-                        self.updates_info.last_update_error =
-                            Some("Operation cancelled by user".to_owned());
-                    }
-                    if self.installed_info.is_removing {
-                        self.installed_info.is_removing = false;
-                        self.installed_info.remove_progress = None;
-                        self.installed_info.last_remove_error =
-                            Some("Operation cancelled by user".to_owned());
-                    }
-                    self.installed_info.confirming_remove = false;
-                    if let Some(progress) = progress {
-                        let id = self.next_operation_id;
-                        self.next_operation_id = self.next_operation_id.saturating_add(1);
-                        self.activity_history
-                            .push(crate::activity::ActivityRecord::cancelled(id, progress));
-                        task = self.save_activity_history();
-                    }
+                if let Some(cancellation) = &self.active_operation_cancellation {
+                    cancellation.cancel();
                 }
             }
             Message::ToggleActivityCenter => {
@@ -854,11 +778,14 @@ impl App {
                 iced::widget::button(iced::widget::text("Cancel Task").size(11))
                     .padding([3, 8])
                     .style(crate::theme::secondary_button(
-                        self.active_operation_handle.is_some()
+                        self.active_operation_cancellation
+                            .as_ref()
+                            .is_some_and(|token| !token.is_cancelled())
                     ))
                     .on_press_maybe(
-                        self.active_operation_handle
-                            .is_some()
+                        self.active_operation_cancellation
+                            .as_ref()
+                            .is_some_and(|token| !token.is_cancelled())
                             .then_some(Message::CancelActiveOperation)
                     ),
             ]
@@ -1001,15 +928,19 @@ impl App {
                 .insert(manager.clone());
         }
 
-        Task::batch(managers.into_iter().map(|manager| {
+        let registry = self.manager_catalog.registry();
+        Task::batch(managers.into_iter().map(move |manager| {
             let config = self.pm_config.clone();
+            let registry = registry.clone();
             let task_manager = manager.clone();
             Task::future(async move {
-                let runtime =
-                    PackageManagerType::from_manager_id(&task_manager).ok_or_else(|| {
-                        format!("Manager is not available in this build: {task_manager}")
-                    })?;
-                runtime.list_installed(&config).await.map_err(|error| {
+                let runtime = registry
+                    .manager_for(&task_manager, ManagerCapability::Installed)
+                    .map_err(|error| error.to_string())?;
+                let manager_config = config
+                    .manager(&task_manager)
+                    .ok_or_else(|| format!("Manager is not configured: {task_manager}"))?;
+                runtime.installed(manager_config).await.map_err(|error| {
                     format!(
                         "Failed to load installed packages for {}: {}",
                         task_manager, error
@@ -1162,6 +1093,7 @@ impl App {
             return self.finish_init_installed_counts();
         }
 
+        let registry = self.manager_catalog.registry();
         run_manager_init_task(
             config,
             managers,
@@ -1171,15 +1103,20 @@ impl App {
                     Ok(count) => format!("Done count_installed -> {}", count),
                     Err(error) => format!("count_installed failed for {manager} -> {error}"),
                 },
-                work: |manager: ManagerId, config| async move {
-                    let runtime =
-                        PackageManagerType::from_manager_id(&manager).ok_or_else(|| {
-                            format!("Manager is not available in this build: {manager}")
-                        })?;
-                    runtime
-                        .count_installed(&config)
-                        .await
-                        .map_err(|error| error.to_string())
+                work: move |manager: ManagerId, config: updater_core::Config| {
+                    let registry = registry.clone();
+                    async move {
+                        let runtime = registry
+                            .manager_for(&manager, ManagerCapability::Installed)
+                            .map_err(|error| error.to_string())?;
+                        let manager_config = config
+                            .manager(&manager)
+                            .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+                        runtime
+                            .count_installed(manager_config)
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
                 },
                 item_message: |manager, result| Message::InitInstalledCount { manager, result },
                 progress_message: |progress: InitProgress| Message::InitInstalledProgress {
@@ -1209,6 +1146,7 @@ impl App {
             return Task::none();
         }
 
+        let registry = self.manager_catalog.registry();
         run_manager_init_task(
             config,
             managers,
@@ -1223,15 +1161,20 @@ impl App {
                         format!("list_updates failed for {manager} -> {error}")
                     }
                 },
-                work: |manager: ManagerId, config| async move {
-                    let runtime =
-                        PackageManagerType::from_manager_id(&manager).ok_or_else(|| {
-                            format!("Manager is not available in this build: {manager}")
-                        })?;
-                    runtime
-                        .list_updates_with_refresh(&config, false)
-                        .await
-                        .map_err(|error| error.to_string())
+                work: move |manager: ManagerId, config: updater_core::Config| {
+                    let registry = registry.clone();
+                    async move {
+                        let runtime = registry
+                            .manager_for(&manager, ManagerCapability::Updates)
+                            .map_err(|error| error.to_string())?;
+                        let manager_config = config
+                            .manager(&manager)
+                            .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+                        runtime
+                            .updates(manager_config, false)
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
                 },
                 item_message: |manager, result| Message::InitUpdatesCount { manager, result },
                 progress_message: |progress: InitProgress| Message::InitUpdatesProgress {
