@@ -1,7 +1,7 @@
 # Iteration 016：UI ManagerId Identity Cutover
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段3——配置、UI identity与manager设置迁移
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -23,7 +23,7 @@
 - [x] 将Activity/Status消费的manager identity改为`ManagerId`，display统一通过catalog解析或稳定ID fallback。
 - [x] 增加catalog metadata、unknown manager fallback、selection reconciliation、page state和operation grouping contracts。
 - [x] 更新ROADMAP/manager authoring与本轮进度，记录仍存在的静态core执行边界。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Identity决策
 
@@ -73,6 +73,7 @@
 - `112b02e refactor(ui): use stable manager identities`
 - `b4d878c docs: record ui identity cutover progress`
 - `91076d1 refactor(ui): satisfy identity quality gates`
+- `56ef880 docs: record ui identity local validation`
 
 ## 验证记录
 
@@ -84,7 +85,7 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，211项成功，14项显式ignored，0失败。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
-- GitHub Actions：待推送最终HEAD后验证。
+- GitHub Actions CI run `30509352724`：成功，format/check/test/clippy/build job全部通过，耗时4分23秒。
 
 ## 遗留项 / 下一轮
 
