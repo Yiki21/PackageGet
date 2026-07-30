@@ -1,7 +1,7 @@
 # Iteration 018：Registry Execution Engine Cutover
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段2收尾与阶段3执行边界迁移
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -18,7 +18,7 @@
 - [x] 将初始化、Finding、Installed、Updates与Settings检测任务切换到direct API模型和capability检查。
 - [x] 删除legacy enum、宏dispatcher、静态trait、`core/src/pm/`兼容模块及无用依赖和测试。
 - [x] 更新ROADMAP与manager authoring文档，记录新的执行路径和剩余阶段3工作。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁。
 
 ## 行为约束
 
@@ -55,16 +55,27 @@
 - UI模型直接使用manager API的`PackageInfo`与`PackageUpdate`；写操作直接使用`PackageAction`、`OperationProgress`与`OperationOutcome`。
 - 取消不再abort Iced future或提前伪造Activity记录；token只在当前manager完成后的下一组边界生效，最终结果由core统一生成。
 - 已删除`PackageManagerType`、`define_package_managers!`、旧静态trait、`core/src/pm/`的12个兼容文件和core的8个无用运行时依赖。
-- 新增4项engine测试，覆盖输入顺序、unsupported capability、部分失败停止和组间取消；workspace check/test/clippy已通过，最终完整门禁待文档检查点后执行。
+- 新增4项engine测试，覆盖输入顺序、unsupported capability、部分失败停止和组间取消。
+- 完整串行门禁通过；workspace共171项测试成功、14项真实环境测试显式ignored、0失败。删除的41项测试属于legacy core适配器重复覆盖，direct manager contract测试继续保留。
 
 ## Git提交
 
 - `55fd98f docs: plan registry execution engine cutover`
 - `eb16b3f refactor: simplify core and ui flows`
 - `54eb1f0 refactor: cut over to registry execution engine`
+- `81bc5d4 docs: record registry execution cutover progress`
+
+## 验证记录
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，171项成功，14项显式ignored，0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- workspace检索确认不存在`PackageManagerType`、`define_package_managers!`、旧静态`PackageManager` trait和UI legacy execution类型。
 
 ## 遗留项 / 下一轮
 
-- Config load error可见恢复界面仍未实现。
-- Settings executable path的保存前验证与显式重置仍未完成。
+- 下一轮优先完成Settings executable path的保存前验证、错误反馈与显式重置，并保持draft/baseline隔离。
+- Config load error可见恢复界面仍未实现，排在Settings路径闭环之后。
 - Activity时间戳仍未加入。
