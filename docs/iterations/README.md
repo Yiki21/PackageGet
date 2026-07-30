@@ -31,3 +31,4 @@
 | 015 | 已完成 | 阶段 3：Config 直接切换 | [015-config-direct-cutover.md](015-config-direct-cutover.md) |
 | 016 | 已完成 | 阶段 3：UI ManagerId Identity Cutover | [016-ui-manager-identity.md](016-ui-manager-identity.md) |
 | 017 | 已完成 | 阶段 3：Activity Direct ManagerId Schema | [017-activity-direct-manager-id-schema.md](017-activity-direct-manager-id-schema.md) |
+| 018 | 进行中 | 阶段 2/3：Registry Execution Engine Cutover | [018-registry-execution-engine-cutover.md](018-registry-execution-engine-cutover.md) |
