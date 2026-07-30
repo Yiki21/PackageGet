@@ -88,6 +88,11 @@ pub struct PackageInspector<'a> {
     pub homepage: Option<&'a str>,
 }
 
+pub struct ManagerSectionStyle {
+    pub accent: iced::Color,
+    pub error_prefix: &'static str,
+}
+
 /// Shared content-page UI helpers.
 pub struct SharedUi;
 
@@ -646,8 +651,7 @@ impl SharedUi {
         manager: ManagerId,
         catalog: &'a ManagerCatalog,
         subtitle: String,
-        accent: iced::Color,
-        error_prefix: &'static str,
+        style: ManagerSectionStyle,
         error: Option<&'a str>,
         retry: impl FnOnce() -> Message,
         body: Option<Element<'a, Message>>,
@@ -657,6 +661,10 @@ impl SharedUi {
     {
         use iced::widget::{column, row};
 
+        let ManagerSectionStyle {
+            accent,
+            error_prefix,
+        } = style;
         let manager_name = catalog.display_name(&manager).to_owned();
         let header = row![
             text(manager_name.clone())

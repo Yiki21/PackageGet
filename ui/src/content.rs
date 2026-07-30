@@ -19,6 +19,11 @@ pub use updates::UpdatesInfo;
 pub(crate) use workflows::CancellationToken;
 pub use workflows::OperationOutcome;
 
+pub struct ViewOptions {
+    pub show_inspector: bool,
+    pub inspector_drawer: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ActiveContentPage {
     /// Search/install page.
@@ -324,9 +329,12 @@ impl Content {
         updates_info: &'a UpdatesInfo,
         finding_info: &'a FindingInfo,
         catalog: &'a crate::manager_catalog::ManagerCatalog,
-        show_inspector: bool,
-        inspector_drawer: bool,
+        options: ViewOptions,
     ) -> iced::Element<'a, Message> {
+        let ViewOptions {
+            show_inspector,
+            inspector_drawer,
+        } = options;
         match self.active_content {
             ActiveContentPage::Finding => self
                 .finding

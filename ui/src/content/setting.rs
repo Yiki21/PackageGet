@@ -465,9 +465,9 @@ impl Settings {
             .managers
             .iter()
             .filter(|manager| {
-                catalog.descriptor(&manager.id).map_or(true, |descriptor| {
-                    descriptor.category() != ManagerCategory::System
-                })
+                catalog
+                    .descriptor(&manager.id)
+                    .is_none_or(|descriptor| descriptor.category() != ManagerCategory::System)
             })
             .collect::<Vec<_>>();
 

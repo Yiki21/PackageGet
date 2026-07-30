@@ -8,7 +8,7 @@ use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
-    content::shared::{PackageSelectionKey, SharedUi},
+    content::shared::{ManagerSectionStyle, PackageSelectionKey, SharedUi},
     content::workflows::{
         BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, run_grouped_package_action,
@@ -966,8 +966,10 @@ impl Updates {
             manager.clone(),
             catalog,
             subtitle,
-            theme::colors::UPDATES,
-            "Failed to load updates",
+            ManagerSectionStyle {
+                accent: theme::colors::UPDATES,
+                error_prefix: "Failed to load updates",
+            },
             info.load_errors
                 .get(&manager)
                 .or_else(|| info.init_errors.get(&manager))

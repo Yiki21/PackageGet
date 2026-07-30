@@ -729,8 +729,10 @@ impl App {
                 &self.updates_info,
                 &self.finding_info,
                 &self.manager_catalog,
-                show_inspector,
-                mode != LayoutMode::Wide,
+                content::ViewOptions {
+                    show_inspector,
+                    inspector_drawer: mode != LayoutMode::Wide,
+                },
             )
             .map(Message::Content);
         let content_area = container(if mode == LayoutMode::Wide {
@@ -970,8 +972,8 @@ impl App {
             .installed_info
             .selected_managers
             .iter()
-            .cloned()
             .filter(|manager| !self.installed_info.init_errors.contains_key(manager))
+            .cloned()
             .collect();
         if managers.is_empty() {
             return Task::none();

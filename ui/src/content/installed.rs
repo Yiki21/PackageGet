@@ -20,7 +20,7 @@ use updater_manager_api::ManagerId;
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
-    content::shared::{PackageSelectionKey, SharedUi},
+    content::shared::{ManagerSectionStyle, PackageSelectionKey, SharedUi},
     content::workflows::{
         BatchProgress, CancellationToken, OperationOutcome, PackageBatchAction,
         collect_selected_package_groups, push_command_log, run_grouped_package_action,
@@ -801,8 +801,10 @@ impl Installed {
             manager.clone(),
             catalog,
             subtitle,
-            theme::colors::INSTALLED,
-            "Failed to load installed packages",
+            ManagerSectionStyle {
+                accent: theme::colors::INSTALLED,
+                error_prefix: "Failed to load installed packages",
+            },
             info.load_errors
                 .get(manager)
                 .or_else(|| info.init_errors.get(manager))
