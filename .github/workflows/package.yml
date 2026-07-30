@@ -3,7 +3,7 @@ name: Package
 on:
   push:
     tags:
-      - "Build*"
+      - "Build-v*"
   workflow_dispatch:
 
 permissions:
@@ -37,7 +37,7 @@ jobs:
       - name: Install deb packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev mold
+          sudo apt-get install -y dpkg-dev jq mold
 
       - name: Install deb packaging tool
         run: cargo install cargo-deb --version 3.7.0 --locked --no-default-features
@@ -46,7 +46,13 @@ jobs:
         run: cargo build --release --locked --jobs 1 -p updater
 
       - name: Build deb package
-        run: cargo deb -p updater --no-build --no-strip
+        run: cargo deb -p updater --no-build --no-strip --locked
+
+      - name: Verify deb package metadata
+        run: |
+          package="$(find target/debian -maxdepth 1 -name '*.deb' -print -quit)"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          test "$(dpkg-deb -f "$package" Version)" = "${version/-/~}-1"
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v7
@@ -79,6 +85,7 @@ jobs:
             clang \
             gcc \
             git \
+            jq \
             mold \
             rpm-build \
           && dnf clean all
@@ -100,6 +107,12 @@ jobs:
       - name: Build rpm package
         run: cargo generate-rpm -p ui
 
+      - name: Verify rpm package metadata
+        run: |
+          package="$(find target/generate-rpm -maxdepth 1 -name '*.rpm' -print -quit)"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          test "$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$package")" = "${version/-/~}-1"
+
       - name: Upload rpm artifact
         uses: actions/upload-artifact@v7
         with:
@@ -107,26 +120,165 @@ jobs:
           path: target/generate-rpm/*.rpm
           if-no-files-found: error
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
+  build-arch:
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/archlinux/archlinux:base-devel
+
+    steps:
+      - name: Install Arch packaging dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            clang \
+            git \
+            hicolor-icon-theme \
+            jq \
+            libx11 \
+            libxkbcommon \
+            libxkbcommon-x11 \
+            mold \
+            namcap \
+            polkit \
+            rust \
+            wayland
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare tagged-layout source archive
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          arch_version="${version/-/}"
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "${GITHUB_REF_NAME#Build-v}" = "$version"
+          fi
+
+          (
+            source packaging/arch/PKGBUILD
+            test "$pkgver" = "$arch_version"
+            test "$_upstream_version" = "$version"
+          )
+
+          git archive \
+            --format=tar \
+            --prefix="PackageGet-Build-v${version}/" \
+            "$GITHUB_SHA" \
+            | gzip -n > "packaging/arch/updater-${arch_version}.tar.gz"
+
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build Arch package
+        working-directory: packaging/arch
+        run: runuser -u builder -- makepkg --cleanbuild --noconfirm
+
+      - name: Validate Arch package
+        run: |
+          mapfile -t packages < <(
+            find packaging/arch -maxdepth 1 -name '*.pkg.tar.zst' -print
+          )
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+
+          namcap_output="$(namcap packaging/arch/PKGBUILD "$package" 2>&1)"
+          printf '%s\n' "$namcap_output"
+          if grep -q ' E:' <<< "$namcap_output"; then
+            exit 1
+          fi
+
+          bsdtar -tf "$package" | sort > package-files.txt
+          for path in \
+            usr/bin/updater \
+            usr/lib/updater/updater-system-helper \
+            usr/share/applications/com.ayi.updater.desktop \
+            usr/share/icons/hicolor/scalable/apps/updater.svg \
+            usr/share/licenses/updater/LICENSE \
+            usr/share/polkit-1/actions/com.ayi.updater.policy
+          do
+            grep -Fxq "$path" package-files.txt
+          done
+
+      - name: Upload Arch artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: arch-x86_64-${{ github.ref_name }}
+          path: packaging/arch/*.pkg.tar.zst
+          if-no-files-found: error
+
+  bundle:
     needs:
+      - build-arch
       - build-deb
       - build-rpm
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
           path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate and verify checksums
+        run: |
+          mapfile -t packages < <(
+            find release-artifacts -maxdepth 1 -type f \
+              \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+              -printf '%f\n' \
+              | sort
+          )
+          test "${#packages[@]}" -eq 5
+
+          cd release-artifacts
+          sha256sum "${packages[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages-${{ github.ref_name }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v6
+
+      - name: Determine release type
+        id: release
+        run: |
+          version="${GITHUB_REF_NAME#Build-v}"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-packages-${{ github.ref_name }}
+          path: release-artifacts
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          prerelease: ${{ steps.release.outputs.prerelease }}
           files: |
-            release-artifacts/**/*.deb
-            release-artifacts/**/*.rpm
+            release-artifacts/*.deb
+            release-artifacts/*.rpm
+            release-artifacts/*.pkg.tar.zst
+            release-artifacts/SHA256SUMS

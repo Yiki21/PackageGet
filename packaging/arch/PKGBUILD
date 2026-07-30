@@ -1,0 +1,69 @@
+# Maintainer: zhangyi <zy1772696711@gmail.com>
+pkgname=updater
+pkgver=0.3.0beta.1
+pkgrel=1
+pkgdesc='Desktop GUI for managing packages across multiple package managers'
+arch=('x86_64')
+url='https://github.com/Yiki21/PackageGet'
+license=('MIT')
+options=('!debug' '!lto')
+depends=(
+  'glibc'
+  'hicolor-icon-theme'
+  'libgcc'
+  'libx11'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'polkit'
+  'wayland'
+)
+makedepends=('cargo' 'clang' 'mold')
+optdepends=(
+  'cargo: manage globally installed Rust crates'
+  'flatpak: manage Flatpak applications'
+  'go: manage globally installed Go tools'
+  'npm: manage global npm packages'
+  'pnpm: manage global pnpm packages'
+  'python-pipx: manage pipx applications'
+  'xdg-desktop-portal: native file and directory chooser integration'
+)
+_upstream_version='0.3.0-beta.1'
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/Build-v$_upstream_version.tar.gz")
+b2sums=('SKIP')
+
+prepare() {
+  cd "PackageGet-Build-v$_upstream_version"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "PackageGet-Build-v$_upstream_version"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --jobs 1 -p updater
+}
+
+check() {
+  cd "PackageGet-Build-v$_upstream_version"
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --release --workspace --all-targets --jobs 1 -- --test-threads=1
+}
+
+package() {
+  cd "PackageGet-Build-v$_upstream_version"
+
+  install -Dm0755 target/release/updater "$pkgdir/usr/bin/updater"
+  install -Dm0755 target/release/updater-system-helper \
+    "$pkgdir/usr/lib/updater/updater-system-helper"
+  install -Dm0644 assets/linux/com.ayi.updater.policy \
+    "$pkgdir/usr/share/polkit-1/actions/com.ayi.updater.policy"
+  install -Dm0644 assets/linux/com.ayi.updater.desktop \
+    "$pkgdir/usr/share/applications/com.ayi.updater.desktop"
+  install -Dm0644 assets/icons/updater.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/updater.svg"
+  install -Dm0644 assets/icons/updater.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/updater.png"
+  install -Dm0644 README.md "$pkgdir/usr/share/doc/updater/README.md"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/updater/LICENSE"
+  install -Dm0644 ui/assets/fonts/OFL.txt \
+    "$pkgdir/usr/share/licenses/updater/Geist-OFL.txt"
+}
