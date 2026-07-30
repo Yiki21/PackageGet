@@ -71,7 +71,7 @@ maintainer = "Yiki21"
 section = "utils"
 priority = "optional"
 revision = "1"
-depends = "$auto, policykit-1, libwayland-client0, libx11-6, libx11-xcb1, libxkbcommon0, libxkbcommon-x11-0"
+depends = "libc6, libgcc-s1, hicolor-icon-theme, policykit-1, libwayland-client0, libx11-6, libx11-xcb1, libxkbcommon0, libxkbcommon-x11-0"
 extended-description = """\
 Updater is a desktop GUI application built with Rust and iced.
 
@@ -94,6 +94,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
+hicolor-icon-theme = "*"
 libX11 = "*"
 libX11-xcb = "*"
 libwayland-client = "*"
