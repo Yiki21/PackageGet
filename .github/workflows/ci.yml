@@ -38,13 +38,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check workspace
-        run: cargo check --workspace --all-targets --locked --jobs 1
+        run: cargo check --workspace --all-targets --locked
 
       - name: Run deterministic tests
-        run: cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1
+        run: cargo test --workspace --all-targets --locked -- --test-threads=1
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build workspace
-        run: cargo build --workspace --locked --jobs 1
+        run: cargo build --workspace --locked

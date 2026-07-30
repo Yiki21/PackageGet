@@ -39,13 +39,13 @@ prepare() {
 build() {
   cd "PackageGet-Build-v$_upstream_version"
   export CARGO_TARGET_DIR=target
-  cargo build --frozen --release --jobs 1 -p updater
+  cargo build --frozen --release -p updater
 }
 
 check() {
   cd "PackageGet-Build-v$_upstream_version"
   export CARGO_TARGET_DIR=target
-  cargo test --frozen --release --workspace --all-targets --jobs 1 -- --test-threads=1
+  cargo test --frozen --release --workspace --all-targets -- --test-threads=1
 }
 
 package() {

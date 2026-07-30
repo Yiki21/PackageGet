@@ -43,7 +43,7 @@ jobs:
         run: cargo install cargo-deb --version 3.7.0 --locked --no-default-features
 
       - name: Build release binary
-        run: cargo build --release --locked --jobs 1 -p updater
+        run: cargo build --release --locked -p updater
 
       - name: Build deb package
         run: cargo deb -p updater --no-build --no-strip --locked
@@ -102,7 +102,7 @@ jobs:
         run: cargo install cargo-generate-rpm --version 0.21.0 --locked
 
       - name: Build release binary
-        run: cargo build --release --locked --jobs 1 -p updater
+        run: cargo build --release --locked -p updater
 
       - name: Build rpm package
         run: cargo generate-rpm -p ui
