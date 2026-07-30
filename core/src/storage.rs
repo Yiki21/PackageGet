@@ -43,9 +43,21 @@ fn default_appearance() -> String {
 }
 
 impl Config {
+    /// Returns the current user's configuration file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::ConfigError`] when the platform configuration
+    /// directory cannot be determined.
+    pub fn file_path() -> CoreResult<PathBuf> {
+        let config_dir = ProjectDirs::from("com", "ayi", "updater")
+            .ok_or_else(|| CoreError::ConfigError("could not determine config directory".into()))?;
+        Ok(config_dir.config_dir().join("config.json"))
+    }
+
     /// Loads the configuration, or detects managers and creates it when absent.
     pub async fn load(registry: &ManagerRegistry) -> CoreResult<Self> {
-        Self::load_from_path(config_file_path()?, registry).await
+        Self::load_from_path(Self::file_path()?, registry).await
     }
 
     /// Loads a configuration from `path`, creating a detected default when absent.
@@ -110,7 +122,7 @@ impl Config {
 
     /// Reloads the configuration when its persistent file exists.
     pub async fn reload(&mut self) -> CoreResult<()> {
-        let path = config_file_path()?;
+        let path = Self::file_path()?;
         if path.exists() {
             *self = Self::read_from_path(path).await?;
         }
@@ -119,7 +131,7 @@ impl Config {
 
     /// Saves the configuration using an atomic replacement in its config directory.
     pub async fn save(&self) -> CoreResult<()> {
-        self.save_to_path(config_file_path()?).await
+        self.save_to_path(Self::file_path()?).await
     }
 
     /// Validates and atomically saves the configuration to `path`.
@@ -254,12 +266,6 @@ impl Config {
     }
 }
 
-fn config_file_path() -> CoreResult<PathBuf> {
-    let config_dir = ProjectDirs::from("com", "ayi", "updater")
-        .ok_or_else(|| CoreError::ConfigError("could not determine config directory".into()))?;
-    Ok(config_dir.config_dir().join("config.json"))
-}
-
 fn temporary_path(path: &Path) -> PathBuf {
     let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let file_name = path
@@ -289,6 +295,16 @@ mod tests {
 
     fn manager(id: &str) -> ManagerConfig {
         ManagerConfig::new(ManagerId::parse(id).expect("valid test manager ID"))
+    }
+
+    #[test]
+    fn current_config_path_uses_config_json() {
+        let path = Config::file_path().expect("resolve current config path");
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("config.json")
+        );
     }
 
     #[tokio::test]

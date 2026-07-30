@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, ffi::OsStr, path::PathBuf};
 
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
@@ -20,18 +20,29 @@ fn validate_http_url(value: &str) -> Result<url::Url, String> {
 
 pub async fn open_http_url(value: String) -> Result<(), String> {
     let url = validate_http_url(&value)?;
+    open_desktop_target(OsStr::new(url.as_str())).await
+}
 
-    let attempts = [
-        ("gio", vec!["open", url.as_str()]),
-        ("xdg-open", vec![url.as_str()]),
-    ];
+pub async fn open_directory(path: PathBuf) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|error| format!("Could not access {}: {error}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!("Not a directory: {}", path.display()));
+    }
+
+    open_desktop_target(path.as_os_str()).await
+}
+
+async fn open_desktop_target(target: &OsStr) -> Result<(), String> {
+    let attempts = [("gio", Some("open")), ("xdg-open", None)];
     let mut last_error = None;
-    for (program, args) in attempts {
-        match tokio::process::Command::new(program)
-            .args(args)
-            .status()
-            .await
-        {
+    for (program, prefix) in attempts {
+        let mut command = tokio::process::Command::new(program);
+        if let Some(prefix) = prefix {
+            command.arg(prefix);
+        }
+        match command.arg(target).status().await {
             Ok(status) if status.success() => return Ok(()),
             Ok(status) => last_error = Some(format!("{program} exited with status {status}")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -40,7 +51,7 @@ pub async fn open_http_url(value: String) -> Result<(), String> {
     }
 
     Err(last_error
-        .unwrap_or_else(|| "No desktop URL opener was found (tried gio and xdg-open)".to_owned()))
+        .unwrap_or_else(|| "No desktop opener was found (tried gio and xdg-open)".to_owned()))
 }
 
 pub type PackageSelectionKey = (ManagerId, String);

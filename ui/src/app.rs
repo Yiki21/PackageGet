@@ -72,12 +72,30 @@ pub struct App {
     system_theme: iced::theme::Mode,
     /// Whether navigation/closing is waiting for an unsaved-settings decision.
     pending_settings_exit: Option<PendingSettingsExit>,
+    /// Current configuration loading or recovery state.
+    config_load_state: ConfigLoadState,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum PendingSettingsExit {
     Navigate(content::ActiveContentPage),
     Close(iced::window::Id),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigLoadState {
+    Loading,
+    Ready,
+    Failed {
+        load_error: String,
+        recovery_error: Option<String>,
+    },
+    ConfirmReset {
+        load_error: String,
+    },
+    Resetting {
+        load_error: String,
+    },
 }
 
 /// Top-level application messages.
@@ -121,6 +139,18 @@ pub enum Message {
     Shortcut(Shortcut),
     /// Configuration load result.
     ConfigLoaded(Result<updater_core::Config, updater_core::error::CoreError>),
+    /// Retry strict configuration loading.
+    RetryConfigLoad,
+    /// Open the configuration directory in the desktop file manager.
+    OpenConfigDirectory,
+    /// Desktop configuration-directory opener result.
+    ConfigDirectoryOpened(Result<(), String>),
+    /// Ask for confirmation before replacing the configuration.
+    RequestConfigReset,
+    /// Return to the configuration load failure without resetting.
+    CancelConfigReset,
+    /// Confirm manager detection and configuration replacement.
+    ConfirmConfigReset,
     /// Installed initialization progress message.
     InitInstalledProgress {
         /// Completed manager count.
@@ -188,13 +218,11 @@ impl App {
             inspector_drawer_open: false,
             system_theme: iced::theme::Mode::Light,
             pending_settings_exit: None,
+            config_load_state: ConfigLoadState::Loading,
         };
 
         let task = Task::batch(vec![
-            Task::perform(
-                async move { updater_core::Config::load(&config_registry).await },
-                Message::ConfigLoaded,
-            ),
+            app.load_config_task(config_registry),
             Task::perform(
                 crate::activity::ActivityHistory::load(),
                 Message::ActivityHistoryLoaded,
@@ -386,15 +414,93 @@ impl App {
             Message::ConfigLoaded(result) => {
                 task = match result {
                     Ok(config) => {
+                        self.config_load_state = ConfigLoadState::Ready;
                         self.content.settings.sync_from_config(&config);
                         self.pm_config = config;
                         self.reload_package_data(content::ReloadReason::Startup)
                     }
-                    Err(e) => {
-                        log::error!("Failed to load config: {}", e);
+                    Err(error) => {
+                        let (load_error, recovery_error) = match &self.config_load_state {
+                            ConfigLoadState::Resetting { load_error } => (
+                                load_error.clone(),
+                                Some(format!("Configuration reset failed: {error}")),
+                            ),
+                            _ => (error.to_string(), None),
+                        };
+                        log::error!("Failed to load config: {error}");
+                        self.config_load_state = ConfigLoadState::Failed {
+                            load_error,
+                            recovery_error,
+                        };
                         Task::none()
                     }
                 };
+            }
+            Message::RetryConfigLoad => {
+                if matches!(self.config_load_state, ConfigLoadState::Failed { .. }) {
+                    self.config_load_state = ConfigLoadState::Loading;
+                    task = self.load_config_task(self.manager_catalog.registry());
+                }
+            }
+            Message::OpenConfigDirectory => {
+                if matches!(self.config_load_state, ConfigLoadState::Failed { .. }) {
+                    task = Task::perform(
+                        async {
+                            let file = updater_core::Config::file_path()
+                                .map_err(|error| error.to_string())?;
+                            let directory = file
+                                .parent()
+                                .ok_or_else(|| {
+                                    "Configuration path has no parent directory".to_owned()
+                                })?
+                                .to_path_buf();
+                            tokio::fs::create_dir_all(&directory)
+                                .await
+                                .map_err(|error| {
+                                    format!("Could not create {}: {error}", directory.display())
+                                })?;
+                            crate::content::open_directory(directory).await
+                        },
+                        Message::ConfigDirectoryOpened,
+                    );
+                }
+            }
+            Message::ConfigDirectoryOpened(result) => {
+                if let ConfigLoadState::Failed { recovery_error, .. } = &mut self.config_load_state
+                {
+                    *recovery_error = result.err();
+                }
+            }
+            Message::RequestConfigReset => {
+                if let ConfigLoadState::Failed { load_error, .. } = &self.config_load_state {
+                    self.config_load_state = ConfigLoadState::ConfirmReset {
+                        load_error: load_error.clone(),
+                    };
+                }
+            }
+            Message::CancelConfigReset => {
+                if let ConfigLoadState::ConfirmReset { load_error } = &self.config_load_state {
+                    self.config_load_state = ConfigLoadState::Failed {
+                        load_error: load_error.clone(),
+                        recovery_error: None,
+                    };
+                }
+            }
+            Message::ConfirmConfigReset => {
+                if let ConfigLoadState::ConfirmReset { load_error } = &self.config_load_state {
+                    let load_error = load_error.clone();
+                    self.config_load_state = ConfigLoadState::Resetting { load_error };
+                    let registry = self.manager_catalog.registry();
+                    task = Task::perform(
+                        async move {
+                            let config =
+                                updater_core::Config::detect_package_managers(&registry).await;
+                            config.save().await?;
+                            Ok(config)
+                        },
+                        Message::ConfigLoaded,
+                    );
+                }
             }
             Message::InitInstalledProgress {
                 completed,
@@ -472,6 +578,14 @@ impl App {
 
     fn handle_shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
         use content::ActiveContentPage;
+
+        if !matches!(self.config_load_state, ConfigLoadState::Ready) {
+            return if matches!(shortcut, Shortcut::Dismiss) {
+                self.update_message(Message::CancelConfigReset)
+            } else {
+                Task::none()
+            };
+        }
 
         if matches!(shortcut, Shortcut::Dismiss) {
             let dismissed = self.pending_settings_exit.take().is_some()
@@ -641,9 +755,175 @@ impl App {
         LayoutMode::from_width(self.window_size.width)
     }
 
+    fn load_config_task(
+        &self,
+        registry: std::sync::Arc<updater_core::ManagerRegistry>,
+    ) -> Task<Message> {
+        Task::perform(
+            async move { updater_core::Config::load(&registry).await },
+            Message::ConfigLoaded,
+        )
+    }
+
     /// Renders the app UI.
     pub fn view(&self) -> iced::Element<'_, Message> {
-        use iced::widget::{column, container, row};
+        use iced::widget::{button, column, container, row, text};
+
+        if !matches!(self.config_load_state, ConfigLoadState::Ready) {
+            let recovery: iced::Element<'_, Message> = match &self.config_load_state {
+                ConfigLoadState::Loading => column![
+                    text("Loading configuration")
+                        .size(24)
+                        .font(crate::theme::FONT_SEMIBOLD),
+                    text("Checking config.json...")
+                        .size(14)
+                        .style(crate::theme::text_on_surface_muted),
+                ]
+                .spacing(8)
+                .align_x(iced::Alignment::Center)
+                .into(),
+                ConfigLoadState::Failed {
+                    load_error,
+                    recovery_error,
+                } => {
+                    let retry = button(
+                        text("Retry")
+                            .size(14)
+                            .font(crate::theme::FONT_SEMIBOLD)
+                            .style(crate::theme::text_on_primary),
+                    )
+                    .padding([9, 16])
+                    .style(crate::theme::action_button(
+                        true,
+                        crate::theme::colors::ACCENT,
+                        crate::theme::colors::ACCENT_HOVER,
+                        crate::theme::colors::ACCENT_ACTIVE,
+                    ))
+                    .on_press(Message::RetryConfigLoad);
+                    let open_folder = button(text("Open Config Folder").size(14))
+                        .padding([9, 14])
+                        .style(crate::theme::secondary_button(true))
+                        .on_press(Message::OpenConfigDirectory);
+                    let reset = button(
+                        text("Reset Configuration")
+                            .size(14)
+                            .font(crate::theme::FONT_SEMIBOLD)
+                            .style(crate::theme::text_on_primary),
+                    )
+                    .padding([9, 14])
+                    .style(crate::theme::action_button(
+                        true,
+                        crate::theme::colors::REMOVE_ACTION,
+                        crate::theme::colors::REMOVE_ACTION_HOVER,
+                        crate::theme::colors::REMOVE_ACTION_ACTIVE,
+                    ))
+                    .on_press(Message::RequestConfigReset);
+                    let mut content = column![
+                        text("Configuration unavailable")
+                            .size(24)
+                            .font(crate::theme::FONT_SEMIBOLD)
+                            .style(crate::theme::text_error),
+                        text("Updater left config.json unchanged.")
+                            .size(14)
+                            .style(crate::theme::text_on_surface_muted),
+                        container(
+                            text(load_error)
+                                .size(12)
+                                .font(crate::theme::FONT_MONO)
+                                .style(crate::theme::text_on_surface)
+                                .width(Length::Fill)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                        )
+                        .padding(14)
+                        .width(Length::Fill)
+                        .style(crate::theme::surface_container),
+                        row![retry, open_folder, reset]
+                            .spacing(10)
+                            .width(Length::Fill)
+                            .wrap(),
+                    ]
+                    .spacing(16)
+                    .width(Length::Fill);
+                    if let Some(error) = recovery_error {
+                        content = content.push(
+                            text(error)
+                                .size(13)
+                                .style(crate::theme::text_error)
+                                .width(Length::Fill)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                        );
+                    }
+                    content.into()
+                }
+                ConfigLoadState::ConfirmReset { load_error } => {
+                    let cancel = button(text("Cancel").size(14))
+                        .padding([9, 14])
+                        .style(crate::theme::secondary_button(true))
+                        .on_press(Message::CancelConfigReset);
+                    let confirm = button(
+                        text("Reset Configuration")
+                            .size(14)
+                            .font(crate::theme::FONT_SEMIBOLD)
+                            .style(crate::theme::text_on_primary),
+                    )
+                    .padding([9, 14])
+                    .style(crate::theme::action_button(
+                        true,
+                        crate::theme::colors::REMOVE_ACTION,
+                        crate::theme::colors::REMOVE_ACTION_HOVER,
+                        crate::theme::colors::REMOVE_ACTION_ACTIVE,
+                    ))
+                    .on_press(Message::ConfirmConfigReset);
+                    column![
+                        text("Reset configuration?")
+                            .size(24)
+                            .font(crate::theme::FONT_SEMIBOLD),
+                        text(
+                            "This replaces config.json with detected managers and default application settings. Existing settings will be lost.",
+                        )
+                        .size(14)
+                        .style(crate::theme::text_warning)
+                        .width(Length::Fill)
+                        .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                        container(
+                            text(load_error)
+                                .size(12)
+                                .font(crate::theme::FONT_MONO)
+                                .style(crate::theme::text_on_surface)
+                                .width(Length::Fill)
+                                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+                        )
+                        .padding(14)
+                        .width(Length::Fill)
+                        .style(crate::theme::surface_container),
+                        row![cancel, confirm].spacing(10).wrap(),
+                    ]
+                    .spacing(16)
+                    .width(Length::Fill)
+                    .into()
+                }
+                ConfigLoadState::Resetting { .. } => column![
+                    text("Resetting configuration")
+                        .size(24)
+                        .font(crate::theme::FONT_SEMIBOLD),
+                    text("Detecting available package managers...")
+                        .size(14)
+                        .style(crate::theme::text_on_surface_muted),
+                ]
+                .spacing(8)
+                .align_x(iced::Alignment::Center)
+                .into(),
+                ConfigLoadState::Ready => unreachable!("ready state renders the main workspace"),
+            };
+            let page = container(container(recovery).width(Length::Fill).max_width(760))
+                .padding(32)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(crate::theme::content_container);
+            return crate::shortcut::capture(page.into());
+        }
 
         let update_count = self
             .updates_info
@@ -1193,6 +1473,10 @@ impl App {
 mod tests {
     use super::*;
 
+    fn app() -> App {
+        App::new().0
+    }
+
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
     }
@@ -1230,5 +1514,113 @@ mod tests {
         App::reconcile_selected_managers(&mut selected, &configured, true);
 
         assert_eq!(selected, HashSet::from([unknown]));
+    }
+
+    #[test]
+    fn config_load_failure_is_visible_and_retry_returns_to_loading() {
+        let mut app = app();
+
+        let _ = app.update_message(Message::ConfigLoaded(Err(
+            updater_core::error::CoreError::ConfigError("broken document".to_owned()),
+        )));
+
+        assert!(matches!(
+            &app.config_load_state,
+            ConfigLoadState::Failed {
+                load_error,
+                recovery_error: None,
+            } if load_error.contains("broken document")
+        ));
+
+        let _ = app.update_message(Message::RetryConfigLoad);
+
+        assert_eq!(app.config_load_state, ConfigLoadState::Loading);
+    }
+
+    #[test]
+    fn config_reset_requires_confirmation_and_escape_cancels() {
+        let mut app = app();
+        app.config_load_state = ConfigLoadState::Failed {
+            load_error: "invalid JSON".to_owned(),
+            recovery_error: None,
+        };
+
+        let _ = app.update_message(Message::RequestConfigReset);
+        assert!(matches!(
+            app.config_load_state,
+            ConfigLoadState::ConfirmReset { .. }
+        ));
+
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+        assert_eq!(
+            app.config_load_state,
+            ConfigLoadState::Failed {
+                load_error: "invalid JSON".to_owned(),
+                recovery_error: None,
+            }
+        );
+        assert_eq!(app.pm_config, updater_core::Config::default());
+
+        let _ = app.update_message(Message::RequestConfigReset);
+        let _ = app.update_message(Message::ConfirmConfigReset);
+
+        assert_eq!(
+            app.config_load_state,
+            ConfigLoadState::Resetting {
+                load_error: "invalid JSON".to_owned(),
+            }
+        );
+        assert_eq!(app.pm_config, updater_core::Config::default());
+    }
+
+    #[test]
+    fn recovery_action_error_is_shown_until_config_load_succeeds() {
+        let mut app = app();
+        app.config_load_state = ConfigLoadState::Failed {
+            load_error: "invalid JSON".to_owned(),
+            recovery_error: None,
+        };
+
+        let _ = app.update_message(Message::ConfigDirectoryOpened(Err(
+            "no desktop opener".to_owned()
+        )));
+        assert!(matches!(
+            &app.config_load_state,
+            ConfigLoadState::Failed {
+                recovery_error: Some(error),
+                ..
+            } if error == "no desktop opener"
+        ));
+
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager_id(
+                "builtin:cargo",
+            ))],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config.clone())));
+
+        assert_eq!(app.config_load_state, ConfigLoadState::Ready);
+        assert_eq!(app.pm_config, config);
+    }
+
+    #[test]
+    fn reset_failure_preserves_the_original_load_error() {
+        let mut app = app();
+        app.config_load_state = ConfigLoadState::Resetting {
+            load_error: "invalid JSON".to_owned(),
+        };
+
+        let _ = app.update_message(Message::ConfigLoaded(Err(
+            updater_core::error::CoreError::ConfigError("permission denied".to_owned()),
+        )));
+
+        assert!(matches!(
+            &app.config_load_state,
+            ConfigLoadState::Failed {
+                load_error,
+                recovery_error: Some(recovery_error),
+            } if load_error == "invalid JSON" && recovery_error.contains("permission denied")
+        ));
     }
 }

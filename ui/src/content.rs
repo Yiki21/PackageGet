@@ -14,7 +14,7 @@ use crate::{
 pub use finding::FindingInfo;
 pub use installed::{InstalledInfo, Message as InstalledMessage};
 pub use setting::Message as SettingsMessage;
-pub(crate) use shared::search_input_id;
+pub(crate) use shared::{open_directory, search_input_id};
 pub(crate) use updater_core::CancellationToken;
 pub use updater_core::OperationOutcome;
 pub use updates::UpdatesInfo;
