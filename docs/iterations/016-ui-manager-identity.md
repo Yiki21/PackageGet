@@ -1,0 +1,74 @@
+# Iteration 016：UI ManagerId Identity Cutover
+
+- 日期：2026-07-30
+- 状态：进行中
+- ROADMAP阶段：阶段3——配置、UI identity与manager设置迁移
+- 开发方式：直接在`main`上形成小步、线性的Git提交
+
+## 本轮目标
+
+将UI内部所有manager identity、HashMap/HashSet key、message payload、selection key、progress和operation outcome从闭合`PackageManagerType`切换为稳定`ManagerId`。App使用direct built-in registry提供descriptor metadata；未注册manager不得回退显示为DNF。现有静态core执行入口只在任务执行边界临时解析built-in ID，本轮不把命令引擎重写混入UI迁移。
+
+## 实施计划
+
+- [x] 审计App、Finding、Installed、Updates、Settings、shared、workflows、activity与status中的`PackageManagerType`状态和fallback调用面。
+- [ ] 建立UI manager catalog/context：注册direct built-ins，按`ManagerId`解析descriptor、display name、description、category、capability和当前runtime支持状态。
+- [ ] 将shared `PackageSelectionKey`、keyboard navigation、inspector和manager filter组件改为`ManagerId`，删除DNF display fallback。
+- [ ] 将Finding的selected/searching/results/errors/messages/inspector/install progress改为`ManagerId`。
+- [ ] 将Installed的selected/loading/results/errors/messages/inspector/remove progress改为`ManagerId`。
+- [ ] 将Updates的selected/loading/results/errors/messages/update plan/progress/retry state改为`ManagerId`。
+- [ ] 将workflows的grouping、batch progress、operation outcome和failure identity改为`ManagerId`；只在调用旧core执行函数前解析built-in runtime type。
+- [ ] 将App初始化任务、reload reconciliation、progress logs与Content路由改为`ManagerId`。
+- [ ] 将Settings detection、availability、path selection和manager渲染key改为`ManagerId`；unknown configured manager保持可见且保存不丢失。
+- [ ] 将Activity/Status消费的manager identity改为`ManagerId`，display统一通过catalog解析或稳定ID fallback。
+- [ ] 增加catalog metadata、unknown manager fallback、selection reconciliation、page state和operation grouping contracts。
+- [ ] 更新ROADMAP/manager authoring与本轮进度，记录仍存在的静态core执行边界。
+- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+
+## Identity决策
+
+- `ManagerId`是UI状态、消息和集合的唯一manager key；display name不能充当identity。
+- descriptor是name、description、category、platform、capability与authorization的唯一metadata来源。
+- unknown/missing manager显示其稳定ID和明确missing状态，绝不使用任意built-in作为fallback。
+- `PackageManagerType`只允许出现在现有core兼容执行边界和该边界的测试中，不得重新进入UI page state。
+- selection reconciliation按`ManagerId`处理，配置刷新时保留仍配置的unknown manager ID。
+- manager group顺序必须由配置顺序或catalog稳定顺序决定，不能依赖HashMap迭代顺序。
+
+## 非目标
+
+- 本轮不删除core中的`PackageManagerType`、静态trait、旧UI package model或`core/src/pm/*`wrapper。
+- 本轮不把所有read/write workflow直接重写为`ManagerRegistry::manager_for`；该执行引擎cutover单独迭代。
+- 本轮不实现Config load恢复页面、缺失第三方manager安装机制或运行时动态插件。
+- 本轮不改变任何package manager命令、parser、提权、批处理、取消或网络语义。
+- 本轮不执行真实install、update、uninstall或配置目录以外的系统修改。
+- 本轮不写死Rust或依赖的最低minor/patch版本。
+
+## 验证方案
+
+- 编译期`rg`契约确认UI page state、message payload与selection key不再使用`PackageManagerType`。
+- unknown manager fixture断言显示稳定ID、不会显示DNF、配置round-trip不丢失。
+- Finding/Installed/Updates选择与retry contracts按`ManagerId`保持现有交互语义。
+- batch grouping、partial failure和activity/status断言保留正确manager identity。
+- 所有测试保持离线，不调用真实package manager写操作。
+- 完整workspace门禁逐条串行，使用单job与单测试线程；GitHub Actions复验最终HEAD。
+
+## 进度日志
+
+### 2026-07-30
+
+- Iteration 015已完成唯一Config schema直接切换，本机配置和CI均已验证。
+- 当前UI共有大量`PackageManagerType`状态引用，集中在三个package页面、App初始化、shared selection/inspector、workflows和Settings。
+- Finding、Installed与Updates当前在找不到source时使用`PackageManagerType::Dnf`作为display fallback，本轮必须删除。
+- direct registry已有稳定descriptor排序和capability检查，可作为UI metadata source；静态core执行边界继续作为本轮非目标。
+
+## Git提交
+
+- Iteration 016计划检查点：本次提交。
+
+## 验证记录
+
+待实施后填写。
+
+## 遗留项 / 下一轮
+
+本轮完成后填写。
