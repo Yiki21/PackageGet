@@ -129,7 +129,7 @@ pub async fn execute_package_groups(
                 completed_managers,
                 total_managers,
                 failed_manager: None,
-                error: Some("Cancelled by user".to_owned()),
+                error: Some("Stopped before starting another manager".to_owned()),
             };
         }
 

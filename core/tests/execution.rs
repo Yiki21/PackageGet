@@ -252,6 +252,9 @@ async fn cancellation_is_observed_between_manager_groups() {
 
     assert_eq!(outcome.completed_packages, 1);
     assert_eq!(outcome.completed_managers, 1);
-    assert_eq!(outcome.error.as_deref(), Some("Cancelled by user"));
+    assert_eq!(
+        outcome.error.as_deref(),
+        Some("Stopped before starting another manager")
+    );
     assert_eq!(*order.lock().unwrap(), vec![first]);
 }

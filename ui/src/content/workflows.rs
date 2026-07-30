@@ -19,6 +19,21 @@ enum BatchActionEvent {
     Done(OperationOutcome),
 }
 
+/// Manager/package scope frozen before a package write is confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageActionPlan {
+    pub manager_groups: Vec<(ManagerId, Vec<String>)>,
+}
+
+impl PackageActionPlan {
+    pub fn package_count(&self) -> usize {
+        self.manager_groups
+            .iter()
+            .map(|(_, packages)| packages.len())
+            .sum()
+    }
+}
+
 pub fn collect_selected_package_groups<'a, T: 'a, I, N>(
     package_sets: I,
     selected_packages: &HashSet<PackageSelectionKey>,

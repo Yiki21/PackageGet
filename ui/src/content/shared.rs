@@ -7,7 +7,7 @@ use std::{
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
 use updater_core::Config;
-use updater_manager_api::{ManagerId, PackageInfo};
+use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo};
 
 use crate::{manager_catalog::ManagerCatalog, theme};
 
@@ -188,6 +188,69 @@ pub fn muted_badge<'a, Message>(label: &'a str) -> iced::widget::Container<'a, M
             .style(theme::text_on_surface_muted),
     )
     .padding([2, 0])
+}
+
+pub fn package_action_plan_view<'a, Message>(
+    manager_groups: &'a [(ManagerId, Vec<String>)],
+    catalog: &'a ManagerCatalog,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    iced::widget::scrollable(
+        column(manager_groups.iter().map(|(manager, packages)| {
+            let mut header = row![
+                text(catalog.display_name(manager))
+                    .size(13)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+                text(format!(
+                    "{} package{}",
+                    packages.len(),
+                    if packages.len() == 1 { "" } else { "s" }
+                ))
+                .size(12)
+                .style(theme::text_on_surface_muted),
+            ]
+            .spacing(theme::spacing::SM)
+            .align_y(iced::Alignment::Center);
+
+            let authorization = catalog
+                .descriptor(manager)
+                .and_then(|descriptor| match descriptor.authorization() {
+                    AuthorizationHint::None => None,
+                    AuthorizationHint::MayRequireElevation { .. } => {
+                        Some("May request authorization")
+                    }
+                    AuthorizationHint::RequiresElevation { .. } => Some("Authorization required"),
+                    _ => Some("Authorization behavior may vary"),
+                });
+            if let Some(authorization) = authorization {
+                header = header.push(
+                    text(authorization)
+                        .size(12)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(theme::text_warning),
+                );
+            }
+            let header = header.wrap();
+
+            column![
+                header,
+                text(packages.join(", "))
+                    .size(12)
+                    .font(theme::FONT_MONO)
+                    .style(theme::text_on_surface_alt)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            ]
+            .spacing(theme::spacing::XS)
+            .into()
+        }))
+        .spacing(theme::spacing::SM),
+    )
+    .height(iced::Length::Fixed(120.0))
+    .into()
 }
 
 pub fn configured_managers(pm_config: &Config) -> Vec<ManagerId> {
@@ -749,6 +812,7 @@ pub fn active_manager_filter_view<'a, Message>(
     selected_managers: &'a HashSet<ManagerId>,
     loading_managers: &'a HashMap<ManagerId, u64>,
     catalog: &'a ManagerCatalog,
+    disabled: bool,
     is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
     on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
 ) -> Element<'a, Message>
@@ -759,7 +823,7 @@ where
         let is_selected = selected_managers.contains(&manager);
         let is_loading = loading_managers.contains_key(&manager);
         let is_initializing = is_initializing(&manager);
-        let is_disabled = is_loading || is_initializing;
+        let is_disabled = disabled || is_loading || is_initializing;
         let manager_name = catalog.display_name(&manager);
 
         let label = if is_loading {
@@ -793,6 +857,7 @@ where
 
 pub fn refresh_button_with_label<'a, Message>(
     label: &'static str,
+    enabled: bool,
     message: Message,
 ) -> Element<'a, Message>
 where
@@ -800,11 +865,14 @@ where
 {
     use iced::widget::button;
 
-    button(text(label).size(13).font(theme::FONT_SEMIBOLD))
+    let button = button(text(label).size(13).font(theme::FONT_SEMIBOLD))
         .padding([8, 12])
-        .style(theme::secondary_button(true))
-        .on_press(message)
-        .into()
+        .style(theme::secondary_button(enabled));
+    if enabled {
+        button.on_press(message).into()
+    } else {
+        button.into()
+    }
 }
 
 pub fn search_input_view<'a, Message>(

@@ -10,7 +10,8 @@ use crate::{
     content::errors::{ManagerErrors, apply_manager_items_result},
     content::shared::{self, PackageSelectionKey},
     content::workflows::{
-        collect_selected_package_groups, push_command_log, run_grouped_package_action,
+        PackageActionPlan, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
     },
     theme,
 };
@@ -25,6 +26,8 @@ pub struct Finding {
     inspected_package: Option<PackageSelectionKey>,
     /// Last inspector action error shown in UI.
     inspector_error: Option<String>,
+    /// Frozen install plan waiting for confirmation.
+    pending_install: Option<PackageActionPlan>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,8 +65,12 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all visible packages toggle message.
     ToggleSelectAll(bool),
-    /// Install-selected message.
-    InstallSelectedPackages,
+    /// Freeze the selected packages into an install plan.
+    PrepareInstall,
+    /// Execute the frozen install plan.
+    ConfirmInstall,
+    /// Dismiss the frozen install plan.
+    CancelInstall,
     /// Install progress message.
     InstallProgress {
         /// Number of finished packages.
@@ -150,6 +157,9 @@ impl Finding {
     ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
+                if self.pending_install.is_some() {
+                    return Action::None;
+                }
                 if selected {
                     info.selected_managers.insert(pm_type);
                 } else {
@@ -168,7 +178,11 @@ impl Finding {
             }
             Message::ExecuteSearch => {
                 let query = self.search_query.trim().to_owned();
-                if query.is_empty() || info.is_installing || !info.searching_managers.is_empty() {
+                if query.is_empty()
+                    || info.is_installing
+                    || self.pending_install.is_some()
+                    || !info.searching_managers.is_empty()
+                {
                     return Action::None;
                 }
 
@@ -183,6 +197,7 @@ impl Finding {
                 let query = self.last_search_query.clone();
                 if query.is_empty()
                     || info.is_installing
+                    || self.pending_install.is_some()
                     || !info.searching_managers.is_empty()
                     || info.selected_managers.is_empty()
                 {
@@ -209,6 +224,7 @@ impl Finding {
             }
             Message::RetrySearch(pm_type) => {
                 if self.last_search_query.is_empty()
+                    || self.pending_install.is_some()
                     || info.searching_managers.contains_key(&pm_type)
                     || !info.selected_managers.contains(&pm_type)
                 {
@@ -251,7 +267,7 @@ impl Finding {
                 Action::None
             }
             Message::TogglePackageSelection(pm_type, package_name, selected) => {
-                if info.is_installing {
+                if info.is_installing || self.pending_install.is_some() {
                     return Action::None;
                 }
                 let key = shared::selection_key(&pm_type, &package_name);
@@ -263,7 +279,7 @@ impl Finding {
                 Action::None
             }
             Message::ToggleSelectAll(select_all) => {
-                if info.is_installing {
+                if info.is_installing || self.pending_install.is_some() {
                     return Action::None;
                 }
 
@@ -286,28 +302,15 @@ impl Finding {
                 }
                 Action::None
             }
-            Message::InstallSelectedPackages => {
+            Message::PrepareInstall => {
                 if info.selected_packages.is_empty()
                     || info.is_installing
+                    || self.pending_install.is_some()
                     || !info.searching_managers.is_empty()
                 {
                     return Action::None;
                 }
-                info.is_installing = true;
                 info.last_install_error = None;
-                info.install_logs.clear();
-                let initial_manager = info
-                    .selected_packages
-                    .iter()
-                    .next()
-                    .map(|(manager_id, _)| manager_id.clone())
-                    .expect("non-empty package selection must contain a manager ID");
-                info.install_progress = Some((
-                    0,
-                    info.selected_packages.len(),
-                    initial_manager,
-                    String::new(),
-                ));
                 let manager_groups = collect_selected_package_groups(
                     info.search_results
                         .iter()
@@ -316,12 +319,42 @@ impl Finding {
                     catalog,
                     |package| package.name.as_str(),
                 );
+                if manager_groups.is_empty() {
+                    info.last_install_error =
+                        Some("Selected packages are no longer available to install".to_owned());
+                    return Action::None;
+                }
+                self.pending_install = Some(PackageActionPlan { manager_groups });
+                Action::None
+            }
+            Message::ConfirmInstall => {
+                let Some(plan) = self.pending_install.take() else {
+                    return Action::None;
+                };
+                if info.is_installing {
+                    return Action::None;
+                }
+                let Some((initial_manager, _)) = plan.manager_groups.first() else {
+                    info.last_install_error =
+                        Some("The install plan does not contain any packages".to_owned());
+                    return Action::None;
+                };
+
+                info.is_installing = true;
+                info.last_install_error = None;
+                info.install_logs.clear();
+                info.install_progress = Some((
+                    0,
+                    plan.package_count(),
+                    initial_manager.clone(),
+                    String::new(),
+                ));
                 let cancellation = CancellationToken::default();
                 let task = run_grouped_package_action(
                     catalog.registry(),
                     pm_config,
                     PackageAction::Install,
-                    manager_groups,
+                    plan.manager_groups,
                     cancellation.clone(),
                     |OperationProgress {
                          completed,
@@ -339,6 +372,10 @@ impl Finding {
                     Message::InstallPackagesResult,
                 );
                 Action::CancellableRun(task, cancellation)
+            }
+            Message::CancelInstall => {
+                self.pending_install = None;
+                Action::None
             }
             Message::InstallProgress {
                 completed,
@@ -396,8 +433,14 @@ impl Finding {
         self.inspected_package.is_some()
     }
 
+    pub(crate) fn reset_pending_install(&mut self) {
+        self.pending_install = None;
+    }
+
     pub fn dismiss_transient(&mut self) -> bool {
-        if self.inspected_package.take().is_some() {
+        if self.pending_install.take().is_some() {
+            true
+        } else if self.inspected_package.take().is_some() {
             self.inspector_error = None;
             true
         } else {
@@ -408,19 +451,23 @@ impl Finding {
     pub fn refresh(&self, info: &FindingInfo) -> Option<Message> {
         (!self.last_search_query.is_empty()
             && !info.is_installing
+            && self.pending_install.is_none()
             && info.searching_managers.is_empty())
         .then_some(Message::ExecuteSearch)
     }
 
     pub fn primary_action(&self, info: &FindingInfo) -> Option<Message> {
+        if self.pending_install.is_some() {
+            return (!info.is_installing).then_some(Message::ConfirmInstall);
+        }
         (!info.selected_packages.is_empty()
             && !info.is_installing
             && info.searching_managers.is_empty())
-        .then_some(Message::InstallSelectedPackages)
+        .then_some(Message::PrepareInstall)
     }
 
     pub fn can_select_packages(&self, info: &FindingInfo) -> bool {
-        !info.is_installing && !info.search_results.is_empty()
+        !info.is_installing && self.pending_install.is_none() && !info.search_results.is_empty()
     }
 
     pub fn move_keyboard_selection(
@@ -445,7 +492,10 @@ impl Finding {
             .get(manager)?
             .iter()
             .find(|package| package.name == *name)?;
-        if info.is_installing || package.version.trim() != "Not Installed" {
+        if info.is_installing
+            || self.pending_install.is_some()
+            || package.version.trim() != "Not Installed"
+        {
             return None;
         }
         let selected = !info
@@ -504,6 +554,8 @@ impl Finding {
         let selected_sources = info.selected_managers.len();
         let can_search = !self.search_query.trim().is_empty()
             && selected_sources > 0
+            && !info.is_installing
+            && self.pending_install.is_none()
             && info.searching_managers.is_empty();
         let search_button = button(
             text(if info.searching_managers.is_empty() {
@@ -562,6 +614,7 @@ impl Finding {
                     let display_name = catalog.display_name(&manager);
                     let is_selected = info.selected_managers.contains(&manager);
                     let is_searching = info.searching_managers.contains_key(&manager);
+                    let is_frozen = self.pending_install.is_some();
                     let label = if is_searching {
                         format!("{display_name} (Searching...)")
                     } else if info.search_errors.contains_key(&manager) {
@@ -575,9 +628,9 @@ impl Finding {
                         .label(label)
                         .spacing(8)
                         .text_size(13)
-                        .style(shared::checkbox_style(is_searching));
+                        .style(shared::checkbox_style(is_searching || is_frozen));
 
-                    if is_searching {
+                    if is_searching || is_frozen {
                         checkbox.into()
                     } else {
                         checkbox
@@ -658,6 +711,7 @@ impl Finding {
             ]),
             toolbar,
             self.batch_actions_view(info, catalog),
+            self.install_confirmation_view(catalog),
             self.search_results_view(info, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
@@ -860,7 +914,8 @@ impl Finding {
             .contains(&shared::selection_key(&manager_id, &package.name));
         let is_not_installed = package.version.trim() == "Not Installed";
 
-        let enable_install = !info.is_installing && is_not_installed;
+        let enable_install =
+            !info.is_installing && self.pending_install.is_none() && is_not_installed;
 
         let checkbox = checkbox(is_selected)
             .on_toggle_maybe(if enable_install {
@@ -922,7 +977,10 @@ impl Finding {
             .filter(|package| package.version.trim() == "Not Installed")
             .count();
         let all_selected = selectable_count > 0 && selected_count == selectable_count;
-        let is_enabled = selected_count > 0 && !info.is_installing;
+        let is_enabled = selected_count > 0
+            && !info.is_installing
+            && self.pending_install.is_none()
+            && info.searching_managers.is_empty();
 
         let button_text = if info.is_installing {
             if let Some((completed, total, manager, package)) = &info.install_progress {
@@ -962,14 +1020,17 @@ impl Finding {
         ));
 
         let install_button = if is_enabled {
-            install_button.on_press(Message::InstallSelectedPackages)
+            install_button.on_press(Message::PrepareInstall)
         } else {
             install_button
         };
 
         let select_all_checkbox = checkbox(all_selected)
             .label("Select All")
-            .on_toggle_maybe((!info.is_installing).then_some(Message::ToggleSelectAll))
+            .on_toggle_maybe(
+                (!info.is_installing && self.pending_install.is_none())
+                    .then_some(Message::ToggleSelectAll),
+            )
             .size(18)
             .spacing(8)
             .text_size(14)
@@ -993,6 +1054,66 @@ impl Finding {
         }
     }
 
+    fn install_confirmation_view<'a>(
+        &'a self,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{button, column, container, row, text};
+
+        let Some(plan) = &self.pending_install else {
+            return container("").height(iced::Length::Shrink).into();
+        };
+        let package_count = plan.package_count();
+
+        container(
+            column![
+                row![
+                    column![
+                        text("Install plan ready")
+                            .size(14)
+                            .font(theme::FONT_SEMIBOLD)
+                            .style(theme::text_on_surface),
+                        text(format!(
+                            "{package_count} package(s) from {} source(s)",
+                            plan.manager_groups.len()
+                        ))
+                        .size(13)
+                        .style(theme::text_on_surface_muted),
+                    ]
+                    .spacing(theme::spacing::XS)
+                    .width(iced::Length::Fill),
+                    button(text("Cancel").size(13))
+                        .padding([8, 12])
+                        .style(theme::secondary_button(true))
+                        .on_press(Message::CancelInstall),
+                    button(
+                        text(format!("Install {package_count} Packages"))
+                            .size(13)
+                            .font(theme::FONT_SEMIBOLD)
+                            .style(theme::text_on_primary)
+                    )
+                    .padding([8, 14])
+                    .style(theme::action_button(
+                        true,
+                        theme::colors::INSTALL_ACTION,
+                        theme::colors::INSTALL_ACTION_HOVER,
+                        theme::colors::INSTALL_ACTION_ACTIVE,
+                    ))
+                    .on_press(Message::ConfirmInstall),
+                ]
+                .spacing(theme::spacing::MD)
+                .align_y(iced::Alignment::Center)
+                .wrap(),
+                shared::package_action_plan_view(&plan.manager_groups, catalog),
+            ]
+            .spacing(theme::spacing::MD),
+        )
+        .padding(theme::spacing::MD)
+        .width(iced::Length::Fill)
+        .style(theme::surface_container)
+        .into()
+    }
+
     fn start_search(
         &mut self,
         pm_config: &updater_core::Config,
@@ -1000,6 +1121,7 @@ impl Finding {
         query: &str,
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
+        self.pending_install = None;
         info.search_results.clear();
         info.selected_packages.clear();
         info.searching_managers.clear();
@@ -1076,6 +1198,92 @@ mod tests {
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
+    }
+
+    fn package(manager: &ManagerId, name: &str) -> PackageInfo {
+        PackageInfo::new(manager.clone(), name, "Not Installed")
+    }
+
+    #[test]
+    fn install_confirmation_executes_the_frozen_plan() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_managers.insert(manager.clone());
+        info.search_results.insert(
+            manager.clone(),
+            vec![package(&manager, "alpha"), package(&manager, "beta")],
+        );
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "alpha"));
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        let action = finding.update(Message::PrepareInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert!(!info.is_installing);
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(manager.clone(), vec!["alpha".to_owned()])])
+        );
+
+        info.selected_packages.clear();
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "beta"));
+        info.search_results.clear();
+
+        let action = finding.update(Message::ConfirmInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_installing);
+        assert_eq!(info.install_progress, Some((0, 1, manager, String::new())));
+        assert!(finding.pending_install.is_none());
+    }
+
+    #[test]
+    fn stale_install_selection_does_not_open_confirmation() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "missing"));
+
+        let action = finding.update(
+            Message::PrepareInstall,
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(finding.pending_install.is_none());
+        assert!(!info.is_installing);
+        assert_eq!(
+            info.last_install_error.as_deref(),
+            Some("Selected packages are no longer available to install")
+        );
+    }
+
+    #[test]
+    fn escape_dismisses_install_confirmation_before_the_inspector() {
+        let manager = manager_id("builtin:cargo");
+        let mut finding = Finding {
+            inspected_package: Some(shared::selection_key(&manager, "alpha")),
+            pending_install: Some(PackageActionPlan {
+                manager_groups: vec![(manager, vec!["alpha".to_owned()])],
+            }),
+            ..Finding::default()
+        };
+
+        assert!(finding.dismiss_transient());
+        assert!(finding.pending_install.is_none());
+        assert!(finding.inspected_package.is_some());
+        assert!(finding.dismiss_transient());
+        assert!(finding.inspected_package.is_none());
     }
 
     #[test]

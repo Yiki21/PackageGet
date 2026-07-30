@@ -109,7 +109,7 @@ pub enum Message {
     Content(content::Message),
     /// Status panel message.
     StatusPanel(status_panel::Message),
-    /// Request cooperative cancellation for the active operation.
+    /// Stop the active operation before its next manager starts.
     CancelActiveOperation,
     /// Show or hide the Activity Center.
     ToggleActivityCenter,
@@ -320,6 +320,7 @@ impl App {
                 task = match action {
                     content::Action::Run(content_task) => content_task.map(Message::Content),
                     content::Action::CancellableRun(content_task, cancellation) => {
+                        self.status_panel.begin_package_operation();
                         self.active_operation_cancellation = Some(cancellation);
                         content_task.map(Message::Content)
                     }
@@ -367,6 +368,7 @@ impl App {
             Message::CancelActiveOperation => {
                 if let Some(cancellation) = &self.active_operation_cancellation {
                     cancellation.cancel();
+                    self.status_panel.request_cancellation();
                 }
             }
             Message::ToggleActivityCenter => {
@@ -1098,19 +1100,34 @@ impl App {
                     .padding([3, 8])
                     .style(crate::theme::secondary_button(true))
                     .on_press(Message::ToggleActivityCenter),
-                iced::widget::button(iced::widget::text("Cancel Task").size(11))
-                    .padding([3, 8])
-                    .style(crate::theme::secondary_button(
-                        self.active_operation_cancellation
+                iced::widget::button(
+                    iced::widget::text(
+                        if self
+                            .active_operation_cancellation
                             .as_ref()
-                            .is_some_and(|token| !token.is_cancelled())
-                    ))
-                    .on_press_maybe(
-                        self.active_operation_cancellation
-                            .as_ref()
-                            .is_some_and(|token| !token.is_cancelled())
-                            .then_some(Message::CancelActiveOperation)
-                    ),
+                            .is_some_and(content::CancellationToken::is_cancelled)
+                        {
+                            "Stop Requested"
+                        } else if self.active_operation_cancellation.is_some() {
+                            "Stop After Current Manager"
+                        } else {
+                            "Stop Operation"
+                        },
+                    )
+                    .size(11),
+                )
+                .padding([3, 8])
+                .style(crate::theme::secondary_button(
+                    self.active_operation_cancellation
+                        .as_ref()
+                        .is_some_and(|token| !token.is_cancelled())
+                ))
+                .on_press_maybe(
+                    self.active_operation_cancellation
+                        .as_ref()
+                        .is_some_and(|token| !token.is_cancelled())
+                        .then_some(Message::CancelActiveOperation)
+                ),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1375,12 +1392,13 @@ impl App {
         self.updates_info.init_logs.clear();
         self.updates_info.has_loading_count = false;
         self.updates_info.is_loading_count = true;
-        self.content.updates.reset_update_all();
+        self.content.updates.reset_pending_updates();
 
         self.finding_info.search_results.clear();
         self.finding_info.search_errors.clear();
         self.finding_info.selected_packages.clear();
         self.finding_info.searching_managers.clear();
+        self.content.finding.reset_pending_install();
 
         Task::batch(vec![
             self.start_init_installed_counts_task(self.pm_config.clone(), generation),

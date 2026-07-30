@@ -10,7 +10,8 @@ use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
-        collect_selected_package_groups, push_command_log, run_grouped_package_action,
+        PackageActionPlan, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
     },
     manager_catalog::ManagerCatalog,
     theme,
@@ -28,26 +29,30 @@ pub struct Updates {
     update_all_refreshing: HashSet<ManagerId>,
     /// Full source scope used to build the current preflight plan.
     update_all_scope: HashSet<ManagerId>,
-    /// Frozen Update All plan waiting for confirmation.
-    pending_update_all: Option<UpdatePlan>,
+    /// Frozen selected or Update All plan waiting for confirmation.
+    pending_update: Option<UpdatePlan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePlanScope {
+    Selected,
+    All,
 }
 
 #[derive(Debug, Clone)]
 struct UpdatePlan {
-    manager_groups: Vec<(ManagerId, Vec<String>)>,
+    scope: UpdatePlanScope,
+    packages: PackageActionPlan,
     failed_sources: Vec<ManagerId>,
 }
 
 impl UpdatePlan {
     fn package_count(&self) -> usize {
-        self.manager_groups
-            .iter()
-            .map(|(_, packages)| packages.len())
-            .sum()
+        self.packages.package_count()
     }
 
     fn manager_count(&self) -> usize {
-        self.manager_groups.len()
+        self.packages.manager_groups.len()
     }
 }
 
@@ -72,8 +77,8 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all toggle message.
     ToggleSelectAll(bool),
-    /// Update-selected message.
-    UpdateSelectedPackages,
+    /// Freeze the selected packages into an update plan.
+    PrepareSelectedUpdate,
     /// Update progress message.
     UpdateProgress {
         /// Number of finished packages.
@@ -101,10 +106,10 @@ pub enum Message {
     CopyInspectorText(String),
     /// Refresh all sources and prepare an Update All plan.
     PrepareUpdateAll,
-    /// Execute the frozen Update All plan.
-    ConfirmUpdateAll,
-    /// Dismiss the Update All confirmation.
-    CancelUpdateAll,
+    /// Execute the frozen update plan.
+    ConfirmUpdate,
+    /// Dismiss the frozen update plan.
+    CancelUpdate,
     /// Re-scan the failed update source before retrying.
     PrepareFailedUpdateRetry,
 }
@@ -195,6 +200,9 @@ impl Updates {
     ) -> Action {
         match message {
             Message::SelectPackageManager(pm_type, selected) => {
+                if self.pending_update.is_some() {
+                    return Action::None;
+                }
                 if selected {
                     // Managers still in init phase are not selectable yet.
                     if info.is_loading_count && !info.updates_by_manager.contains_key(&pm_type) {
@@ -246,10 +254,11 @@ impl Updates {
                 if self.update_all_refreshing.remove(&pm_type)
                     && self.update_all_refreshing.is_empty()
                 {
-                    self.pending_update_all = Some(Self::build_update_plan(
+                    self.pending_update = Some(Self::build_update_plan(
                         info,
                         &self.update_all_scope,
                         catalog,
+                        UpdatePlanScope::All,
                     ));
                 }
                 Action::None
@@ -272,7 +281,7 @@ impl Updates {
                 Action::None
             }
             Message::TogglePackageSelection(pm_type, package_name, selected) => {
-                if info.is_updating {
+                if info.is_updating || self.pending_update.is_some() {
                     return Action::None;
                 }
                 let key = shared::selection_key(&pm_type, &package_name);
@@ -284,7 +293,7 @@ impl Updates {
                 Action::None
             }
             Message::ToggleSelectAll(select_all) => {
-                if info.is_updating {
+                if info.is_updating || self.pending_update.is_some() {
                     return Action::None;
                 }
 
@@ -317,32 +326,16 @@ impl Updates {
                 }
                 Action::None
             }
-            Message::UpdateSelectedPackages => {
+            Message::PrepareSelectedUpdate => {
                 if info.selected_packages.is_empty()
                     || info.is_updating
+                    || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
                 {
                     return Action::None;
                 }
-                info.is_updating = true;
                 info.last_update_error = None;
                 info.failed_update_manager = None;
-                info.update_logs.clear();
-                let initial_manager = info
-                    .selected_packages
-                    .iter()
-                    .next()
-                    .map(|(manager, _)| manager.clone());
-                let Some(initial_manager) = initial_manager else {
-                    info.is_updating = false;
-                    return Action::None;
-                };
-                info.update_progress = Some((
-                    0,
-                    info.selected_packages.len(),
-                    initial_manager,
-                    String::new(),
-                ));
                 let manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
                         info.updates_by_manager
@@ -353,7 +346,17 @@ impl Updates {
                     catalog,
                     |package| package.target.name.as_str(),
                 );
-                Self::update_plan_action(pm_config, manager_groups, catalog)
+                if manager_groups.is_empty() {
+                    info.last_update_error =
+                        Some("Selected packages are no longer available to update".to_owned());
+                    return Action::None;
+                }
+                self.pending_update = Some(UpdatePlan {
+                    scope: UpdatePlanScope::Selected,
+                    packages: PackageActionPlan { manager_groups },
+                    failed_sources: Vec::new(),
+                });
+                Action::None
             }
             Message::UpdateProgress {
                 completed,
@@ -378,7 +381,7 @@ impl Updates {
                 Action::None
             }
             Message::UpdatePackagesResult(outcome) => {
-                self.reset_update_all();
+                self.reset_pending_updates();
                 info.is_updating = false;
                 info.update_progress = None;
                 if outcome.is_success() {
@@ -401,7 +404,10 @@ impl Updates {
                 }
             }
             Message::RefreshSelected => {
-                if info.is_updating || !self.update_all_refreshing.is_empty() {
+                if info.is_updating
+                    || self.pending_update.is_some()
+                    || !self.update_all_refreshing.is_empty()
+                {
                     return Action::None;
                 }
                 let managers: Vec<ManagerId> = info.selected_managers.iter().cloned().collect();
@@ -418,7 +424,10 @@ impl Updates {
                 Action::Run(Task::batch(tasks))
             }
             Message::RefreshAll => {
-                if info.is_updating || !self.update_all_refreshing.is_empty() {
+                if info.is_updating
+                    || self.pending_update.is_some()
+                    || !self.update_all_refreshing.is_empty()
+                {
                     return Action::None;
                 }
                 let pm_types = shared::configured_managers(pm_config);
@@ -436,6 +445,7 @@ impl Updates {
             }
             Message::RetryLoad(pm_type) => {
                 if info.is_updating
+                    || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
                     || info.loading_updates.contains_key(&pm_type)
                 {
@@ -447,6 +457,7 @@ impl Updates {
             }
             Message::PrepareUpdateAll => {
                 if info.is_updating
+                    || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
                     || !info.loading_updates.is_empty()
                 {
@@ -457,7 +468,7 @@ impl Updates {
                     return Action::None;
                 }
 
-                self.pending_update_all = None;
+                self.pending_update = None;
                 self.update_all_scope = managers.iter().cloned().collect();
                 self.update_all_refreshing = self.update_all_scope.clone();
                 for manager in &managers {
@@ -469,29 +480,35 @@ impl Updates {
                     Self::start_load(pm_config, info, manager, catalog, true)
                 })))
             }
-            Message::ConfirmUpdateAll => {
-                let Some(plan) = self.pending_update_all.take() else {
+            Message::ConfirmUpdate => {
+                let Some(plan) = self.pending_update.take() else {
                     return Action::None;
                 };
-                if plan.manager_groups.is_empty() || info.is_updating {
+                if info.is_updating {
                     return Action::None;
                 }
+                let Some((initial_manager, _)) = plan.packages.manager_groups.first() else {
+                    info.last_update_error =
+                        Some("The update plan does not contain any packages".to_owned());
+                    return Action::None;
+                };
 
                 let total = plan.package_count();
-                let initial_manager = plan.manager_groups[0].0.clone();
                 info.is_updating = true;
                 info.last_update_error = None;
+                info.failed_update_manager = None;
                 info.update_logs.clear();
-                info.update_progress = Some((0, total, initial_manager, String::new()));
-                Self::update_plan_action(pm_config, plan.manager_groups, catalog)
+                info.update_progress = Some((0, total, initial_manager.clone(), String::new()));
+                Self::update_plan_action(pm_config, plan.packages.manager_groups, catalog)
             }
-            Message::CancelUpdateAll => {
-                self.pending_update_all = None;
+            Message::CancelUpdate => {
+                self.pending_update = None;
                 self.update_all_scope.clear();
                 Action::None
             }
             Message::PrepareFailedUpdateRetry => {
                 if info.is_updating
+                    || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
                     || !info.loading_updates.is_empty()
                 {
@@ -501,7 +518,7 @@ impl Updates {
                     return Action::None;
                 };
 
-                self.pending_update_all = None;
+                self.pending_update = None;
                 self.update_all_scope = HashSet::from([manager.clone()]);
                 self.update_all_refreshing = self.update_all_scope.clone();
                 info.init_errors.remove(&manager);
@@ -511,8 +528,8 @@ impl Updates {
         }
     }
 
-    pub(crate) fn reset_update_all(&mut self) {
-        self.pending_update_all = None;
+    pub(crate) fn reset_pending_updates(&mut self) {
+        self.pending_update = None;
         self.update_all_scope.clear();
         self.update_all_refreshing.clear();
     }
@@ -522,7 +539,7 @@ impl Updates {
     }
 
     pub fn dismiss_transient(&mut self) -> bool {
-        if self.pending_update_all.take().is_some() {
+        if self.pending_update.take().is_some() {
             self.update_all_scope.clear();
             true
         } else if self.inspected_package.take().is_some() {
@@ -534,21 +551,21 @@ impl Updates {
     }
 
     pub fn primary_action(&self, info: &UpdatesInfo) -> Option<Message> {
-        if self.pending_update_all.is_some() {
+        if self.pending_update.is_some() {
             return self
-                .pending_update_all
+                .pending_update
                 .as_ref()
                 .is_some_and(|plan| plan.package_count() > 0 && !info.is_updating)
-                .then_some(Message::ConfirmUpdateAll);
+                .then_some(Message::ConfirmUpdate);
         }
         (!info.is_updating
             && self.update_all_refreshing.is_empty()
             && !info.selected_packages.is_empty())
-        .then_some(Message::UpdateSelectedPackages)
+        .then_some(Message::PrepareSelectedUpdate)
     }
 
     pub fn can_select_packages(&self) -> bool {
-        self.update_all_refreshing.is_empty()
+        self.pending_update.is_none() && self.update_all_refreshing.is_empty()
     }
 
     pub fn move_keyboard_selection(
@@ -567,7 +584,10 @@ impl Updates {
 
     pub fn toggle_keyboard_selection(&self, info: &UpdatesInfo) -> Option<Message> {
         let (manager, name) = self.inspected_package.as_ref()?;
-        if info.is_updating || !self.update_all_refreshing.is_empty() {
+        if info.is_updating
+            || self.pending_update.is_some()
+            || !self.update_all_refreshing.is_empty()
+        {
             return None;
         }
         let selected = !info
@@ -627,6 +647,9 @@ impl Updates {
             .map(|(count, _)| *count)
             .sum();
         let configured_managers = shared::configured_managers(pm_config).len();
+        let can_refresh = !info.is_updating
+            && self.pending_update.is_none()
+            && self.update_all_refreshing.is_empty();
 
         let toolbar = shared::toolbar(
             column![
@@ -637,9 +660,14 @@ impl Updates {
                         row![
                             shared::refresh_button_with_label(
                                 "Refresh Selected",
+                                can_refresh,
                                 Message::RefreshSelected
                             ),
-                            shared::refresh_button_with_label("Refresh All", Message::RefreshAll),
+                            shared::refresh_button_with_label(
+                                "Refresh All",
+                                can_refresh,
+                                Message::RefreshAll
+                            ),
                         ]
                         .spacing(8)
                     ]
@@ -690,7 +718,7 @@ impl Updates {
             shared::summary_row(summary_items),
             toolbar,
             self.batch_actions_view(info, catalog),
-            self.update_all_confirmation_view(catalog),
+            self.update_confirmation_view(catalog),
             self.updates_list_view(info, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
@@ -739,11 +767,13 @@ impl Updates {
                 })
                 .collect();
 
+            let pending_update = self.pending_update.is_some();
             shared::active_manager_filter_view(
                 entries,
                 &info.selected_managers,
                 &info.loading_updates,
                 catalog,
+                pending_update,
                 move |manager| {
                     info.is_loading_count && !info.updates_by_manager.contains_key(manager)
                 },
@@ -1017,13 +1047,19 @@ impl Updates {
             .contains(&shared::selection_key(&manager, &package.target.name));
 
         let package_checkbox = checkbox(is_selected)
-            .on_toggle_maybe((!info.is_updating).then_some({
-                let package_name = package_name.clone();
-                let manager = manager.clone();
-                move |selected| {
-                    Message::TogglePackageSelection(manager.clone(), package_name.clone(), selected)
-                }
-            }))
+            .on_toggle_maybe(
+                (!info.is_updating && self.pending_update.is_none()).then_some({
+                    let package_name = package_name.clone();
+                    let manager = manager.clone();
+                    move |selected| {
+                        Message::TogglePackageSelection(
+                            manager.clone(),
+                            package_name.clone(),
+                            selected,
+                        )
+                    }
+                }),
+            )
             .size(18)
             .spacing(8)
             .style(shared::checkbox_style(false));
@@ -1087,13 +1123,13 @@ impl Updates {
             .into()
     }
 
-    fn update_all_confirmation_view<'a>(
+    fn update_confirmation_view<'a>(
         &'a self,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{button, column, container, row, text};
 
-        let Some(plan) = &self.pending_update_all else {
+        let Some(plan) = &self.pending_update else {
             return container("").height(iced::Length::Shrink).into();
         };
 
@@ -1106,19 +1142,18 @@ impl Updates {
             .map(|manager| catalog.display_name(manager))
             .collect::<Vec<_>>()
             .join(", ");
-        let detail = if package_count == 0 && failed_count == 0 {
-            "No updates were found after refreshing all configured sources.".to_owned()
-        } else if failed_count == 0 {
-            format!(
-                "{package_count} package(s) from {manager_count} source(s). System sources may request authorization."
-            )
+        let detail = if package_count == 0 {
+            "No updates were found after refreshing the requested sources.".to_owned()
         } else {
-            format!(
-                "{package_count} package(s) from {manager_count} source(s). Excluded failed source(s): {failed_names}."
-            )
+            format!("{package_count} package(s) from {manager_count} source(s)")
         };
+        let failed_detail = (failed_count > 0).then(|| {
+            format!("Excluded failed source(s): {failed_names}. Re-scan them before retrying.")
+        });
         let title = if package_count == 0 {
             "No updates found"
+        } else if plan.scope == UpdatePlanScope::Selected {
+            "Selected update plan ready"
         } else {
             "Update All plan ready"
         };
@@ -1137,12 +1172,12 @@ impl Updates {
             theme::colors::UPDATE_ACTION_ACTIVE,
         ));
         let confirm = if package_count > 0 {
-            confirm.on_press(Message::ConfirmUpdateAll)
+            confirm.on_press(Message::ConfirmUpdate)
         } else {
             confirm
         };
 
-        container(
+        let mut content = column![
             row![
                 column![
                     text(title)
@@ -1156,16 +1191,35 @@ impl Updates {
                 button(text("Cancel").size(13))
                     .padding([8, 12])
                     .style(theme::secondary_button(true))
-                    .on_press(Message::CancelUpdateAll),
+                    .on_press(Message::CancelUpdate),
                 confirm,
             ]
             .spacing(theme::spacing::MD)
-            .align_y(iced::Alignment::Center),
-        )
-        .padding(theme::spacing::MD)
-        .width(iced::Length::Fill)
-        .style(theme::surface_container)
-        .into()
+            .align_y(iced::Alignment::Center)
+            .wrap(),
+        ]
+        .spacing(theme::spacing::MD);
+        if !plan.packages.manager_groups.is_empty() {
+            content = content.push(shared::package_action_plan_view(
+                &plan.packages.manager_groups,
+                catalog,
+            ));
+        }
+        if let Some(failed_detail) = failed_detail {
+            content = content.push(
+                text(failed_detail)
+                    .size(12)
+                    .style(theme::text_error)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+
+        container(content)
+            .padding(theme::spacing::MD)
+            .width(iced::Length::Fill)
+            .style(theme::surface_container)
+            .into()
     }
 
     fn batch_actions_view<'a>(
@@ -1177,7 +1231,10 @@ impl Updates {
 
         let selected_count = info.selected_packages.len();
         let is_preparing_all = !self.update_all_refreshing.is_empty();
-        let is_enabled = selected_count > 0 && !info.is_updating && !is_preparing_all;
+        let is_enabled = selected_count > 0
+            && !info.is_updating
+            && self.pending_update.is_none()
+            && !is_preparing_all;
 
         let query = self.search_query.trim().to_lowercase();
         let mut total_visible = 0;
@@ -1225,7 +1282,10 @@ impl Updates {
 
         let select_all_checkbox = checkbox(all_selected)
             .label("Select All")
-            .on_toggle_maybe((!info.is_updating).then_some(Message::ToggleSelectAll))
+            .on_toggle_maybe(
+                (!info.is_updating && self.pending_update.is_none())
+                    .then_some(Message::ToggleSelectAll),
+            )
             .size(18)
             .spacing(8)
             .text_size(14)
@@ -1247,12 +1307,13 @@ impl Updates {
         ));
 
         let update_button = if is_enabled {
-            update_button.on_press(Message::UpdateSelectedPackages)
+            update_button.on_press(Message::PrepareSelectedUpdate)
         } else {
             update_button
         };
 
-        let update_all_enabled = !info.is_updating && !is_preparing_all;
+        let update_all_enabled =
+            !info.is_updating && self.pending_update.is_none() && !is_preparing_all;
         let update_all = button(
             text(if is_preparing_all {
                 "Preparing Update All..."
@@ -1343,6 +1404,7 @@ impl Updates {
         info: &UpdatesInfo,
         scope: &HashSet<ManagerId>,
         catalog: &ManagerCatalog,
+        plan_scope: UpdatePlanScope,
     ) -> UpdatePlan {
         let mut manager_groups: Vec<_> = info
             .updates_by_manager
@@ -1384,7 +1446,8 @@ impl Updates {
         failed_sources.dedup();
 
         UpdatePlan {
-            manager_groups,
+            scope: plan_scope,
+            packages: PackageActionPlan { manager_groups },
             failed_sources,
         }
     }
@@ -1434,6 +1497,91 @@ mod tests {
     }
 
     #[test]
+    fn selected_update_confirmation_executes_the_frozen_plan() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_managers.insert(manager.clone());
+        info.updates_by_manager.insert(
+            manager.clone(),
+            (2, vec![update(&manager, "alpha"), update(&manager, "beta")]),
+        );
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "alpha"));
+        let config = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+
+        let action = updates.update(Message::PrepareSelectedUpdate, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert!(!info.is_updating);
+        let plan = updates.pending_update.as_ref().unwrap();
+        assert_eq!(plan.scope, UpdatePlanScope::Selected);
+        assert_eq!(
+            plan.packages.manager_groups,
+            vec![(manager.clone(), vec!["alpha".to_owned()])]
+        );
+
+        info.selected_packages.clear();
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "beta"));
+        info.updates_by_manager.clear();
+
+        let action = updates.update(Message::ConfirmUpdate, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_updating);
+        assert_eq!(info.update_progress, Some((0, 1, manager, String::new())));
+        assert!(updates.pending_update.is_none());
+    }
+
+    #[test]
+    fn stale_update_selection_does_not_open_confirmation() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let manager = manager_id("builtin:cargo");
+        info.selected_packages
+            .insert(shared::selection_key(&manager, "missing"));
+
+        let action = updates.update(
+            Message::PrepareSelectedUpdate,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(updates.pending_update.is_none());
+        assert!(!info.is_updating);
+        assert_eq!(
+            info.last_update_error.as_deref(),
+            Some("Selected packages are no longer available to update")
+        );
+    }
+
+    #[test]
+    fn escape_dismisses_update_confirmation_before_the_inspector() {
+        let manager = manager_id("builtin:cargo");
+        let mut updates = Updates {
+            inspected_package: Some(shared::selection_key(&manager, "alpha")),
+            pending_update: Some(UpdatePlan {
+                scope: UpdatePlanScope::Selected,
+                packages: PackageActionPlan {
+                    manager_groups: vec![(manager, vec!["alpha".to_owned()])],
+                },
+                failed_sources: Vec::new(),
+            }),
+            ..Updates::default()
+        };
+
+        assert!(updates.dismiss_transient());
+        assert!(updates.pending_update.is_none());
+        assert!(updates.inspected_package.is_some());
+        assert!(updates.dismiss_transient());
+        assert!(updates.inspected_package.is_none());
+    }
+
+    #[test]
     fn update_all_plan_excludes_failed_sources() {
         let mut info = UpdatesInfo::default();
         let dnf = manager_id("builtin:dnf");
@@ -1448,11 +1596,17 @@ mod tests {
             .insert(flatpak.clone(), "network error".to_owned());
         let scope = HashSet::from([dnf.clone(), flatpak.clone()]);
 
-        let plan = Updates::build_update_plan(&info, &scope, &ManagerCatalog::builtin());
+        let plan = Updates::build_update_plan(
+            &info,
+            &scope,
+            &ManagerCatalog::builtin(),
+            UpdatePlanScope::All,
+        );
 
         assert_eq!(plan.package_count(), 2);
         assert_eq!(plan.manager_count(), 1);
-        assert_eq!(plan.manager_groups[0].0, dnf);
+        assert_eq!(plan.scope, UpdatePlanScope::All);
+        assert_eq!(plan.packages.manager_groups[0].0, dnf);
         assert_eq!(plan.failed_sources, vec![flatpak]);
     }
 
@@ -1467,12 +1621,17 @@ mod tests {
             .insert(flatpak.clone(), (1, vec![update(&flatpak, "retry-me")]));
         let scope = HashSet::from([flatpak.clone()]);
 
-        let plan = Updates::build_update_plan(&info, &scope, &ManagerCatalog::builtin());
+        let plan = Updates::build_update_plan(
+            &info,
+            &scope,
+            &ManagerCatalog::builtin(),
+            UpdatePlanScope::All,
+        );
 
         assert_eq!(plan.package_count(), 1);
         assert_eq!(plan.manager_count(), 1);
-        assert_eq!(plan.manager_groups[0].0, flatpak);
-        assert_eq!(plan.manager_groups[0].1, vec!["retry-me"]);
+        assert_eq!(plan.packages.manager_groups[0].0, flatpak);
+        assert_eq!(plan.packages.manager_groups[0].1, vec!["retry-me"]);
     }
 
     #[test]
@@ -1498,7 +1657,7 @@ mod tests {
         assert_eq!(info.loading_updates.get(&manager), Some(&2));
         assert!(info.load_errors.is_empty());
         assert!(updates.update_all_refreshing.contains(&manager));
-        assert!(updates.pending_update_all.is_none());
+        assert!(updates.pending_update.is_none());
 
         let _ = updates.update(
             Message::LoadUpdatesResult {
@@ -1517,6 +1676,6 @@ mod tests {
             Some("current result")
         );
         assert!(updates.update_all_refreshing.is_empty());
-        assert!(updates.pending_update_all.is_some());
+        assert!(updates.pending_update.is_some());
     }
 }

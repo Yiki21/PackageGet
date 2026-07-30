@@ -571,7 +571,11 @@ impl Installed {
                     container(self.search_input_view()).width(iced::Length::Fill),
                     column![
                         shared::section_title("Actions"),
-                        shared::refresh_button_with_label("Refresh", Message::RefreshInfo)
+                        shared::refresh_button_with_label(
+                            "Refresh",
+                            !info.is_removing,
+                            Message::RefreshInfo
+                        )
                     ]
                     .spacing(theme::spacing::SM),
                 ]
@@ -666,6 +670,7 @@ impl Installed {
                 &info.selected_managers,
                 &info.loading_installed,
                 catalog,
+                false,
                 move |manager| {
                     info.is_loading_count && !info.installed_packages.contains_key(manager)
                 },

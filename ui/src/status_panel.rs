@@ -34,6 +34,8 @@ pub struct StatusPanel {
     activity_phase: f32,
     /// Whether any package-manager work is currently active.
     is_active: bool,
+    /// Whether the active write should stop before the next manager starts.
+    cancellation_requested: bool,
     /// Whether command output is expanded.
     details_expanded: bool,
     /// Activity drawer expansion animation.
@@ -97,6 +99,7 @@ impl StatusPanel {
             progress_counts: None,
             activity_phase: 0.0,
             is_active: false,
+            cancellation_requested: false,
             details_expanded: false,
             drawer_animation: Animation::new(0.0).duration(Duration::from_millis(180)),
             outcome: None,
@@ -169,7 +172,12 @@ impl StatusPanel {
         }
 
         if should_refresh_snapshot {
-            self.status_label = status_label(installed_info, updates_info, finding_info, catalog);
+            self.status_label = if self.cancellation_requested && is_active {
+                "Stop requested: the current manager will finish; later managers will not start."
+                    .to_owned()
+            } else {
+                status_label(installed_info, updates_info, finding_info, catalog)
+            };
             self.progress_counts = progress_counts(installed_info, updates_info, finding_info);
             if is_active {
                 rebuild_command_logs(
@@ -190,8 +198,19 @@ impl StatusPanel {
         }
     }
 
+    /// Clears cancellation state when a new package operation starts.
+    pub fn begin_package_operation(&mut self) {
+        self.cancellation_requested = false;
+    }
+
+    /// Marks the active operation to stop before its next manager group.
+    pub fn request_cancellation(&mut self) {
+        self.cancellation_requested = true;
+    }
+
     /// Records a package-operation result until it is dismissed or superseded.
     pub fn record_outcome(&mut self, outcome: OperationOutcome) {
+        self.cancellation_requested = false;
         self.outcome_logs.clone_from(&self.command_logs);
         self.outcome = Some(outcome);
     }
@@ -627,4 +646,43 @@ fn activity_capsule_bar<Message: 'static>(
             snap: false,
         })
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_status_describes_the_manager_boundary() {
+        let now = Instant::now();
+        let mut panel = StatusPanel::new(now);
+        let installed = InstalledInfo::default();
+        let updates = UpdatesInfo::default();
+        let mut finding = FindingInfo {
+            is_installing: true,
+            ..FindingInfo::default()
+        };
+        finding.install_progress = Some((
+            0,
+            2,
+            ManagerId::parse("builtin:cargo").unwrap(),
+            "alpha".to_owned(),
+        ));
+
+        panel.begin_package_operation();
+        panel.request_cancellation();
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &updates,
+            &finding,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert_eq!(
+            panel.status_label,
+            "Stop requested: the current manager will finish; later managers will not start."
+        );
+        assert!(panel.cancellation_requested);
+    }
 }
