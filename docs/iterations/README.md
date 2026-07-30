@@ -35,4 +35,4 @@
 | 019 | 已完成 | 阶段 3：Settings Executable Validation 与发布检查点 | [019-settings-executable-validation.md](019-settings-executable-validation.md) |
 | 020 | 已完成 | 阶段 3：Config Load 可见恢复 | [020-config-load-recovery.md](020-config-load-recovery.md) |
 | 021 | 已完成 | 阶段 5：异步读取 Request Generation | [021-request-generation.md](021-request-generation.md) |
-| 022 | 进行中 | 阶段 5：写操作冻结计划与协作取消文案 | [022-frozen-write-plans.md](022-frozen-write-plans.md) |
+| 022 | 已完成 | 阶段 5：写操作冻结计划与协作取消文案 | [022-frozen-write-plans.md](022-frozen-write-plans.md) |

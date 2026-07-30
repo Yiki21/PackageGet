@@ -1,7 +1,7 @@
 # Iteration 022：写操作冻结计划与协作取消文案
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段5写操作透明度与Linux beta发布前可靠性
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -11,14 +11,14 @@ Discover安装和Updates已选项更新必须先从当前页面数据与selectio
 
 ## 实施计划
 
-- [ ] 在现有`content/workflows.rs`中增加Finding和Updates共同使用的轻量冻结计划，不增加controller、service、trait或通用状态机。
-- [ ] Finding将直接安装改为prepare/confirm/cancel三步；确认后只消费冻结计划，不重新读取live selection。
-- [ ] Updates用一个pending update状态统一selected update与既有Update All确认；两者确认后都只消费冻结计划。
-- [ ] 两个确认区展示每个manager的package名称/数量，并按`ManagerDescriptor::authorization`标明required或may request authorization。
-- [ ] pending确认期间冻结会改变计划范围的选择、刷新和搜索入口；Escape优先取消确认。
-- [ ] active operation取消按钮和status文案明确为“当前manager完成后停止”；不声称终止当前命令或系统事务。
-- [ ] 增加计划冻结、空计划拒绝、确认取消和取消状态文案测试。
-- [ ] 更新ROADMAP和本记录，并串行通过完整workspace门禁。
+- [x] 在现有`content/workflows.rs`中增加Finding和Updates共同使用的轻量冻结计划，不增加controller、service、trait或通用状态机。
+- [x] Finding将直接安装改为prepare/confirm/cancel三步；确认后只消费冻结计划，不重新读取live selection。
+- [x] Updates用一个pending update状态统一selected update与既有Update All确认；两者确认后都只消费冻结计划。
+- [x] 两个确认区展示每个manager的package名称/数量，并按`ManagerDescriptor::authorization`标明required或may request authorization。
+- [x] pending确认期间冻结会改变计划范围的选择、刷新和搜索入口；Escape优先取消确认。
+- [x] active operation取消按钮和status文案明确为“当前manager完成后停止”；不声称终止当前命令或系统事务。
+- [x] 增加计划冻结、空计划拒绝、确认取消和取消状态文案测试。
+- [x] 更新ROADMAP和本记录，并串行通过完整workspace门禁。
 
 ## 行为约束
 
@@ -47,14 +47,31 @@ Discover安装和Updates已选项更新必须先从当前页面数据与selectio
 - 审计确认Discover当前直接从live selection执行安装，selected Updates也直接执行；Update All已有冻结计划，但只显示模糊的系统source提权提示。
 - `AuthorizationHint`已由manager descriptor提供，确认页可以直接显示真实metadata，不需要硬编码APT/DNF等ID。
 - core执行器只在每个manager group开始前检查`CancellationToken`；当前UI的“Cancel Task”容易被理解为立即终止，必须改为真实协作取消语义。
+- `PackageActionPlan`只保存稳定排序的manager groups和package名称；Finding与Updates分别持有pending plan，确认后直接move进现有串行执行器，不增加通用工作流层。
+- Discover安装和selected Updates现在先显示确认区；共同的计划明细视图逐manager列出package名称/数量，并根据descriptor区分`Authorization required`与`May request authorization`。
+- Updates的selected与Update All共享单一pending update状态；Update All的强制刷新、失败source排除和failed-source重试保持原行为。
+- 确认期间会禁用改变计划范围的source、selection、search/refresh入口；Escape先取消确认，再关闭inspector。
+- `Stop After Current Manager`触发后变为`Stop Requested`，status panel明确当前manager会完成、后续manager不会启动；core结果文案同步改为在另一manager启动前停止。
+- 新增7项测试，覆盖Finding/Updates冻结计划、失效selection、Escape优先级和取消边界文案；未执行真实系统package写操作。
+- 完整workspace串行门禁通过：193项测试成功、14项真实环境测试显式ignored、0失败，format/check/clippy/build均通过。
+- 发布判断：本轮已清除Linux beta前的写操作确认与取消文案缺口；仍需Iteration 023完成Linux release hardening后再发布`0.3.0-beta.1`，当前不tag。
 
 ## Git提交
 
-- 待记录。
+- `304d4ca docs: plan frozen write operations iteration`
+- `f028fa7 feat: confirm frozen package write plans`
 
 ## 验证记录
 
-- 待执行。
+- `cargo check -p updater --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test -p updater --locked --jobs 1 -- --test-threads=1`：46项成功、0失败。
+- `cargo clippy -p updater --all-targets --locked --jobs 1 -- -D warnings`：通过，无warning。
+- `cargo test -p updater_core --test execution --locked --jobs 1 -- --test-threads=1`：4项成功、0失败。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，193项成功、14项显式ignored、0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 

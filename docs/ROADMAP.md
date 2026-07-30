@@ -99,7 +99,7 @@
 5.  为 Config load error 增加可见启动恢复界面，提供 Retry、打开配置目录、经确认后重新检测/重置配置；不再只在 ui/src/app.rs::ConfigLoaded 里写日志后停住。
 6.  Activity history直接记录ManagerId与后续时间戳，不保留版本字段或旧display-name兼容路径，并保留现有上限和隐私脱敏。
 
-当前进度（Iteration 021）：
+当前进度（Iteration 022）：
 
 - UI page state、message payload、selection key、progress、operation outcome和Activity failure identity已切换为`ManagerId`；Finding、Installed、Updates中的DNF display fallback已删除。
 - UI catalog持有共享的direct built-in registry，descriptor作为名称、说明、category、platform与capability metadata来源；读取、搜索、刷新、检测和写操作均通过该registry执行。unknown configured manager显示稳定ID并在Settings draft/save/reload中保留。
@@ -107,12 +107,14 @@
 - Activity使用无版本字段的单一当前schema，failure直接保存`ManagerId`；旧history不读取或迁移，时间戳仍未加入。
 - Config严格加载失败会进入独立恢复状态，提供Retry、打开配置目录和经确认后的原子reset；失败前后都不会让默认空Config进入正常工作区，也不增加旧schema迁移或自动修复。
 - 初始化Task使用App reload generation；Finding、Updates和Installed使用per-manager request ID。reload或同一manager新请求开始后，晚到结果不会覆盖cache/error、清除当前spinner或推进旧Update All预检。
+- Discover install与selected Updates现在先冻结按manager稳定排序的package计划，再展示名称、数量和descriptor提权提示并确认执行；确认后不重新读取live selection或cache。Update All沿用同一pending update状态，既有刷新和失败source排除不变。
+- active operation停止入口明确为当前manager完成后停止；请求后status保持active并说明后续manager不会启动。底层仍只在manager group之间检查取消，不伪装成已终止当前系统事务。
 - `PackageManagerType`、宏dispatcher、旧静态trait和core legacy manager适配器已删除；Activity时间戳仍是后续迭代。
 
-发布检查点（Iteration 021审计）：
+发布检查点（Iteration 022审计）：
 
-1. 当前`main`仍不能直接作为stable发布：`Build-v0.2.4`之后已完成四crate拆分、Config/Activity schema直接切换和执行引擎替换，变更规模大；Config load恢复和异步读取新鲜度已有测试保护，但写操作尚未全部具备冻结计划确认，取消文案也仍可能被理解为立即终止当前系统事务。
-2. Iteration 020已完成Config load可见恢复，Iteration 021已为初始化、Finding、Updates和Installed加入request generation并拒绝晚到结果；Iteration 022补齐Discover install与selected Updates的冻结计划确认，并让取消文案准确表达“当前manager完成后停止”。
+1. 当前`main`仍不能直接作为stable发布：`Build-v0.2.4`之后的四crate拆分、Config/Activity schema直接切换和执行引擎替换规模较大，且阶段4至阶段6的跨平台与完整artifact目标尚未完成。
+2. Linux beta前的功能可靠性缺口已收敛：Iteration 020完成Config load可见恢复，Iteration 021拒绝晚到读取结果，Iteration 022补齐Discover install与selected Updates冻结确认并准确表达manager边界取消语义。
 3. Iteration 023只做Linux release hardening：启用并验证Wayland/X11、执行clean/旧配置恢复矩阵、验证amd64/arm64 `.deb/.rpm`与checksums、更新版本和release notes。全部门禁通过后可发布`0.3.0-beta.1`，明确标注Linux preview。
 4. 完整stable仍以阶段4、阶段5和阶段6的跨平台功能、可靠性、artifact与文档标准为准；Windows/macOS产物不存在时，不把Linux preview描述成ROADMAP目标已完成。
 
