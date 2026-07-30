@@ -4367,6 +4367,7 @@ dependencies = [
  "mimalloc",
  "notify-rust",
  "rfd",
+ "roxmltree",
  "serde",
  "serde_json",
  "tokio",

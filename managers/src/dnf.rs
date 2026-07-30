@@ -12,7 +12,7 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, command_status_error, decode_stdout, manager_availability, require_success,
-        resolve_executable, run_output,
+        resolve_executable, run_output, system_helper_command,
     },
     progress::{CommandProgress, run_dnf_command_with_progress},
 };
@@ -20,7 +20,6 @@ use crate::{
 const DNF_ID: &str = "builtin:dnf";
 const DNF_COMMAND: &str = "dnf";
 const RPM_COMMAND: &str = "rpm";
-const PKEXEC_COMMAND: &str = "pkexec";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const RPM_QUERY_FORMAT: &str =
     "%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\t%{INSTALLTIME}\t%{URL}\n";
@@ -193,18 +192,12 @@ impl DnfManager {
         action: PackageAction,
         package_names: &[String],
     ) -> ManagerResult<CommandSpec> {
+        self.validate_config(config)?;
         ensure_supported_action(action)?;
-        let dnf_path = resolve_executable(config, DNF_COMMAND);
         let command = match action {
-            PackageAction::Install => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(dnf_path.as_os_str())
-                .args(["install", "-y"]),
-            PackageAction::Update => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(dnf_path.as_os_str())
-                .args(["upgrade", "-y", "--skip-unavailable"]),
-            PackageAction::Uninstall => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(dnf_path.as_os_str())
-                .args(["remove", "-y"]),
+            PackageAction::Install => system_helper_command("install", "dnf"),
+            PackageAction::Update => system_helper_command("update", "dnf"),
+            PackageAction::Uninstall => system_helper_command("remove", "dnf"),
             _ => return Err(unsupported_action_error()),
         };
 
@@ -414,9 +407,7 @@ fn parse_search_names(stdout: &str) -> Vec<String> {
 
 fn check_upgrade_command(dnf_path: &std::path::Path, refresh: bool) -> CommandSpec {
     if refresh {
-        return CommandSpec::new(PKEXEC_COMMAND)
-            .arg(dnf_path.as_os_str())
-            .args(["check-upgrade", "--refresh"]);
+        return system_helper_command("refresh", "dnf");
     }
 
     CommandSpec::new(dnf_path).arg("check-upgrade")
@@ -502,12 +493,18 @@ mod tests {
         let install = manager
             .write_command(&config, PackageAction::Install, &names)
             .expect("build install command");
-        assert_eq!(install.program(), Path::new(PKEXEC_COMMAND));
+        assert_eq!(install.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             install.arguments(),
-            ["/custom/dnf5", "install", "-y", "bash", "curl"]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/libexec/updater-system-helper",
+                "install",
+                "dnf",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
 
         let update = manager
@@ -516,10 +513,9 @@ mod tests {
         assert_eq!(
             update.arguments(),
             [
-                "/custom/dnf5",
-                "upgrade",
-                "-y",
-                "--skip-unavailable",
+                "/usr/libexec/updater-system-helper",
+                "update",
+                "dnf",
                 "bash",
                 "curl",
             ]
@@ -532,9 +528,15 @@ mod tests {
             .expect("build uninstall command");
         assert_eq!(
             uninstall.arguments(),
-            ["/custom/dnf5", "remove", "-y", "bash", "curl"]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/libexec/updater-system-helper",
+                "remove",
+                "dnf",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
     }
 
@@ -548,10 +550,10 @@ mod tests {
         );
 
         let refresh = check_upgrade_command(Path::new("/usr/bin/dnf5"), true);
-        assert_eq!(refresh.program(), Path::new(PKEXEC_COMMAND));
+        assert_eq!(refresh.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             refresh.arguments(),
-            ["/usr/bin/dnf5", "check-upgrade", "--refresh"]
+            ["/usr/libexec/updater-system-helper", "refresh", "dnf",]
                 .map(OsString::from)
                 .as_slice()
         );

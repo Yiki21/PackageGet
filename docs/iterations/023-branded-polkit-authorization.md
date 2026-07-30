@@ -44,6 +44,7 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 - 本机实际认证agent为Hyprpolkitagent；本地`pkexec(1)`确认自有action可设置description、message、icon和defaults，并可用`org.freedesktop.policykit.exec.argv1`按helper首参数选择动作。
 - 审计发现当前四个manager会把Settings中的custom executable直接交给`pkexec`。新helper不能延续该契约，否则可配置路径会成为任意root程序入口。
 - APT、DNF、Pacman和Zypper除install/update/remove外，分别还有需要提权的metadata refresh命令，必须一并切换。
+- 本机使用`cargo-generate-rpm 0.21.0`真实打包时确认`-p updater`会查找不存在的`updater/Cargo.toml`；该参数要求workspace成员目录，workflow已改回`-p ui`。
 
 ## Git提交
 

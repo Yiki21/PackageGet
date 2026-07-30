@@ -130,7 +130,15 @@ On first launch, the application automatically detects package managers availabl
 
 Additional notes:
 
-- Operations that install, remove, or update system packages request elevated privileges through `pkexec`
+- System package changes run through Updater's restricted helper and request authorization through `pkexec`; Updater never reads or stores the administrator password
 - Configuration is stored in `updater/config.json` under the user configuration directory
 - See [Configuration](docs/configuration.md) for the file schema and reset instructions
 - If a package manager is not detected, you can specify its executable path manually from the settings page
+
+## System package authorization
+
+Release packages install `/usr/libexec/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
+
+The helper accepts only `install`, `update`, `remove`, and metadata `refresh` requests for APT, DNF, Pacman, and Zypper. It validates package identifiers and directly executes fixed system binaries without a shell. Custom executable paths remain available for detection and read-only queries, but are deliberately not used by privileged system package operations.
+
+Running the unpackaged GUI directly supports all read-only workflows. To exercise privileged system package changes from a source build, install the release helper, policy, and icon as root first; installing the generated `.deb` or `.rpm` is the recommended way to keep these assets consistent.

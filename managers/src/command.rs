@@ -14,6 +14,8 @@ use updater_manager_api::{
 };
 
 const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
+const PKEXEC_PATH: &str = "/usr/bin/pkexec";
+const SYSTEM_HELPER_PATH: &str = "/usr/libexec/updater-system-helper";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandSpec {
@@ -72,6 +74,10 @@ impl CommandSpec {
     pub(crate) fn removed_environment(&self) -> &[OsString] {
         &self.removed_environment
     }
+}
+
+pub(crate) fn system_helper_command(action: &str, manager: &str) -> CommandSpec {
+    CommandSpec::new(PKEXEC_PATH).args([SYSTEM_HELPER_PATH, action, manager])
 }
 
 pub(crate) async fn manager_availability(
@@ -538,6 +544,19 @@ mod tests {
         assert_eq!(
             spec.arguments(),
             ["/custom/apt", "install", "-y"]
+                .map(OsString::from)
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn system_helper_commands_use_the_policy_bound_path_and_action_first() {
+        let spec = system_helper_command("install", "apt").args(["bash", "curl"]);
+
+        assert_eq!(spec.program(), Path::new(PKEXEC_PATH));
+        assert_eq!(
+            spec.arguments(),
+            [SYSTEM_HELPER_PATH, "install", "apt", "bash", "curl",]
                 .map(OsString::from)
                 .as_slice()
         );

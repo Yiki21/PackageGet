@@ -35,8 +35,8 @@
     设置。rust-toolchain.toml 与 CI 使用同一 stable channel，不写死 patch 版本；本地工具链包含 rustfmt、clippy、rust-analyzer。
 4.  单独迁移最新稳定 Iced：重点适配 ui/src/shortcut.rs 的自定义 Widget 实现、ui/src/main.rs 的 application/window API、ui/src/app.rs 的 Task/订阅 API以及
     ui/src/theme.rs 的样式 API。
-5.  新增独立质量 CI（format、check、确定性单元测试、clippy），把需要真实网络或本机包管理器的测试标为显式 integration/ignored；修复现有 RPM 命令使用目录名 ui
-    而不是 Cargo package 名 updater 的问题。
+5.  新增独立质量 CI（format、check、确定性单元测试、clippy），把需要真实网络或本机包管理器的测试标为显式 integration/ignored；RPM使用`cargo-generate-rpm`
+    要求的workspace成员目录`ui`，不能把Cargo package名`updater`误作路径。
 
 关键文件：Cargo.toml、Cargo.lock、core/Cargo.toml、ui/Cargo.toml、rust-toolchain.toml、.cargo/config.toml、.github/workflows/package.yml、ui/src/shortcut.rs
 

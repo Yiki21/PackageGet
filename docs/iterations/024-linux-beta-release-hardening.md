@@ -43,7 +43,7 @@
 
 - 审计确认GUI目前同时存在代码级Wayland环境检查与仅启用Iced `wayland` feature两层限制；X11尚未进入二进制。
 - 当前窗口`application_id`和desktop `StartupWMClass`均为`updater`，尚未使用ROADMAP约定的`com.ayi.updater`。
-- package workflow已有amd64/arm64原生runner矩阵和正确的`cargo generate-rpm -p updater`命令，但release job尚未生成checksums。
+- package workflow已有amd64/arm64原生runner矩阵；Iteration 023真实打包已将RPM命令纠正为`cargo generate-rpm -p ui`，release job仍未生成checksums。
 - 本机会话未暴露`agent-workspace-linux` workspace工具；后续GUI证据将明确区分编译、隔离display启动和用户已完成的恢复页视觉验收。
 - Iteration 023先交付Updater自有Polkit action与最小特权helper；本轮在该授权链通过后继续发布收口。
 

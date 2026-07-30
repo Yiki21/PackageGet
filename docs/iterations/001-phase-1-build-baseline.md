@@ -24,7 +24,7 @@
 - 本机最新 stable 工具链为 Rust 1.97.1，官方 stable channel manifest 日期为 2026-07-16。
 - Iced 已使用当前稳定版 0.14.0，本轮重点是集中声明和 stable 编译兼容，不需要跨大版本迁移。
 - 迭代开始时 `.cargo/config.toml` 仍包含 `-Zthreads` 和 `-Zshare-generics`，因此只能使用 nightly。
-- 迭代开始时 RPM workflow 使用目录名 `ui`，正确的 Cargo package 名称为 `updater`。
+- 迭代开始时RPM workflow使用目录名`ui`；本轮当时误认为`-p`接受Cargo package名并改为`updater`。Iteration 023真实生成RPM时确认`cargo-generate-rpm 0.21.0`的`-p`实际要求workspace成员目录，因此正确值仍是`ui`。
 - 迭代开始时部分测试会访问 crates.io 或调用本机 DNF、Flatpak、Homebrew，需要从默认确定性测试中隔离。
 
 ## 进度日志
@@ -43,7 +43,7 @@
 - 完成平台集成组更新：Mimalloc 0.1.52；Notify、RFD、Directories 已在当前稳定兼容线最新版。
 - 确认 Iced 0.14.0 已是当前稳定版，现有 API 在 Rust 1.97.1 下无需迁移即可通过 all-targets check。
 - 将 DNF、Flatpak、Homebrew、本机环境及 crates.io 网络测试标记为显式 ignored，默认测试只运行确定性用例。
-- 新增串行质量 CI、Cargo/GitHub Actions 分组 Dependabot，并修正 RPM package selector 为 `updater`。
+- 新增串行质量 CI、Cargo/GitHub Actions 分组 Dependabot，并曾将RPM selector改为`updater`；该结论只经过workflow解析，未实际生成RPM，已由Iteration 023纠正为`ui`。
 - 本机首次全目标测试编译耗时较长，经确认后停止本地任务，改由 GitHub Actions 完成完整 test、clippy、build。
 - 使用 nektos/act 0.2.89 成功解析并列出 CI 与 Package workflow jobs。
 - GitHub Actions run 30422965239 在 16 分 9 秒内通过全部五项质量门槛。

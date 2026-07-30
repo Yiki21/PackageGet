@@ -26,7 +26,7 @@ Updater使用单一配置schema。配置文件位于平台用户配置目录下�
 ```
 
 - `managers`按稳定`ManagerId`保存启用的manager；同一ID不能重复。
-- `executable`为可选自定义可执行文件路径；`null`表示使用默认命令发现规则。Settings可随时选择新路径或恢复为`null`。
+- `executable`为可选自定义可执行文件路径；`null`表示使用默认命令发现规则。Settings可随时选择新路径或恢复为`null`。对于APT、DNF、Pacman和Zypper，该路径只用于availability与只读查询；特权写操作始终经由固定的`/usr/libexec/updater-system-helper`执行发行版标准系统命令，不能把自定义路径提升为root。
 - `settings`必须是JSON object，由对应manager定义和校验；core不解释或记录其中可能包含的敏感值。
 - `appearance`支持`system`、`light`、`dark`和`high_contrast`。
 - `notifications_enabled`控制原生完成/失败通知。
@@ -38,5 +38,7 @@ Updater使用单一配置schema。配置文件位于平台用户配置目录下�
 ## 写入语义
 
 保存前会验证重复ID和settings类型。对于当前平台支持、已注册且设置了自定义`executable`的manager，Settings还会调用对应manager的availability检查，验证普通文件/执行权限、manager settings和version command；任一检查失败时不会写入文件，并在对应manager行显示失败原因。使用默认命令发现规则、当前平台不支持或当前build未注册的manager不会被该检查阻断，其配置仍原样保留。
+
+Linux系统manager的写操作另受Updater Polkit helper约束。helper不读取这里的`executable`或任意manager settings，只接受固定动作、固定manager ID和严格校验的package名称；密码输入与认证结果完全由当前桌面Polkit authentication agent处理。
 
 通过验证后，Updater先在同一目录写入临时文件并执行flush/sync，再使用rename替换`config.json`；验证或写入失败不会先截断现有配置。

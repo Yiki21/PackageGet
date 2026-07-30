@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
-    path::Path,
     process::Output,
 };
 
@@ -16,14 +15,13 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, command_status_error, decode_stdout, manager_availability_with_version,
-        require_success, resolve_executable, run_output,
+        require_success, resolve_executable, run_output, system_helper_command,
     },
     progress::{CommandProgress, run_command_with_progress},
 };
 
 const PACMAN_ID: &str = "builtin:pacman";
 const PACMAN_COMMAND: &str = "pacman";
-const PKEXEC_COMMAND: &str = "pkexec";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct `updater-manager-api` implementation for Pacman.
@@ -132,7 +130,7 @@ impl PacmanManager {
         let pacman_path = resolve_executable(config, PACMAN_COMMAND);
 
         if refresh {
-            let refresh = refresh_command(&pacman_path);
+            let refresh = refresh_command();
             run_command_with_progress(&refresh, |_| {}).await?;
         }
 
@@ -198,15 +196,12 @@ impl PacmanManager {
         action: PackageAction,
         package_names: &[String],
     ) -> ManagerResult<CommandSpec> {
+        self.validate_config(config)?;
         ensure_supported_action(action)?;
-        let pacman_path = resolve_executable(config, PACMAN_COMMAND);
         let command = match action {
-            PackageAction::Install | PackageAction::Update => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(pacman_path.as_os_str())
-                .args(["-S", "--needed", "--noconfirm"]),
-            PackageAction::Uninstall => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(pacman_path.as_os_str())
-                .args(["-R", "--noconfirm"]),
+            PackageAction::Install => system_helper_command("install", "pacman"),
+            PackageAction::Update => system_helper_command("update", "pacman"),
+            PackageAction::Uninstall => system_helper_command("remove", "pacman"),
             _ => return Err(unsupported_action_error()),
         };
 
@@ -474,10 +469,8 @@ fn parse_search_entries(stdout: &str) -> Vec<SearchEntry> {
     entries
 }
 
-fn refresh_command(pacman_path: &Path) -> CommandSpec {
-    CommandSpec::new(PKEXEC_COMMAND)
-        .arg(pacman_path.as_os_str())
-        .args(["-Sy", "--noconfirm"])
+fn refresh_command() -> CommandSpec {
+    system_helper_command("refresh", "pacman")
 }
 
 fn command_output_tail(stdout: &[u8], stderr: &[u8]) -> String {
@@ -517,6 +510,8 @@ fn current_platform() -> Option<Platform> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -530,14 +525,18 @@ mod tests {
             let command = manager
                 .write_command(&config, action, &names)
                 .expect("build Pacman sync command");
-            assert_eq!(command.program(), Path::new(PKEXEC_COMMAND));
+            assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
+            let action_name = match action {
+                PackageAction::Install => "install",
+                PackageAction::Update => "update",
+                _ => unreachable!(),
+            };
             assert_eq!(
                 command.arguments(),
                 [
-                    "/custom/pacman",
-                    "-S",
-                    "--needed",
-                    "--noconfirm",
+                    "/usr/libexec/updater-system-helper",
+                    action_name,
+                    "pacman",
                     "bash",
                     "curl",
                 ]
@@ -551,19 +550,25 @@ mod tests {
             .expect("build Pacman uninstall command");
         assert_eq!(
             uninstall.arguments(),
-            ["/custom/pacman", "-R", "--noconfirm", "bash", "curl",]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/libexec/updater-system-helper",
+                "remove",
+                "pacman",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
     }
 
     #[test]
     fn refresh_command_preserves_database_sync_semantics() {
-        let command = refresh_command(Path::new("/custom/pacman"));
-        assert_eq!(command.program(), Path::new(PKEXEC_COMMAND));
+        let command = refresh_command();
+        assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             command.arguments(),
-            ["/custom/pacman", "-Sy", "--noconfirm"]
+            ["/usr/libexec/updater-system-helper", "refresh", "pacman",]
                 .map(OsString::from)
                 .as_slice()
         );

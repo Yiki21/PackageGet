@@ -17,7 +17,7 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, command_status_error, decode_stdout, manager_availability, resolve_executable,
-        run_output,
+        run_output, system_helper_command,
     },
     progress::{CommandProgress, run_command_with_progress_and_status},
 };
@@ -25,7 +25,6 @@ use crate::{
 const ZYPPER_ID: &str = "builtin:zypper";
 const ZYPPER_COMMAND: &str = "zypper";
 const RPM_COMMAND: &str = "rpm";
-const PKEXEC_COMMAND: &str = "pkexec";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const RPM_QUERY_FORMAT: &str =
     "%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\t%{INSTALLTIME}\t%{URL}\n";
@@ -138,7 +137,7 @@ impl ZypperManager {
         let zypper_path = resolve_executable(config, ZYPPER_COMMAND);
 
         if refresh {
-            let refresh = refresh_command(&zypper_path);
+            let refresh = refresh_command();
             run_command_with_progress_and_status(&refresh, zypper_status_error, |_| {}).await?;
         }
 
@@ -216,17 +215,14 @@ impl ZypperManager {
         action: PackageAction,
         package_names: &[String],
     ) -> ManagerResult<CommandSpec> {
+        self.validate_config(config)?;
         ensure_supported_action(action)?;
-        let zypper_path = resolve_executable(config, ZYPPER_COMMAND);
-        let command_name = match action {
-            PackageAction::Install => "install",
-            PackageAction::Update => "update",
-            PackageAction::Uninstall => "remove",
+        let command = match action {
+            PackageAction::Install => system_helper_command("install", "zypper"),
+            PackageAction::Update => system_helper_command("update", "zypper"),
+            PackageAction::Uninstall => system_helper_command("remove", "zypper"),
             _ => return Err(unsupported_action_error()),
         };
-        let command = CommandSpec::new(PKEXEC_COMMAND)
-            .arg(zypper_path.as_os_str())
-            .args(["--non-interactive", command_name, "-y"]);
 
         Ok(command.args(package_names.iter().map(OsString::from)))
     }
@@ -411,10 +407,8 @@ fn list_updates_command(zypper_path: &Path) -> CommandSpec {
         .args(["--non-interactive", "list-updates"])
 }
 
-fn refresh_command(zypper_path: &Path) -> CommandSpec {
-    CommandSpec::new(PKEXEC_COMMAND)
-        .arg(zypper_path.as_os_str())
-        .args(["--non-interactive", "refresh"])
+fn refresh_command() -> CommandSpec {
+    system_helper_command("refresh", "zypper")
 }
 
 fn zypper_status_error(spec: &CommandSpec, status: ExitStatus, tail: &str) -> ManagerError {
@@ -634,14 +628,13 @@ mod tests {
             let command = manager
                 .write_command(&config, action, &names)
                 .expect("build Zypper write command");
-            assert_eq!(command.program(), Path::new(PKEXEC_COMMAND));
+            assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
             assert_eq!(
                 command.arguments(),
                 [
-                    "/custom/zypper",
-                    "--non-interactive",
+                    "/usr/libexec/updater-system-helper",
                     command_name,
-                    "-y",
+                    "zypper",
                     "bash",
                     "curl",
                 ]
@@ -676,11 +669,11 @@ mod tests {
         );
         assert_eq!(updates.environment(), search.environment());
 
-        let refresh = refresh_command(zypper);
-        assert_eq!(refresh.program(), Path::new(PKEXEC_COMMAND));
+        let refresh = refresh_command();
+        assert_eq!(refresh.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             refresh.arguments(),
-            ["/custom/zypper", "--non-interactive", "refresh"]
+            ["/usr/libexec/updater-system-helper", "refresh", "zypper",]
                 .map(OsString::from)
                 .as_slice()
         );

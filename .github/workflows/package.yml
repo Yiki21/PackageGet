@@ -40,7 +40,7 @@ jobs:
           sudo apt-get install -y dpkg-dev mold
 
       - name: Install deb packaging tool
-        run: cargo install cargo-deb --locked --no-default-features
+        run: cargo install cargo-deb --version 3.7.0 --locked --no-default-features
 
       - name: Build release binary
         run: cargo build --release --locked --jobs 1 -p updater
@@ -92,13 +92,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install rpm packaging tool
-        run: cargo install cargo-generate-rpm --locked
+        run: cargo install cargo-generate-rpm --version 0.21.0 --locked
 
       - name: Build release binary
         run: cargo build --release --locked --jobs 1 -p updater
 
       - name: Build rpm package
-        run: cargo generate-rpm -p updater
+        run: cargo generate-rpm -p ui
 
       - name: Upload rpm artifact
         uses: actions/upload-artifact@v7

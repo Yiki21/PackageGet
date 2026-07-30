@@ -11,7 +11,7 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, decode_stdout, manager_availability, require_success, resolve_executable,
-        run_output,
+        run_output, system_helper_command,
     },
     progress::{CommandProgress, run_command_with_progress},
 };
@@ -20,7 +20,6 @@ const APT_ID: &str = "builtin:apt";
 const APT_COMMAND: &str = "apt";
 const APT_CACHE_COMMAND: &str = "apt-cache";
 const DPKG_QUERY_COMMAND: &str = "dpkg-query";
-const PKEXEC_COMMAND: &str = "pkexec";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct `updater-manager-api` implementation for APT.
@@ -133,9 +132,7 @@ impl AptManager {
         let apt_path = resolve_executable(config, APT_COMMAND);
 
         if refresh {
-            let refresh = CommandSpec::new(PKEXEC_COMMAND)
-                .arg(apt_path.as_os_str())
-                .arg("update");
+            let refresh = system_helper_command("refresh", "apt");
             run_command_with_progress(&refresh, |_| {}).await?;
         }
 
@@ -203,18 +200,12 @@ impl AptManager {
         action: PackageAction,
         package_names: &[String],
     ) -> ManagerResult<CommandSpec> {
+        self.validate_config(config)?;
         ensure_supported_action(action)?;
-        let apt_path = resolve_executable(config, APT_COMMAND);
         let command = match action {
-            PackageAction::Install => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(apt_path.as_os_str())
-                .args(["install", "-y"]),
-            PackageAction::Update => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(apt_path.as_os_str())
-                .args(["install", "-y", "--only-upgrade"]),
-            PackageAction::Uninstall => CommandSpec::new(PKEXEC_COMMAND)
-                .arg(apt_path.as_os_str())
-                .args(["remove", "-y"]),
+            PackageAction::Install => system_helper_command("install", "apt"),
+            PackageAction::Update => system_helper_command("update", "apt"),
+            PackageAction::Uninstall => system_helper_command("remove", "apt"),
             _ => return Err(unsupported_action_error()),
         };
 
@@ -485,12 +476,18 @@ mod tests {
         let install = manager
             .write_command(&config, PackageAction::Install, &names)
             .expect("build install command");
-        assert_eq!(install.program(), Path::new(PKEXEC_COMMAND));
+        assert_eq!(install.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             install.arguments(),
-            ["/custom/apt", "install", "-y", "bash", "curl"]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/libexec/updater-system-helper",
+                "install",
+                "apt",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
 
         let update = manager
@@ -499,10 +496,9 @@ mod tests {
         assert_eq!(
             update.arguments(),
             [
-                "/custom/apt",
-                "install",
-                "-y",
-                "--only-upgrade",
+                "/usr/libexec/updater-system-helper",
+                "update",
+                "apt",
                 "bash",
                 "curl",
             ]
@@ -515,9 +511,15 @@ mod tests {
             .expect("build uninstall command");
         assert_eq!(
             uninstall.arguments(),
-            ["/custom/apt", "remove", "-y", "bash", "curl"]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/libexec/updater-system-helper",
+                "remove",
+                "apt",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
     }
 

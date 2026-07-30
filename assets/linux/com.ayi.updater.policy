@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+"http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<policyconfig>
+  <vendor>Updater</vendor>
+  <vendor_url>https://github.com/Yiki21/PackageGet</vendor_url>
+
+  <action id="com.ayi.updater.install-system-packages">
+    <description>Install system packages with Updater</description>
+    <description xml:lang="zh_CN">使用 Updater 安装系统软件包</description>
+    <message>Authentication is required to install system packages with Updater</message>
+    <message xml:lang="zh_CN">需要认证才能使用 Updater 安装系统软件包</message>
+    <icon_name>updater</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/updater-system-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">install</annotate>
+  </action>
+
+  <action id="com.ayi.updater.update-system-packages">
+    <description>Update system packages with Updater</description>
+    <description xml:lang="zh_CN">使用 Updater 更新系统软件包</description>
+    <message>Authentication is required to update system packages with Updater</message>
+    <message xml:lang="zh_CN">需要认证才能使用 Updater 更新系统软件包</message>
+    <icon_name>updater</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/updater-system-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">update</annotate>
+  </action>
+
+  <action id="com.ayi.updater.remove-system-packages">
+    <description>Remove system packages with Updater</description>
+    <description xml:lang="zh_CN">使用 Updater 移除系统软件包</description>
+    <message>Authentication is required to remove system packages with Updater</message>
+    <message xml:lang="zh_CN">需要认证才能使用 Updater 移除系统软件包</message>
+    <icon_name>updater</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/updater-system-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">remove</annotate>
+  </action>
+
+  <action id="com.ayi.updater.refresh-system-package-metadata">
+    <description>Refresh system package metadata with Updater</description>
+    <description xml:lang="zh_CN">使用 Updater 刷新系统软件包元数据</description>
+    <message>Authentication is required to refresh system package metadata with Updater</message>
+    <message xml:lang="zh_CN">需要认证才能使用 Updater 刷新系统软件包元数据</message>
+    <icon_name>updater</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/updater-system-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">refresh</annotate>
+  </action>
+</policyconfig>

@@ -11,15 +11,26 @@ license = "MIT"
 
 
 [package.metadata.generate-rpm]
-summary = "Desktop GUI updater for multiple package managers"
+summary = "Graphical interface for multiple package managers"
 vendor = "Yiki21"
 release = "1"
-auto-req = "yes"
+auto-req = "auto"
+require-sh = false
 
 [[package.metadata.generate-rpm.assets]]
-source = "../target/release/updater"
+source = "target/release/updater"
 dest = "/usr/bin/updater"
 mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "target/release/updater-system-helper"
+dest = "/usr/libexec/updater-system-helper"
+mode = "755"
+
+[[package.metadata.generate-rpm.assets]]
+source = "../assets/linux/com.ayi.updater.policy"
+dest = "/usr/share/polkit-1/actions/com.ayi.updater.policy"
+mode = "644"
 
 [[package.metadata.generate-rpm.assets]]
 source = "../assets/linux/updater.desktop"
@@ -53,6 +64,7 @@ maintainer = "Yiki21"
 section = "utils"
 priority = "optional"
 revision = "1"
+depends = "$auto, policykit-1"
 extended-description = """\
 Updater is a desktop GUI application built with Rust and iced.
 
@@ -63,13 +75,18 @@ Features:
 """
 
 assets = [
-  ["../target/release/updater", "usr/bin/updater", "755"],
+  ["target/release/updater", "usr/bin/updater", "755"],
+  ["target/release/updater-system-helper", "usr/libexec/updater-system-helper", "755"],
+  ["../assets/linux/com.ayi.updater.policy", "usr/share/polkit-1/actions/com.ayi.updater.policy", "644"],
   ["../assets/linux/updater.desktop", "usr/share/applications/updater.desktop", "644"],
   ["../assets/icons/updater.svg", "usr/share/icons/hicolor/scalable/apps/updater.svg", "644"],
   ["../assets/icons/updater.png", "usr/share/icons/hicolor/512x512/apps/updater.png", "644"],
   ["../README.md", "usr/share/doc/updater/README.md", "644"],
   ["assets/fonts/OFL.txt", "usr/share/doc/updater/Geist-OFL.txt", "644"],
 ]
+
+[package.metadata.generate-rpm.requires]
+polkit = "*"
 
 [[bin]]
 name = "updater"
@@ -89,3 +106,6 @@ tokio.workspace = true
 updater_core.workspace = true
 updater_manager_api.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+roxmltree.workspace = true
