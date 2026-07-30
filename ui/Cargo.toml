@@ -13,6 +13,7 @@ license = "MIT"
 [package.metadata.generate-rpm]
 summary = "Graphical interface for multiple package managers"
 vendor = "Yiki21"
+version = "0.3.0~beta.1"
 release = "1"
 auto-req = "auto"
 require-sh = false
@@ -24,7 +25,7 @@ mode = "755"
 
 [[package.metadata.generate-rpm.assets]]
 source = "target/release/updater-system-helper"
-dest = "/usr/libexec/updater-system-helper"
+dest = "/usr/lib/updater/updater-system-helper"
 mode = "755"
 
 [[package.metadata.generate-rpm.assets]]
@@ -54,6 +55,12 @@ mode = "644"
 doc = true
 
 [[package.metadata.generate-rpm.assets]]
+source = "../LICENSE"
+dest = "/usr/share/licenses/updater/LICENSE"
+mode = "644"
+doc = true
+
+[[package.metadata.generate-rpm.assets]]
 source = "assets/fonts/OFL.txt"
 dest = "/usr/share/licenses/updater/Geist-OFL.txt"
 mode = "644"
@@ -64,7 +71,7 @@ maintainer = "Yiki21"
 section = "utils"
 priority = "optional"
 revision = "1"
-depends = "$auto, policykit-1"
+depends = "$auto, policykit-1, libwayland-client0, libx11-6, libx11-xcb1, libxkbcommon0, libxkbcommon-x11-0"
 extended-description = """\
 Updater is a desktop GUI application built with Rust and iced.
 
@@ -76,16 +83,22 @@ Features:
 
 assets = [
   ["target/release/updater", "usr/bin/updater", "755"],
-  ["target/release/updater-system-helper", "usr/libexec/updater-system-helper", "755"],
+  ["target/release/updater-system-helper", "usr/lib/updater/updater-system-helper", "755"],
   ["../assets/linux/com.ayi.updater.policy", "usr/share/polkit-1/actions/com.ayi.updater.policy", "644"],
   ["../assets/linux/com.ayi.updater.desktop", "usr/share/applications/com.ayi.updater.desktop", "644"],
   ["../assets/icons/updater.svg", "usr/share/icons/hicolor/scalable/apps/updater.svg", "644"],
   ["../assets/icons/updater.png", "usr/share/icons/hicolor/512x512/apps/updater.png", "644"],
   ["../README.md", "usr/share/doc/updater/README.md", "644"],
+  ["../LICENSE", "usr/share/doc/updater/copyright", "644"],
   ["assets/fonts/OFL.txt", "usr/share/doc/updater/Geist-OFL.txt", "644"],
 ]
 
 [package.metadata.generate-rpm.requires]
+libX11 = "*"
+libX11-xcb = "*"
+libwayland-client = "*"
+libxkbcommon = "*"
+libxkbcommon-x11 = "*"
 polkit = "*"
 
 [[bin]]

@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(
             install.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "install",
                 "dnf",
                 "bash",
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(
             update.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "update",
                 "dnf",
                 "bash",
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(
             uninstall.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "remove",
                 "dnf",
                 "bash",
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(refresh.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             refresh.arguments(),
-            ["/usr/libexec/updater-system-helper", "refresh", "dnf",]
+            ["/usr/lib/updater/updater-system-helper", "refresh", "dnf",]
                 .map(OsString::from)
                 .as_slice()
         );

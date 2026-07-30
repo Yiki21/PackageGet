@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(
             install.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "install",
                 "apt",
                 "bash",
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(
             update.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "update",
                 "apt",
                 "bash",
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(
             uninstall.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "remove",
                 "apt",
                 "bash",

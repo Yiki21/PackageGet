@@ -364,7 +364,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(annotations.iter().any(|node| {
                 node.attribute("key") == Some("org.freedesktop.policykit.exec.path")
-                    && node.text() == Some("/usr/libexec/updater-system-helper")
+                    && node.text() == Some("/usr/lib/updater/updater-system-helper")
             }));
             assert!(annotations.iter().any(|node| {
                 node.attribute("key") == Some("org.freedesktop.policykit.exec.argv1")

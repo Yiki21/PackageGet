@@ -1,6 +1,6 @@
 # updater
 
-A Wayland desktop GUI built with Rust and `iced` for viewing, searching, installing, and updating packages across multiple package managers.
+A Linux desktop GUI built with Rust and `iced` for viewing, searching, installing, and updating packages across multiple package managers.
 
 ## Overview
 
@@ -45,7 +45,7 @@ Currently supported package managers:
 - A C/C++ build toolchain, such as `gcc` or `clang`
 - `pkg-config`
 - OpenSSL development libraries
-- A native Wayland desktop session, plus the `wayland` and `libxkbcommon` development libraries; the X11 backend is currently disabled
+- Wayland or X11 development libraries, plus `libxkbcommon`
 - `pkexec`, usually provided by `polkit`, to install, remove, or update system packages
 
 Install the required dependencies on common distributions:
@@ -53,22 +53,22 @@ Install the required dependencies on common distributions:
 ```bash
 # Debian / Ubuntu
 sudo apt update
-sudo apt install -y build-essential mold pkg-config libssl-dev libwayland-dev libxkbcommon-dev policykit-1
+sudo apt install -y build-essential mold pkg-config libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev policykit-1
 ```
 
 ```bash
 # Fedora
-sudo dnf install -y gcc gcc-c++ mold pkgconf-pkg-config openssl-devel wayland-devel libxkbcommon-devel polkit
+sudo dnf install -y gcc gcc-c++ mold pkgconf-pkg-config openssl-devel wayland-devel libX11-devel libxkbcommon-devel libxkbcommon-x11-devel polkit
 ```
 
 ```bash
 # Arch Linux
-sudo pacman -S --needed base-devel mold pkgconf openssl wayland libxkbcommon polkit
+sudo pacman -S --needed base-devel mold pkgconf openssl wayland libx11 libxkbcommon libxkbcommon-x11 polkit
 ```
 
 ## Running for development
 
-Run the application from a native Wayland session:
+Run the application from a Wayland or X11 desktop session:
 
 ```bash
 cargo run -p updater
@@ -78,11 +78,17 @@ cargo run -p updater
 
 ### Option 1: Install a release package
 
-If the repository has published a release, download the Linux `deb` or `rpm` package for your distribution.
+If the repository has published a release, download the Linux `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst` package for your distribution.
 
 GitHub Actions builds these packages automatically. They are intended for users who want to install and run the application directly.
 
-After installing a `deb` or `rpm` package, launch Updater from your desktop application menu.
+Install an Arch Linux release package with:
+
+```bash
+sudo pacman -U ./updater-*.pkg.tar.zst
+```
+
+After installing a release package, launch Updater from your desktop application menu.
 
 ### Option 2: Build from source
 
@@ -137,8 +143,12 @@ Additional notes:
 
 ## System package authorization
 
-Release packages install `/usr/libexec/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
+Release packages install `/usr/lib/updater/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
 
 The helper accepts only `install`, `update`, `remove`, and metadata `refresh` requests for APT, DNF, Pacman, and Zypper. It validates package identifiers and directly executes fixed system binaries without a shell. Custom executable paths remain available for detection and read-only queries, but are deliberately not used by privileged system package operations.
 
-Running the unpackaged GUI directly supports all read-only workflows. To exercise privileged system package changes from a source build, install the release helper, policy, and icon as root first; installing the generated `.deb` or `.rpm` is the recommended way to keep these assets consistent.
+Running the unpackaged GUI directly supports all read-only workflows. To exercise privileged system package changes from a source build, install the release helper, policy, and icon as root first; installing a generated release package is the recommended way to keep these assets consistent.
+
+## Linux preview status
+
+`0.3.0-beta.1` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.

@@ -534,7 +534,7 @@ mod tests {
             assert_eq!(
                 command.arguments(),
                 [
-                    "/usr/libexec/updater-system-helper",
+                    "/usr/lib/updater/updater-system-helper",
                     action_name,
                     "pacman",
                     "bash",
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(
             uninstall.arguments(),
             [
-                "/usr/libexec/updater-system-helper",
+                "/usr/lib/updater/updater-system-helper",
                 "remove",
                 "pacman",
                 "bash",
@@ -568,9 +568,13 @@ mod tests {
         assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             command.arguments(),
-            ["/usr/libexec/updater-system-helper", "refresh", "pacman",]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/lib/updater/updater-system-helper",
+                "refresh",
+                "pacman",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
     }
 

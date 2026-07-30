@@ -11,7 +11,7 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 
 ## 实施计划
 
-- [x] 新增固定路径`/usr/libexec/updater-system-helper`，只接受install/update/remove/refresh、四个系统manager和经过严格校验的package名称。
+- [x] 新增固定路径`/usr/lib/updater/updater-system-helper`，只接受install/update/remove/refresh、四个系统manager和经过严格校验的package名称。
 - [x] helper只用固定绝对路径直接`exec`系统manager，不经过shell，不接受任意executable、flag、本地package路径或环境注入。
 - [x] 新增按动作区分的`com.ayi.updater.*` Polkit actions，配置Updater图标、英文/简体中文description与message。
 - [x] APT、DNF、Pacman、Zypper的写操作和需要提权的metadata refresh全部切换到helper；只读命令继续尊重Settings中的custom executable。
@@ -31,7 +31,7 @@ APT、DNF、Pacman和Zypper不再让`pkexec`直接执行可配置的manager路�
 
 ## 验收标准
 
-- 四个system manager生成`pkexec /usr/libexec/updater-system-helper <action> <manager> ...`，参数不再包含custom executable路径。
+- 四个system manager生成`pkexec /usr/lib/updater/updater-system-helper <action> <manager> ...`，参数不再包含custom executable路径。
 - policy通过helper固定路径和`argv1`选择install/update/remove/refresh动作，并显示Updater品牌元数据。
 - helper对所有允许组合生成与当前行为等价的固定命令；非法manager/action/package不启动任何子进程。
 - helper使用直接`exec`保留package manager原始stdout/stderr和退出状态。

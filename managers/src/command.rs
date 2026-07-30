@@ -15,7 +15,7 @@ use updater_manager_api::{
 
 const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
 const PKEXEC_PATH: &str = "/usr/bin/pkexec";
-const SYSTEM_HELPER_PATH: &str = "/usr/libexec/updater-system-helper";
+const SYSTEM_HELPER_PATH: &str = "/usr/lib/updater/updater-system-helper";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandSpec {

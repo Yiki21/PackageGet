@@ -632,7 +632,7 @@ mod tests {
             assert_eq!(
                 command.arguments(),
                 [
-                    "/usr/libexec/updater-system-helper",
+                    "/usr/lib/updater/updater-system-helper",
                     command_name,
                     "zypper",
                     "bash",
@@ -673,9 +673,13 @@ mod tests {
         assert_eq!(refresh.program(), Path::new("/usr/bin/pkexec"));
         assert_eq!(
             refresh.arguments(),
-            ["/usr/libexec/updater-system-helper", "refresh", "zypper",]
-                .map(OsString::from)
-                .as_slice()
+            [
+                "/usr/lib/updater/updater-system-helper",
+                "refresh",
+                "zypper",
+            ]
+            .map(OsString::from)
+            .as_slice()
         );
     }
 
