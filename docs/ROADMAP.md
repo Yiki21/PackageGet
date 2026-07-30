@@ -115,8 +115,9 @@
 
 1. 当前`main`仍不能直接作为stable发布：`Build-v0.2.4`之后的四crate拆分、Config/Activity schema直接切换和执行引擎替换规模较大，且阶段4至阶段6的跨平台与完整artifact目标尚未完成。
 2. Linux beta前的功能可靠性缺口已收敛：Iteration 020完成Config load可见恢复，Iteration 021拒绝晚到读取结果，Iteration 022补齐Discover install与selected Updates冻结确认并准确表达manager边界取消语义。
-3. Iteration 023只做Linux release hardening：启用并验证Wayland/X11、执行clean/旧配置恢复矩阵、验证amd64/arm64 `.deb/.rpm`与checksums、更新版本和release notes。全部门禁通过后可发布`0.3.0-beta.1`，明确标注Linux preview。
-4. 完整stable仍以阶段4、阶段5和阶段6的跨平台功能、可靠性、artifact与文档标准为准；Windows/macOS产物不存在时，不把Linux preview描述成ROADMAP目标已完成。
+3. Iteration 023先交付品牌化Polkit授权链：APT、DNF、Pacman与Zypper通过固定最小特权helper执行写操作，Linux包携带按动作区分的Updater policy metadata；密码和认证UI仍完全属于桌面Polkit agent。
+4. Iteration 024只做Linux release hardening：启用并验证Wayland/X11、执行clean/旧配置恢复矩阵、验证amd64/arm64 `.deb/.rpm`与checksums、更新版本和release notes。全部门禁通过后可发布`0.3.0-beta.1`，明确标注Linux preview。
+5. 完整stable仍以阶段4、阶段5和阶段6的跨平台功能、可靠性、artifact与文档标准为准；Windows/macOS产物不存在时，不把Linux preview描述成ROADMAP目标已完成。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
 draft/baseline、sync_from_config、is_dirty；ui/src/content.rs::ReloadReason::preserves_page_context；ui/src/activity.rs 的 retention/redaction。
@@ -134,7 +135,7 @@ GUI/桌面层
 
 首批 manager
 
-1.  Linux 按 target 注册 APT/DNF/Pacman/Zypper/Flatpak 等现有实现，并继续由具体系统 manager 使用 pkexec。
+1.  Linux 按 target 注册 APT/DNF/Pacman/Zypper/Flatpak 等现有实现；具体系统manager通过Updater自有Polkit action和固定最小特权helper使用pkexec，不将可配置executable路径直接提升为root。
 2.  Windows 新增 Winget manager，覆盖
     availability、installed、updates、search、install/update/uninstall，优先使用官方机器可读输出；所有表格/JSON解析均使用离线 fixture
     测试，显式处理非交互、source agreement、installer/reboot/elevation 结果。
@@ -183,7 +184,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 
 阶段 6：跨平台发布物、文档和后续 manager
 
-1.  保留并验证 Linux amd64/arm64 .deb/.rpm，同时验证 X11/Wayland desktop entry；修正 RPM package 选择器。
+1.  保留并验证 Linux amd64/arm64 .deb/.rpm，同时打包Polkit policy与固定特权helper并验证X11/Wayland desktop entry；修正 RPM package 选择器。
 2.  通过通用 Rust 二进制打包工具配置 Windows x86_64 便携 .zip 与安装包，增加 .ico、版本信息和 application identity。
 3.  生成 macOS Apple Silicon/Intel .app 和 .dmg，增加 .icns、Info.plist、bundle ID、最低系统版本说明；首轮 artifact 和 README 明确标注
     unsigned/Gatekeeper/SmartScreen 限制。
