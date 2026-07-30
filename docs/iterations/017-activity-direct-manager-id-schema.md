@@ -47,13 +47,18 @@
 
 - `4606964 docs: plan direct activity schema`
 - `807dc63 refactor(activity): use direct manager identity schema`
+- `af7f567 docs: record direct activity schema progress`
 
 ## 验证记录
 
 - `cargo fmt --all -- --check`：通过。
 - `cargo check -p updater --locked --jobs 1`：通过，无warning。
 - `cargo test -p updater --locked --jobs 1 -- --test-threads=1`：通过，26项测试全部成功。
-- 完整workspace check/test/clippy/build与GitHub Actions：待最终验证。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，212项成功，14项显式ignored，0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- GitHub Actions：待推送最终实现HEAD后验证。
 
 ## 遗留项 / 下一轮
 
