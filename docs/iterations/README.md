@@ -30,3 +30,4 @@
 | 014 | 已完成 | 阶段 2：Direct Registry Cutover 与 Legacy Adapter 清理 | [014-direct-registry-cutover.md](014-direct-registry-cutover.md) |
 | 015 | 已完成 | 阶段 3：Config 直接切换 | [015-config-direct-cutover.md](015-config-direct-cutover.md) |
 | 016 | 已完成 | 阶段 3：UI ManagerId Identity Cutover | [016-ui-manager-identity.md](016-ui-manager-identity.md) |
+| 017 | 进行中 | 阶段 3：Activity Direct ManagerId Schema | [017-activity-direct-manager-id-schema.md](017-activity-direct-manager-id-schema.md) |
