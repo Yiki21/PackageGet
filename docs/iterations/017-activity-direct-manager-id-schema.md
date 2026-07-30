@@ -1,7 +1,7 @@
 # Iteration 017：Activity Direct ManagerId Schema
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段3——配置、UI identity与manager设置迁移
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -16,7 +16,7 @@
 - [x] 将当前history文件改为`activity.json`，不迁移、不读取、不删除旧`activity-v1.json`。
 - [x] 更新Activity summary、构造器与测试，验证当前schema round-trip和ManagerId validation。
 - [x] 更新ROADMAP、manager identity文档与Iteration 016遗留表述，删除v1/v2兼容承诺。
-- [ ] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
+- [x] 串行通过workspace format、check、test、clippy与build完整门禁，并由GitHub Actions复验。
 
 ## Schema决策
 
@@ -48,6 +48,7 @@
 - `4606964 docs: plan direct activity schema`
 - `807dc63 refactor(activity): use direct manager identity schema`
 - `af7f567 docs: record direct activity schema progress`
+- `da70b7d docs: record direct activity schema validation`
 
 ## 验证记录
 
@@ -58,7 +59,7 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，212项成功，14项显式ignored，0失败。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
-- GitHub Actions：待推送最终实现HEAD后验证。
+- GitHub Actions CI run `30510160563`：成功，format/check/test/clippy/build job全部通过，耗时4分04秒。
 
 ## 遗留项 / 下一轮
 
