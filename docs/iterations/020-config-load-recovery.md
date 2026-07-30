@@ -51,7 +51,7 @@
 - Reset确认后调用现有manager检测和原子`Config::save`；reset失败保留原始load error，并单独显示recovery error。
 - 完整workspace串行门禁通过：179项测试成功、14项真实环境测试显式ignored、0失败，format/check/clippy/build均通过。
 - 发布检查点继续保持：本轮消除Config恢复硬阻塞，但异步stale result、写操作冻结确认和Linux artifact验收仍未完成；最早在Iteration 023通过后发布`0.3.0-beta.1` Linux preview。
-- 恢复页未连接宿主桌面做人工渲染检查；该项与Wayland/X11、打开目录和旧配置恢复矩阵一并保留到Iteration 023。
+- 用户已在宿主桌面完成人工验证，确认恢复页面可正常显示；Iteration 023仍保留Wayland/X11、打开目录和旧配置恢复矩阵的发布级验收。
 
 ## Git提交
 
@@ -69,6 +69,7 @@
 - `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，179项成功、14项显式ignored、0失败。
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
 - `cargo build --workspace --locked --jobs 1`：通过。
+- 用户人工验收：宿主桌面上的恢复页面显示正常。
 
 ## 遗留项 / 下一轮
 
