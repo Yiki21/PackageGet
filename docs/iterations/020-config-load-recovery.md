@@ -1,7 +1,7 @@
 # Iteration 020：Config Load 可见恢复
 
 - 日期：2026-07-30
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段3严格配置加载的用户可恢复边界
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -18,7 +18,7 @@
 - [x] Retry继续使用严格loader；打开目录失败必须反馈；Reset必须二次确认，确认前不得写磁盘。
 - [x] Reset重新检测当前manager并通过现有原子save覆盖`config.json`；失败继续停留在恢复页，成功才启动package data初始化。
 - [x] 补充配置路径和App恢复状态转换测试。
-- [ ] 更新ROADMAP、配置文档与本记录，并串行通过完整workspace门禁。
+- [x] 更新ROADMAP、配置文档与本记录，并串行通过完整workspace门禁。
 
 ## 行为约束
 
@@ -49,18 +49,26 @@
 - `ConfigLoadState`直接放在App reducer中表达互斥状态；恢复页直接留在`App::view`，没有新增controller或只调用一次的view helper。
 - Retry与首次加载复用同一个`load_config_task`；URL与目录复用同一个`open_desktop_target`，两处抽取都有两个真实调用方。
 - Reset确认后调用现有manager检测和原子`Config::save`；reset失败保留原始load error，并单独显示recovery error。
+- 完整workspace串行门禁通过：179项测试成功、14项真实环境测试显式ignored、0失败，format/check/clippy/build均通过。
+- 发布检查点继续保持：本轮消除Config恢复硬阻塞，但异步stale result、写操作冻结确认和Linux artifact验收仍未完成；最早在Iteration 023通过后发布`0.3.0-beta.1` Linux preview。
+- 恢复页未连接宿主桌面做人工渲染检查；该项与Wayland/X11、打开目录和旧配置恢复矩阵一并保留到Iteration 023。
 
 ## Git提交
 
 - `f3fed93 docs: plan config load recovery`
 - `7998229 feat: add visible config load recovery`
+- `e05bcd9 docs: record config recovery progress`
 
 ## 验证记录
 
 - `cargo test -p updater app::tests --locked --jobs 1 -- --test-threads=1`：7 passed。
 - `cargo test -p updater_core storage::tests --locked --jobs 1 -- --test-threads=1`：10 passed，其他测试目标按filter为0。
 - `cargo clippy -p updater_core -p updater --all-targets --locked --jobs 1 -- -D warnings`：通过，无warning。
-- 完整workspace串行门禁待执行。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过，无warning。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：通过，179项成功、14项显式ignored、0失败。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
 
 ## 遗留项 / 下一轮
 

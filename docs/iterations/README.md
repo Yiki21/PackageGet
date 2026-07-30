@@ -33,4 +33,4 @@
 | 017 | 已完成 | 阶段 3：Activity Direct ManagerId Schema | [017-activity-direct-manager-id-schema.md](017-activity-direct-manager-id-schema.md) |
 | 018 | 已完成 | 阶段 2/3：Registry Execution Engine Cutover | [018-registry-execution-engine-cutover.md](018-registry-execution-engine-cutover.md) |
 | 019 | 已完成 | 阶段 3：Settings Executable Validation 与发布检查点 | [019-settings-executable-validation.md](019-settings-executable-validation.md) |
-| 020 | 进行中 | 阶段 3：Config Load 可见恢复 | [020-config-load-recovery.md](020-config-load-recovery.md) |
+| 020 | 已完成 | 阶段 3：Config Load 可见恢复 | [020-config-load-recovery.md](020-config-load-recovery.md) |
