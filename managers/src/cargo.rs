@@ -47,7 +47,7 @@ impl CargoManager {
             ManagerId::parse(CARGO_ID).expect("Cargo manager ID must remain valid"),
             "Cargo",
             ManagerCategory::Development,
-            SupportedPlatforms::from([Platform::Linux, Platform::MacOs]),
+            SupportedPlatforms::from([Platform::Linux, Platform::Windows, Platform::MacOs]),
             ManagerCapabilities::from([
                 ManagerCapability::Installed,
                 ManagerCapability::Updates,

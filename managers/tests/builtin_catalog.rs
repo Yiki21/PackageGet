@@ -107,7 +107,7 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
         (
             "Cargo",
             ManagerCategory::Development,
-            vec![Platform::Linux, Platform::MacOs],
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::None,
         ),
         (
@@ -197,5 +197,5 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:pipx",
         ]
     );
-    assert_eq!(windows, ["builtin:winget"]);
+    assert_eq!(windows, ["builtin:winget", "builtin:cargo"]);
 }

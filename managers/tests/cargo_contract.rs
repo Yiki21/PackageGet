@@ -1,14 +1,17 @@
 use std::{fs, path::PathBuf, sync::Mutex};
 
 use tempfile::{TempDir, tempdir};
+#[cfg(unix)]
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     task::JoinHandle,
 };
+#[cfg(unix)]
+use updater_manager_api::ManagerErrorKind;
 use updater_manager_api::{
-    AuthorizationHint, ManagerAvailability, ManagerCapability, ManagerConfig, ManagerErrorKind,
-    PackageAction, PackageManager, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    AuthorizationHint, ManagerAvailability, ManagerCapability, ManagerConfig, PackageAction,
+    PackageManager, PackageOrigin, PackageScope, PackageTarget, Platform, ProgressEvent,
 };
 use updater_managers::CargoManager;
 
@@ -53,6 +56,32 @@ exit 2
     )
 }
 
+#[cfg(windows)]
+fn windows_cargo(log: &std::path::Path) -> (TempDir, PathBuf) {
+    let directory = tempdir().expect("create fake Cargo directory");
+    let executable = directory.path().join("cargo.cmd");
+    let script = format!(
+        r#"@echo off
+if not "%CARGO_TERM_COLOR%"=="never" exit /b 90
+if "%1"=="--version" (
+  echo cargo 1.90.0 ^(abc 2026-01-01^)
+  exit /b 0
+)
+if "%1"=="install" if "%2"=="--list" (
+  echo ripgrep v14.1.1:
+  echo     rg.exe
+  exit /b 0
+)
+echo %*>>"{}"
+exit /b 0
+"#,
+        log.display()
+    );
+    fs::write(&executable, script).expect("write fake Cargo command file");
+    (directory, executable)
+}
+
+#[cfg(unix)]
 async fn serve_once(status: &str, body: &str) -> (String, JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -90,6 +119,7 @@ async fn serve_once(status: &str, body: &str) -> (String, JoinHandle<String>) {
     (format!("http://{address}/api/v1/"), task)
 }
 
+#[cfg(unix)]
 async fn serve_truncated_then(body: &str) -> (String, JoinHandle<usize>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -129,6 +159,7 @@ async fn serve_truncated_then(body: &str) -> (String, JoinHandle<usize>) {
     (format!("http://{address}/api/v1/"), task)
 }
 
+#[cfg(unix)]
 fn config_with_api(manager: &CargoManager, executable: &PathBuf, api: &str) -> ManagerConfig {
     let mut config =
         ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
@@ -143,6 +174,7 @@ fn cargo_descriptor_exposes_the_stable_public_contract() {
     assert_eq!(descriptor.id().as_str(), "builtin:cargo");
     assert_eq!(descriptor.display_name(), "Cargo");
     assert_eq!(descriptor.authorization(), &AuthorizationHint::None);
+    assert!(descriptor.platforms().contains(Platform::Windows));
     for capability in [
         ManagerCapability::Installed,
         ManagerCapability::Updates,
@@ -153,6 +185,80 @@ fn cargo_descriptor_exposes_the_stable_public_contract() {
     ] {
         assert!(descriptor.capabilities().contains(capability));
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_command_contract_preserves_inventory_size_and_write_arguments() {
+    let manager = CargoManager::new();
+    let workspace = tempdir().expect("create Cargo Windows contract workspace");
+    let log = workspace.path().join("cargo.log");
+    let (_directory, executable) = windows_cargo(&log);
+    let install_root = workspace.path().join("install-root");
+    let bin_dir = install_root.join("bin");
+    fs::create_dir_all(&bin_dir).expect("create Cargo Windows bin directory");
+    fs::write(bin_dir.join("rg.exe"), b"twelve bytes").expect("write Cargo Windows binary");
+    let mut config =
+        ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    config.settings = serde_json::json!({ "install_root": install_root });
+
+    assert!(matches!(
+        manager.availability(&config).await.expect("Cargo availability"),
+        ManagerAvailability::Available { version: Some(version) }
+            if version.starts_with("cargo 1.90.0")
+    ));
+    let packages = manager.installed(&config).await.expect("Cargo inventory");
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].name, "ripgrep");
+    assert_eq!(packages[0].version, "14.1.1");
+    assert_eq!(packages[0].size, Some(12));
+
+    let mut registry = PackageTarget::new(manager.descriptor().id().clone(), "ripgrep");
+    registry.scope = PackageScope::User;
+    registry.version = Some("14.2.0".to_owned());
+    registry.origin =
+        Some(PackageOrigin::new("crates.io").with_reference("registry:crates.io/ripgrep"));
+    let legacy = PackageTarget::new(manager.descriptor().id().clone(), "cargo-edit");
+
+    manager
+        .execute(
+            &config,
+            PackageAction::Install,
+            std::slice::from_ref(&registry),
+            &|_| {},
+        )
+        .await
+        .expect("install frozen registry version");
+    manager
+        .execute(
+            &config,
+            PackageAction::Update,
+            std::slice::from_ref(&legacy),
+            &|_| {},
+        )
+        .await
+        .expect("update legacy target");
+    manager
+        .execute(
+            &config,
+            PackageAction::Uninstall,
+            std::slice::from_ref(&registry),
+            &|_| {},
+        )
+        .await
+        .expect("uninstall registry target");
+
+    assert_eq!(
+        fs::read_to_string(log)
+            .expect("Cargo Windows write log")
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "install --version 14.2.0 ripgrep",
+            "install --force cargo-edit",
+            "uninstall ripgrep",
+        ]
+    );
 }
 
 #[cfg(unix)]

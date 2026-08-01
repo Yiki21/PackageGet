@@ -35,6 +35,7 @@ fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
         Arc::new(DnfManager::new()),
         Arc::new(PacmanManager::new()),
         Arc::new(ZypperManager::new()),
+        Arc::new(WingetManager::new()),
         Arc::new(FlatpakManager::new()),
         Arc::new(HomebrewManager::new()),
         Arc::new(CargoManager::new()),
@@ -42,6 +43,5 @@ fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
         Arc::new(NpmManager::new()),
         Arc::new(PnpmManager::new()),
         Arc::new(PipxManager::new()),
-        Arc::new(WingetManager::new()),
     ]
 }
