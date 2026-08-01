@@ -1,7 +1,7 @@
 # Iteration 028：Cargo Windows 原生准入
 
 - 日期：2026-08-01
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——按实际平台能力注册可移植管理器
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -22,8 +22,8 @@
 - [x] 审计Cargo、Go、npm、pnpm和pipx的Windows路径、身份与测试边界。
 - [x] Cargo descriptor和内置目录新增Windows能力。
 - [x] 增加Windows原生Cargo离线契约并接入portable CI。
-- [ ] 串行通过本地完整质量门禁和Windows GNU交叉检查。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 串行通过本地完整质量门禁和Windows GNU交叉检查。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -40,14 +40,27 @@
 - Iteration 027已完成Windows PATHEXT、跨平台desktop opener和macOS Homebrew原生合同，GitHub Actions run `30690411248`及文档收口run `30690500893`均通过。
 - 审计确认Cargo生产路径已支持`.exe`二进制体积查询和结构化命令执行，当前缺口集中在平台声明与Windows原生合同。
 - 审计确认Go会直接使用`GOBIN`文件名作为package name，不能在未处理`.exe`身份前直接放开；Node与pipx管理器也缺Windows原生读写合同。
+- Windows原生合同首次运行发现fake CLI错误地要求`cargo --version`携带`CARGO_TERM_COLOR=never`；按既有生产边界将该要求收窄到inventory和write命令。
+- 第二次运行确认版本探测和inventory/size已通过，随后暴露测试复用了带版本install target做uninstall；改为同身份、无版本的有效卸载target，保留生产端拒绝version-pinned uninstall的合同。
+- 最终Windows原生runner完整通过`cargo.cmd`availability、`rg.exe`inventory/size和install/update/uninstall参数合同。
 
 ## Git提交
 
-- 待记录。
+- `df77883 feat: admit Cargo on Windows`
+- `fe07b04 test: align Cargo Windows availability fixture`
+- `726f185 test: use valid Cargo uninstall target`
 
 ## 验证记录
 
-- 待执行。
+- `cargo fmt --all -- --check`通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`通过：216 passed，14 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
+- `cargo build --workspace --locked --jobs 1`通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
+- `cargo check -p updater-managers --test cargo_contract --target x86_64-pc-windows-gnu --locked --jobs 1`通过且无warning。
+- `cargo test -p updater-managers --test cargo_contract --locked --jobs 1 -- --test-threads=1`通过：9 passed，2 ignored。
+- GitHub Actions CI run `30691476536`通过：Linux完整质量门禁2m12s、Windows x86_64 workspace及manager lib/Cargo原生离线合同2m16s、macOS arm64 workspace及Homebrew合同1m25s。
 
 ## 遗留项 / 下一轮
 

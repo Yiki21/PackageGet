@@ -41,4 +41,4 @@
 | 025 | 已完成 | 阶段 4：跨平台编译与目标 Registry 基线 | [025-cross-platform-compile-registry.md](025-cross-platform-compile-registry.md) |
 | 026 | 已完成 | 阶段 4：Winget Manager 首轮原生契约 | [026-winget-manager.md](026-winget-manager.md) |
 | 027 | 已完成 | 阶段 4：原生桌面能力与 macOS Homebrew 验证 | [027-native-desktop-homebrew.md](027-native-desktop-homebrew.md) |
-| 028 | 进行中 | 阶段 4：Cargo Windows 原生准入 | [028-cargo-windows.md](028-cargo-windows.md) |
+| 028 | 已完成 | 阶段 4：Cargo Windows 原生准入 | [028-cargo-windows.md](028-cargo-windows.md) |
