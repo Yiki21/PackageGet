@@ -62,11 +62,11 @@ fn windows_cargo(log: &std::path::Path) -> (TempDir, PathBuf) {
     let executable = directory.path().join("cargo.cmd");
     let script = format!(
         r#"@echo off
-if not "%CARGO_TERM_COLOR%"=="never" exit /b 90
 if "%1"=="--version" (
   echo cargo 1.90.0 ^(abc 2026-01-01^)
   exit /b 0
 )
+if not "%CARGO_TERM_COLOR%"=="never" exit /b 90
 if "%1"=="install" if "%2"=="--list" (
   echo ripgrep v14.1.1:
   echo     rg.exe
