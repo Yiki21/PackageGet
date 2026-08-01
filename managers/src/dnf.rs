@@ -222,7 +222,7 @@ impl PackageManager for DnfManager {
         if !cfg!(target_os = "linux") {
             return Ok(ManagerAvailability::Unavailable {
                 reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: current_platform(),
+                    platform: Platform::current(),
                 },
             });
         }
@@ -463,18 +463,6 @@ fn ensure_supported_action(action: PackageAction) -> ManagerResult<()> {
 
 fn unsupported_action_error() -> ManagerError {
     ManagerError::new(ManagerErrorKind::Unsupported, "dnf action is not supported")
-}
-
-fn current_platform() -> Option<Platform> {
-    if cfg!(target_os = "linux") {
-        Some(Platform::Linux)
-    } else if cfg!(target_os = "windows") {
-        Some(Platform::Windows)
-    } else if cfg!(target_os = "macos") {
-        Some(Platform::MacOs)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

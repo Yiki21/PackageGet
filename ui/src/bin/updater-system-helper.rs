@@ -1,8 +1,7 @@
-use std::{
-    env,
-    ffi::OsString,
-    process::{Command, ExitCode},
-};
+use std::{env, ffi::OsString, process::ExitCode};
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 const MAX_PACKAGES: usize = 4_096;
 const MAX_PACKAGE_NAME_BYTES: usize = 255;

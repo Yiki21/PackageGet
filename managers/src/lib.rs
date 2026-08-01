@@ -23,7 +23,7 @@ mod zypper;
 
 pub use apt::AptManager;
 pub use cargo::CargoManager;
-pub use catalog::builtin_managers;
+pub use catalog::{builtin_managers, builtin_managers_for};
 pub use dnf::DnfManager;
 pub use flatpak::FlatpakManager;
 pub use go::GoManager;

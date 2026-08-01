@@ -230,7 +230,7 @@ impl PackageManager for AptManager {
         if !cfg!(target_os = "linux") {
             return Ok(ManagerAvailability::Unavailable {
                 reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: current_platform(),
+                    platform: Platform::current(),
                 },
             });
         }
@@ -446,18 +446,6 @@ fn parse_upgradable_from(line: &str) -> Option<String> {
     let end = line[start..].find(']')? + start;
     let value = line[start..end].trim();
     (!value.is_empty()).then(|| value.to_owned())
-}
-
-fn current_platform() -> Option<Platform> {
-    if cfg!(target_os = "linux") {
-        Some(Platform::Linux)
-    } else if cfg!(target_os = "windows") {
-        Some(Platform::Windows)
-    } else if cfg!(target_os = "macos") {
-        Some(Platform::MacOs)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

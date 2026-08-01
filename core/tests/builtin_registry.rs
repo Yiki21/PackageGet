@@ -1,5 +1,8 @@
-use updater_core::{ManagerRegistry, RegistryError, register_builtin_managers};
-use updater_managers::builtin_managers;
+use updater_core::{
+    ManagerRegistry, RegistryError, register_builtin_managers, register_builtin_managers_for,
+};
+use updater_manager_api::Platform;
+use updater_managers::{builtin_managers, builtin_managers_for};
 
 #[test]
 fn direct_builtin_registration_preserves_all_stable_ids() {
@@ -50,4 +53,27 @@ fn direct_catalog_ids_match_the_builtin_runtime_set() {
     runtime_ids.sort();
 
     assert_eq!(catalog_ids, runtime_ids);
+}
+
+#[test]
+fn explicit_platform_registration_matches_filtered_catalog() {
+    for platform in [Platform::Linux, Platform::Windows, Platform::MacOs] {
+        let mut expected_ids = builtin_managers_for(platform)
+            .into_iter()
+            .map(|manager| manager.descriptor().id().clone())
+            .collect::<Vec<_>>();
+        let mut registry = ManagerRegistry::new();
+
+        register_builtin_managers_for(&mut registry, platform)
+            .expect("register platform built-in managers");
+
+        let mut actual_ids = registry
+            .managers()
+            .into_iter()
+            .map(|manager| manager.descriptor().id().clone())
+            .collect::<Vec<_>>();
+        expected_ids.sort();
+        actual_ids.sort();
+        assert_eq!(actual_ids, expected_ids);
+    }
 }

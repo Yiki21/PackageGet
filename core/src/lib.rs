@@ -6,7 +6,7 @@ mod execution;
 mod registry;
 mod storage;
 
-pub use builtin_managers::register_builtin_managers;
+pub use builtin_managers::{register_builtin_managers, register_builtin_managers_for};
 pub use execution::{
     CancellationToken, OperationOutcome, OperationProgress, execute_package_groups,
 };

@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use updater_manager_api::{
     AuthorizationHint, ManagerCapability, ManagerCategory, PackageManager, Platform,
 };
-use updater_managers::builtin_managers;
+use updater_managers::builtin_managers_for;
 
 const EXPECTED_IDS: [&str; 11] = [
     "builtin:apt",
@@ -28,7 +28,7 @@ enum AuthorizationClass {
 
 #[test]
 fn catalog_contains_every_direct_builtin_in_stable_product_order() {
-    let managers = builtin_managers();
+    let managers = builtin_managers_for(Platform::Linux);
     let ids = managers
         .iter()
         .map(|manager| manager.descriptor().id().as_str())
@@ -43,7 +43,7 @@ fn catalog_contains_every_direct_builtin_in_stable_product_order() {
 
 #[test]
 fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
-    let managers: Vec<Arc<dyn PackageManager>> = builtin_managers();
+    let managers: Vec<Arc<dyn PackageManager>> = builtin_managers_for(Platform::Linux);
 
     for manager in managers {
         let descriptor = manager.descriptor();
@@ -137,7 +137,7 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
     ];
 
     for (manager, (display_name, category, platforms, authorization)) in
-        builtin_managers().iter().zip(expected)
+        builtin_managers_for(Platform::Linux).iter().zip(expected)
     {
         let descriptor = manager.descriptor();
         assert_eq!(descriptor.display_name(), display_name);
@@ -160,12 +160,39 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
 
 #[test]
 fn each_catalog_call_returns_independent_arc_instances() {
-    let first = builtin_managers();
-    let second = builtin_managers();
+    let first = builtin_managers_for(Platform::Linux);
+    let second = builtin_managers_for(Platform::Linux);
 
     assert_eq!(first.len(), second.len());
     for (left, right) in first.iter().zip(&second) {
         assert_eq!(left.descriptor().id(), right.descriptor().id());
         assert!(!Arc::ptr_eq(left, right));
     }
+}
+
+#[test]
+fn platform_catalogs_only_include_advertised_managers() {
+    let linux = builtin_managers_for(Platform::Linux)
+        .into_iter()
+        .map(|manager| manager.descriptor().id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let macos = builtin_managers_for(Platform::MacOs)
+        .into_iter()
+        .map(|manager| manager.descriptor().id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let windows = builtin_managers_for(Platform::Windows);
+
+    assert_eq!(linux, EXPECTED_IDS);
+    assert_eq!(
+        macos,
+        [
+            "builtin:homebrew",
+            "builtin:cargo",
+            "builtin:go",
+            "builtin:npm",
+            "builtin:pnpm",
+            "builtin:pipx",
+        ]
+    );
+    assert!(windows.is_empty());
 }

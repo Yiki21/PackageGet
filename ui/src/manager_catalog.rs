@@ -50,16 +50,7 @@ impl ManagerCatalog {
     /// Returns whether the descriptor supports the current target OS.
     #[must_use]
     pub fn supports_current_platform(&self, id: &ManagerId) -> bool {
-        let platform = if cfg!(target_os = "linux") {
-            Some(Platform::Linux)
-        } else if cfg!(target_os = "windows") {
-            Some(Platform::Windows)
-        } else if cfg!(target_os = "macos") {
-            Some(Platform::MacOs)
-        } else {
-            None
-        };
-        let Some(platform) = platform else {
+        let Some(platform) = Platform::current() else {
             return false;
         };
         self.descriptor(id)

@@ -1,20 +1,35 @@
 use std::sync::Arc;
 
-use updater_manager_api::PackageManager;
+use updater_manager_api::{PackageManager, Platform};
 
 use crate::{
     AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager, NpmManager,
     PacmanManager, PipxManager, PnpmManager, ZypperManager,
 };
 
-/// Creates the complete catalog of direct built-in package managers.
+/// Creates the direct built-in package managers for the current target.
 ///
 /// The returned managers are object-safe shared instances in stable product
-/// order: system managers first, followed by application and development
-/// managers. Each call creates an independent catalog; callers may register,
-/// retain, or clone the returned [`Arc`] values without shared global state.
+/// order after platform filtering. Each call creates an independent catalog;
+/// callers may register, retain, or clone the returned [`Arc`] values without
+/// shared global state.
 #[must_use]
 pub fn builtin_managers() -> Vec<Arc<dyn PackageManager>> {
+    Platform::current().map_or_else(Vec::new, builtin_managers_for)
+}
+
+/// Creates the built-in manager catalog supported by `platform`.
+///
+/// Managers retain their stable product order after filtering.
+#[must_use]
+pub fn builtin_managers_for(platform: Platform) -> Vec<Arc<dyn PackageManager>> {
+    all_builtin_managers()
+        .into_iter()
+        .filter(|manager| manager.descriptor().platforms().contains(platform))
+        .collect()
+}
+
+fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
     vec![
         Arc::new(AptManager::new()),
         Arc::new(DnfManager::new()),

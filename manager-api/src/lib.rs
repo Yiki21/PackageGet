@@ -188,6 +188,22 @@ pub enum Platform {
     MacOs,
 }
 
+impl Platform {
+    /// Returns the platform represented by the current compilation target.
+    #[must_use]
+    pub const fn current() -> Option<Self> {
+        if cfg!(target_os = "linux") {
+            Some(Self::Linux)
+        } else if cfg!(target_os = "windows") {
+            Some(Self::Windows)
+        } else if cfg!(target_os = "macos") {
+            Some(Self::MacOs)
+        } else {
+            None
+        }
+    }
+}
+
 /// A deterministic set of supported platforms.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -955,6 +971,18 @@ pub trait PackageManager: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_platform_matches_the_compilation_target() {
+        #[cfg(target_os = "linux")]
+        assert_eq!(Platform::current(), Some(Platform::Linux));
+        #[cfg(target_os = "windows")]
+        assert_eq!(Platform::current(), Some(Platform::Windows));
+        #[cfg(target_os = "macos")]
+        assert_eq!(Platform::current(), Some(Platform::MacOs));
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        assert_eq!(Platform::current(), None);
+    }
 
     #[test]
     fn manager_id_accepts_namespaced_lowercase_values() {

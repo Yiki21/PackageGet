@@ -312,7 +312,7 @@ impl PackageManager for HomebrewManager {
         if !cfg!(any(target_os = "linux", target_os = "macos")) {
             return Ok(ManagerAvailability::Unavailable {
                 reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: current_platform(),
+                    platform: Platform::current(),
                 },
             });
         }
@@ -968,18 +968,6 @@ fn command_name(action: PackageAction) -> ManagerResult<&'static str> {
             ManagerErrorKind::Unsupported,
             "homebrew action is not supported",
         )),
-    }
-}
-
-fn current_platform() -> Option<Platform> {
-    if cfg!(target_os = "linux") {
-        Some(Platform::Linux)
-    } else if cfg!(target_os = "windows") {
-        Some(Platform::Windows)
-    } else if cfg!(target_os = "macos") {
-        Some(Platform::MacOs)
-    } else {
-        None
     }
 }
 

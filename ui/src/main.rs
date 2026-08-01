@@ -15,6 +15,22 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> iced::Result {
     env_logger::init();
 
+    #[cfg(target_os = "linux")]
+    let platform_specific = iced::window::settings::PlatformSpecific {
+        application_id: "com.ayi.updater".to_owned(),
+        ..Default::default()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let platform_specific = iced::window::settings::PlatformSpecific::default();
+
+    let window = iced::window::Settings {
+        size: iced::Size::new(1200.0, 800.0),
+        min_size: Some(iced::Size::new(640.0, 520.0)),
+        exit_on_close_request: false,
+        platform_specific,
+        ..Default::default()
+    };
+
     iced::application(app::App::new, app::App::update, app::App::view)
         .title("Updater")
         .font(theme::GEIST_REGULAR_BYTES)
@@ -23,15 +39,6 @@ fn main() -> iced::Result {
         .default_font(theme::FONT_REGULAR)
         .theme(app::App::theme)
         .subscription(app::App::subscription)
-        .window(iced::window::Settings {
-            size: iced::Size::new(1200.0, 800.0),
-            min_size: Some(iced::Size::new(640.0, 520.0)),
-            exit_on_close_request: false,
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "com.ayi.updater".to_owned(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
+        .window(window)
         .run()
 }

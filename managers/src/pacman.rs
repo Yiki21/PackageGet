@@ -226,7 +226,7 @@ impl PackageManager for PacmanManager {
         if !cfg!(target_os = "linux") {
             return Ok(ManagerAvailability::Unavailable {
                 reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: current_platform(),
+                    platform: Platform::current(),
                 },
             });
         }
@@ -494,18 +494,6 @@ fn unsupported_action_error() -> ManagerError {
         ManagerErrorKind::Unsupported,
         "pacman action is not supported",
     )
-}
-
-fn current_platform() -> Option<Platform> {
-    if cfg!(target_os = "linux") {
-        Some(Platform::Linux)
-    } else if cfg!(target_os = "windows") {
-        Some(Platform::Windows)
-    } else if cfg!(target_os = "macos") {
-        Some(Platform::MacOs)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
