@@ -1,13 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::PathBuf,
 };
 
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
 use updater_core::Config;
-use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo, PackageTarget};
+use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo, PackageTarget, Platform};
 
 use crate::{manager_catalog::ManagerCatalog, theme};
 
@@ -24,7 +24,7 @@ fn validate_http_url(value: &str) -> Result<url::Url, String> {
 
 pub async fn open_http_url(value: String) -> Result<(), String> {
     let url = validate_http_url(&value)?;
-    open_desktop_target(OsStr::new(url.as_str())).await
+    open_desktop_target(DesktopTargetKind::Url, OsStr::new(url.as_str())).await
 }
 
 pub async fn open_directory(path: PathBuf) -> Result<(), String> {
@@ -35,27 +35,75 @@ pub async fn open_directory(path: PathBuf) -> Result<(), String> {
         return Err(format!("Not a directory: {}", path.display()));
     }
 
-    open_desktop_target(path.as_os_str()).await
+    open_desktop_target(DesktopTargetKind::Directory, path.as_os_str()).await
 }
 
-async fn open_desktop_target(target: &OsStr) -> Result<(), String> {
-    let attempts = [("gio", Some("open")), ("xdg-open", None)];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopTargetKind {
+    Url,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopOpenCommand {
+    program: &'static str,
+    arguments: Vec<OsString>,
+}
+
+fn desktop_open_commands(
+    platform: Platform,
+    kind: DesktopTargetKind,
+    target: &OsStr,
+) -> Vec<DesktopOpenCommand> {
+    let target = target.to_os_string();
+    match (platform, kind) {
+        (Platform::Linux, _) => vec![
+            DesktopOpenCommand {
+                program: "gio",
+                arguments: vec![OsString::from("open"), target.clone()],
+            },
+            DesktopOpenCommand {
+                program: "xdg-open",
+                arguments: vec![target],
+            },
+        ],
+        (Platform::MacOs, _) => vec![DesktopOpenCommand {
+            program: "open",
+            arguments: vec![target],
+        }],
+        (Platform::Windows, DesktopTargetKind::Url) => vec![DesktopOpenCommand {
+            program: "rundll32.exe",
+            arguments: vec![OsString::from("url.dll,FileProtocolHandler"), target],
+        }],
+        (Platform::Windows, DesktopTargetKind::Directory) => vec![DesktopOpenCommand {
+            program: "explorer.exe",
+            arguments: vec![target],
+        }],
+        _ => Vec::new(),
+    }
+}
+
+async fn open_desktop_target(kind: DesktopTargetKind, target: &OsStr) -> Result<(), String> {
+    let platform = Platform::current()
+        .ok_or_else(|| "Desktop opener is unsupported on this platform".to_owned())?;
+    let attempts = desktop_open_commands(platform, kind, target);
     let mut last_error = None;
-    for (program, prefix) in attempts {
-        let mut command = tokio::process::Command::new(program);
-        if let Some(prefix) = prefix {
-            command.arg(prefix);
-        }
-        match command.arg(target).status().await {
+    for attempt in attempts {
+        match tokio::process::Command::new(attempt.program)
+            .args(&attempt.arguments)
+            .status()
+            .await
+        {
             Ok(status) if status.success() => return Ok(()),
-            Ok(status) => last_error = Some(format!("{program} exited with status {status}")),
+            Ok(status) => {
+                last_error = Some(format!("{} exited with status {status}", attempt.program));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => last_error = Some(format!("{program} failed: {error}")),
+            Err(error) => last_error = Some(format!("{} failed: {error}", attempt.program)),
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| "No desktop opener was found (tried gio and xdg-open)".to_owned()))
+    Err(last_error.unwrap_or_else(|| format!("No desktop opener was found for {platform:?}")))
 }
 
 pub type PackageSelectionKey = (ManagerId, String);
@@ -905,8 +953,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::validate_http_url;
-    use updater_manager_api::ManagerId;
+    use std::ffi::{OsStr, OsString};
+
+    use super::{DesktopOpenCommand, DesktopTargetKind, desktop_open_commands, validate_http_url};
+    use updater_manager_api::{ManagerId, Platform};
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
@@ -960,5 +1010,49 @@ mod tests {
         assert!(validate_http_url("file:///etc/passwd").is_err());
         assert!(validate_http_url("javascript:alert(1)").is_err());
         assert!(validate_http_url("https://user:secret@example.com/").is_err());
+    }
+
+    #[test]
+    fn desktop_open_commands_are_platform_native_and_shell_free() {
+        let url = OsStr::new("https://example.com/a?x=1&y=2");
+        let directory = OsStr::new("C:\\Users\\A Y\\Downloads");
+
+        assert_eq!(
+            desktop_open_commands(Platform::Linux, DesktopTargetKind::Url, url),
+            vec![
+                DesktopOpenCommand {
+                    program: "gio",
+                    arguments: vec![OsString::from("open"), url.to_os_string()],
+                },
+                DesktopOpenCommand {
+                    program: "xdg-open",
+                    arguments: vec![url.to_os_string()],
+                },
+            ]
+        );
+        assert_eq!(
+            desktop_open_commands(Platform::MacOs, DesktopTargetKind::Directory, directory),
+            vec![DesktopOpenCommand {
+                program: "open",
+                arguments: vec![directory.to_os_string()],
+            }]
+        );
+        assert_eq!(
+            desktop_open_commands(Platform::Windows, DesktopTargetKind::Url, url),
+            vec![DesktopOpenCommand {
+                program: "rundll32.exe",
+                arguments: vec![
+                    OsString::from("url.dll,FileProtocolHandler"),
+                    url.to_os_string(),
+                ],
+            }]
+        );
+        assert_eq!(
+            desktop_open_commands(Platform::Windows, DesktopTargetKind::Directory, directory,),
+            vec![DesktopOpenCommand {
+                program: "explorer.exe",
+                arguments: vec![directory.to_os_string()],
+            }]
+        );
     }
 }

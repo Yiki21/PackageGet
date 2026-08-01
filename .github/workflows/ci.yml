@@ -77,6 +77,10 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --locked
 
-      - name: Run Winget offline contract tests
+      - name: Run Windows manager offline tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --lib winget::tests --locked -- --test-threads=1
+        run: cargo test -p updater-managers --lib --locked -- --test-threads=1
+
+      - name: Run Homebrew offline contract tests
+        if: runner.os == 'macOS'
+        run: cargo test -p updater-managers --test homebrew_contract --locked -- --test-threads=1

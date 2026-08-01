@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::{ExitStatus, Output, Stdio},
     time::Duration,
@@ -10,12 +10,13 @@ use directories_next::UserDirs;
 use tokio::{process::Command, time::timeout};
 use updater_manager_api::{
     AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerError, ManagerErrorKind,
-    ManagerResult,
+    ManagerResult, Platform,
 };
 
 const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
 const PKEXEC_PATH: &str = "/usr/bin/pkexec";
 const SYSTEM_HELPER_PATH: &str = "/usr/lib/updater/updater-system-helper";
+const DEFAULT_WINDOWS_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandSpec {
@@ -155,8 +156,12 @@ pub(crate) async fn manager_availability_with_version(
 pub(crate) fn resolve_executable(config: &ManagerConfig, default_program: &str) -> PathBuf {
     config.executable().map_or_else(
         || {
-            find_executable(default_program, &manager_search_directories())
-                .unwrap_or_else(|| PathBuf::from(default_program))
+            find_executable(
+                default_program,
+                &manager_search_directories(),
+                windows_pathext().as_deref(),
+            )
+            .unwrap_or_else(|| PathBuf::from(default_program))
         },
         Path::to_path_buf,
     )
@@ -413,23 +418,107 @@ fn manager_search_directories() -> Vec<PathBuf> {
         }
     }
 
-    for directory in [
-        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ] {
+    for directory in Platform::current()
+        .into_iter()
+        .flat_map(platform_search_directories)
+    {
         push_search_directory(&mut directories, directory);
+    }
+
+    if matches!(Platform::current(), Some(Platform::Windows)) {
+        for (variable, suffix) in [
+            ("LOCALAPPDATA", "Microsoft/WindowsApps"),
+            ("APPDATA", "npm"),
+            ("USERPROFILE", "scoop/shims"),
+            ("ProgramData", "chocolatey/bin"),
+        ] {
+            if let Some(root) = env::var_os(variable) {
+                push_search_directory(&mut directories, PathBuf::from(root).join(suffix));
+            }
+        }
     }
 
     directories
 }
 
-fn find_executable(command: &str, directories: &[PathBuf]) -> Option<PathBuf> {
+fn platform_search_directories(platform: Platform) -> Vec<PathBuf> {
+    match platform {
+        Platform::Linux => vec![
+            PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ],
+        Platform::MacOs => vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ],
+        Platform::Windows => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_pathext() -> Option<OsString> {
+    Some(env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(DEFAULT_WINDOWS_PATHEXT)))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_pathext() -> Option<OsString> {
+    None
+}
+
+fn find_executable(
+    command: &str,
+    directories: &[PathBuf],
+    windows_pathext: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let candidates = executable_candidates(command, windows_pathext);
     directories.iter().find_map(|directory| {
-        let candidate = directory.join(command);
-        let metadata = std::fs::metadata(&candidate).ok()?;
-        (metadata.is_file() && is_executable(&metadata)).then_some(candidate)
+        candidates.iter().find_map(|candidate| {
+            let candidate = directory.join(candidate);
+            let metadata = std::fs::metadata(&candidate).ok()?;
+            (metadata.is_file() && is_executable(&metadata)).then_some(candidate)
+        })
     })
+}
+
+fn executable_candidates(command: &str, windows_pathext: Option<&OsStr>) -> Vec<OsString> {
+    let command = OsString::from(command);
+    let mut candidates = vec![command.clone()];
+    let Some(pathext) = windows_pathext else {
+        return candidates;
+    };
+    if Path::new(&command).extension().is_some() {
+        return candidates;
+    }
+
+    let pathext = pathext.to_string_lossy();
+    let extensions = if pathext
+        .split(';')
+        .any(|extension| !extension.trim().is_empty())
+    {
+        pathext.as_ref()
+    } else {
+        DEFAULT_WINDOWS_PATHEXT
+    };
+    let mut seen = std::collections::HashSet::new();
+    for extension in extensions
+        .split(';')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let extension = if extension.starts_with('.') {
+            extension.to_owned()
+        } else {
+            format!(".{extension}")
+        };
+        if !seen.insert(extension.to_ascii_lowercase()) {
+            continue;
+        }
+        let mut candidate = command.clone();
+        candidate.push(extension);
+        candidates.push(candidate);
+    }
+    candidates
 }
 
 #[cfg(unix)]
@@ -474,7 +563,8 @@ mod tests {
         assert_eq!(
             find_executable(
                 "apt",
-                &[first.path().to_path_buf(), second.path().to_path_buf()]
+                &[first.path().to_path_buf(), second.path().to_path_buf()],
+                None,
             ),
             Some(first_command)
         );
@@ -492,8 +582,54 @@ mod tests {
             .expect("mark candidate non-executable");
 
         assert_eq!(
-            find_executable("apt", &[directory.path().to_path_buf()]),
+            find_executable("apt", &[directory.path().to_path_buf()], None),
             None
+        );
+    }
+
+    #[test]
+    fn windows_candidates_follow_pathext_without_duplicate_extensions() {
+        assert_eq!(
+            executable_candidates("winget", Some(OsStr::new(".EXE;.CMD;exe;;.Bat"))),
+            ["winget", "winget.EXE", "winget.CMD", "winget.Bat"].map(OsString::from)
+        );
+        assert_eq!(
+            executable_candidates("pnpm.cmd", Some(OsStr::new(".EXE;.CMD"))),
+            [OsString::from("pnpm.cmd")]
+        );
+        assert_eq!(
+            executable_candidates("winget", Some(OsStr::new(";;"))),
+            [
+                "winget",
+                "winget.COM",
+                "winget.EXE",
+                "winget.BAT",
+                "winget.CMD",
+            ]
+            .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn finds_windows_pathext_candidate_in_directory_order() {
+        let directory = tempdir().expect("create Windows candidate directory");
+        let executable = directory.path().join("winget.EXE");
+        fs::write(&executable, b"fake executable").expect("write Windows executable candidate");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+                .expect("mark Windows candidate executable on Unix host");
+        }
+
+        assert_eq!(
+            find_executable(
+                "winget",
+                &[directory.path().to_path_buf()],
+                Some(OsStr::new(".COM;.EXE")),
+            ),
+            Some(executable)
         );
     }
 
@@ -580,14 +716,20 @@ mod tests {
     }
 
     #[test]
-    fn manager_search_paths_include_all_homebrew_prefixes() {
-        let directories = manager_search_directories();
-        for expected in [
-            Path::new("/home/linuxbrew/.linuxbrew/bin"),
-            Path::new("/opt/homebrew/bin"),
-            Path::new("/usr/local/bin"),
-        ] {
-            assert!(directories.iter().any(|directory| directory == expected));
-        }
+    fn platform_search_paths_freeze_linux_and_macos_homebrew_prefixes() {
+        assert_eq!(
+            platform_search_directories(Platform::Linux),
+            [
+                PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+            ]
+        );
+        assert_eq!(
+            platform_search_directories(Platform::MacOs),
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+            ]
+        );
     }
 }
