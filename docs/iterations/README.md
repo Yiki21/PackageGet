@@ -42,3 +42,4 @@
 | 026 | 已完成 | 阶段 4：Winget Manager 首轮原生契约 | [026-winget-manager.md](026-winget-manager.md) |
 | 027 | 已完成 | 阶段 4：原生桌面能力与 macOS Homebrew 验证 | [027-native-desktop-homebrew.md](027-native-desktop-homebrew.md) |
 | 028 | 已完成 | 阶段 4：Cargo Windows 原生准入 | [028-cargo-windows.md](028-cargo-windows.md) |
+| 029 | 进行中 | 阶段 4：Go Windows 原生准入 | [029-go-windows.md](029-go-windows.md) |

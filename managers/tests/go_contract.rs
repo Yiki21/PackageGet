@@ -1,10 +1,18 @@
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf};
+
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use tempfile::{TempDir, tempdir};
+#[cfg(windows)]
+use updater_manager_api::ManagerAvailability;
+#[cfg(unix)]
+use updater_manager_api::ManagerErrorKind;
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerConfig, ManagerErrorKind, PackageAction,
-    PackageManager, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager, Platform,
 };
+#[cfg(unix)]
+use updater_manager_api::{PackageOrigin, PackageScope, PackageTarget, ProgressEvent};
 use updater_managers::GoManager;
 
 #[cfg(unix)]
@@ -16,6 +24,36 @@ fn fake_go(script: &str) -> (TempDir, PathBuf) {
     fs::write(&executable, script).expect("write fake Go executable");
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
         .expect("mark fake Go executable");
+    (directory, executable)
+}
+
+#[cfg(windows)]
+fn windows_go(log: &std::path::Path) -> (TempDir, PathBuf) {
+    let directory = tempdir().expect("create fake Go directory");
+    let executable = directory.path().join("go.cmd");
+    let script = format!(
+        r#"@echo off
+if "%1"=="version" if "%2"=="" (
+  echo go version go1.24.0 windows/amd64
+  exit /b 0
+)
+if "%1"=="version" if "%2"=="-m" if "%3"=="-json" (
+  echo {{"Path":"example.com/mod/cmd/tool","Main":{{"Path":"example.com/mod","Version":"v1.0.0"}}}}
+  exit /b 0
+)
+if "%1"=="list" if "%2"=="-m" if "%3"=="-json" if "%4"=="example.com/mod@latest" (
+  echo {{"Path":"example.com/mod","Version":"v1.1.0"}}
+  exit /b 0
+)
+if "%1"=="install" (
+  echo %GOBIN%^|%2>>"{}"
+  exit /b 0
+)
+exit /b 19
+"#,
+        log.display()
+    );
+    fs::write(&executable, script).expect("write fake Go command file");
     (directory, executable)
 }
 
@@ -33,6 +71,7 @@ fn go_descriptor_exposes_the_stable_public_contract() {
     assert_eq!(descriptor.id().as_str(), "builtin:go");
     assert_eq!(descriptor.display_name(), "Go");
     assert_eq!(descriptor.authorization(), &AuthorizationHint::None);
+    assert!(descriptor.platforms().contains(Platform::Windows));
     for capability in [
         ManagerCapability::Installed,
         ManagerCapability::Updates,
@@ -43,6 +82,64 @@ fn go_descriptor_exposes_the_stable_public_contract() {
     ] {
         assert!(descriptor.capabilities().contains(capability));
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_contract_preserves_logical_identity_and_executable_removal() {
+    let manager = GoManager::new();
+    let workspace = tempdir().expect("create Go Windows contract workspace");
+    let bin = workspace.path().join("go-bin");
+    fs::create_dir_all(&bin).expect("create GOBIN");
+    fs::write(bin.join("tool.exe"), b"four").expect("write Go Windows binary");
+    let log = workspace.path().join("go.log");
+    let (_directory, executable) = windows_go(&log);
+    let config = config(&manager, &executable, &bin);
+
+    assert!(matches!(
+        manager.availability(&config).await.expect("Go availability"),
+        ManagerAvailability::Available { version: Some(version) }
+            if version.starts_with("go version go1.24.0")
+    ));
+    let packages = manager.installed(&config).await.expect("Go inventory");
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].name, "tool");
+    assert_eq!(packages[0].version, "v1.0.0");
+    assert_eq!(packages[0].size, Some(4));
+
+    let updates = manager.updates(&config, false).await.expect("Go updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "tool");
+    assert_eq!(updates[0].available_version, "v1.1.0");
+
+    let mut install = updates[0].target.clone();
+    install.version = Some("v1.1.0".to_owned());
+    manager
+        .execute(
+            &config,
+            PackageAction::Install,
+            std::slice::from_ref(&install),
+            &|_| {},
+        )
+        .await
+        .expect("install typed Go target");
+    manager
+        .execute(
+            &config,
+            PackageAction::Uninstall,
+            std::slice::from_ref(&updates[0].target),
+            &|_| {},
+        )
+        .await
+        .expect("uninstall Go Windows binary");
+
+    assert_eq!(
+        fs::read_to_string(log)
+            .expect("Go Windows write log")
+            .trim(),
+        format!("{}|example.com/mod/cmd/tool@v1.1.0", bin.display())
+    );
+    assert!(!bin.join("tool.exe").exists());
 }
 
 #[cfg(unix)]

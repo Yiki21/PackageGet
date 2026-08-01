@@ -42,7 +42,7 @@ impl GoManager {
             ManagerId::parse(GO_ID).expect("Go manager ID must remain valid"),
             "Go",
             ManagerCategory::Development,
-            SupportedPlatforms::from([Platform::Linux, Platform::MacOs]),
+            SupportedPlatforms::from([Platform::Linux, Platform::Windows, Platform::MacOs]),
             ManagerCapabilities::from([
                 ManagerCapability::Installed,
                 ManagerCapability::Updates,
@@ -180,9 +180,15 @@ impl GoManager {
         }
         paths.sort();
         let go = resolve_executable(config, GO_COMMAND);
+        let platform = Platform::current().ok_or_else(|| {
+            ManagerError::new(
+                ManagerErrorKind::Unsupported,
+                "Go inventory is unsupported on this platform",
+            )
+        })?;
         let mut binaries = Vec::with_capacity(paths.len());
         for path in paths {
-            let name = path
+            let file_name = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| {
@@ -192,7 +198,7 @@ impl GoManager {
                     )
                 })?
                 .to_owned();
-            validate_binary_name(&name)?;
+            let name = logical_binary_name(&file_name, platform)?;
             let spec = go_command(&go).args([
                 "version".as_ref(),
                 "-m".as_ref(),
@@ -211,6 +217,7 @@ impl GoManager {
                 .len();
             binaries.push(InstalledGoBinary {
                 name,
+                file_name,
                 module: build.module,
                 package: build.package,
                 version: build.version,
@@ -346,7 +353,7 @@ impl GoManager {
         let canonical_bin = tokio::fs::canonicalize(&bin_dir)
             .await
             .map_err(|error| fs_error("failed to resolve the Go binary directory", error))?;
-        let candidate = bin_dir.join(&target.name);
+        let candidate = bin_dir.join(&installed.file_name);
         let metadata = tokio::fs::symlink_metadata(&candidate)
             .await
             .map_err(|error| fs_error("failed to inspect the Go binary removal target", error))?;
@@ -527,6 +534,7 @@ impl GoOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InstalledGoBinary {
     name: String,
+    file_name: String,
     module: String,
     package: String,
     version: String,
@@ -700,6 +708,24 @@ fn validate_binary_name(value: &str) -> ManagerResult<()> {
     Ok(())
 }
 
+fn logical_binary_name(file_name: &str, platform: Platform) -> ManagerResult<String> {
+    let path = Path::new(file_name);
+    let name = if platform == Platform::Windows
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(file_name)
+    } else {
+        file_name
+    };
+    validate_binary_name(name)?;
+    Ok(name.to_owned())
+}
+
 fn validate_go_path(value: &str, message: &str) -> ManagerResult<()> {
     if value.is_empty()
         || value.starts_with(['-', '/'])
@@ -849,6 +875,18 @@ mod tests {
         assert_eq!(
             GoOrigin::from_origin(&origin.origin()).expect("round trip"),
             origin
+        );
+    }
+
+    #[test]
+    fn windows_executable_suffix_is_not_part_of_package_identity() {
+        assert_eq!(
+            logical_binary_name("gopls.EXE", Platform::Windows).expect("Windows binary identity"),
+            "gopls"
+        );
+        assert_eq!(
+            logical_binary_name("gopls.exe", Platform::Linux).expect("Linux binary identity"),
+            "gopls.exe"
         );
     }
 }

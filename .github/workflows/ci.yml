@@ -85,6 +85,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test cargo_contract --locked -- --test-threads=1
 
+      - name: Run Go Windows offline contract tests
+        if: runner.os == 'Windows'
+        run: cargo test -p updater-managers --test go_contract --locked -- --test-threads=1
+
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
         run: cargo test -p updater-managers --test homebrew_contract --locked -- --test-threads=1
