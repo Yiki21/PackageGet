@@ -1,7 +1,7 @@
 # Iteration 025：跨平台编译与目标 Registry 基线
 
 - 日期：2026-08-01
-- 状态：实现完成，等待原生Windows/macOS CI复验
+- 状态：已完成
 - ROADMAP阶段：阶段4——Windows/macOS原生支持前置基线
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -42,11 +42,11 @@
 - `Platform::current()`成为manager API中的唯一目标解析入口；APT、DNF、Pacman、Zypper、Flatpak、Homebrew和UI删除重复判断。
 - `builtin_managers_for`与`register_builtin_managers_for`按descriptor过滤；Linux完整catalog保持11项产品顺序，macOS包含Homebrew、Cargo、Go、npm、pnpm和pipx，Windows在Winget实现前为空。
 - Windows GNU目标的workspace库和二进制`cargo check`无warning通过；Linux窗口继续设置`com.ayi.updater`，Windows/macOS使用Iced各自的默认native platform settings。
-- CI保留Linux全目标check/test/clippy/build，并新增`windows-latest`和官方arm64 `macos-15`原生workspace check；当前未提交推送，因此远端job结果仍待复验。
+- CI保留Linux全目标check/test/clippy/build，并新增`windows-latest`和官方arm64 `macos-15`原生workspace check；run `30686922393`三项原生job均通过。
 
 ## Git提交
 
-- 待提交。
+- `6e6509e feat: establish cross-platform registry baseline`
 
 ## 验证记录
 
@@ -58,8 +58,9 @@
 - `cargo check --workspace --locked --jobs 1 --target x86_64-pc-windows-gnu`通过，无warning。
 - `ruby`/Psych解析`.github/workflows/ci.yml`通过；本机未安装`actionlint`。
 - Linux主机上的macOS交叉检查未通过，失败停在`aws-lc-sys`调用非Apple `cc`时不识别`-arch`和`-mmacosx-version-min`；该结果用于确认原生runner边界，不记为产品源码失败或macOS通过。
+- GitHub Actions run `30686922393`通过：macOS arm64 workspace check耗时1分44秒，Linux完整format/check/test/clippy/build耗时2分10秒，Windows x86_64 workspace check耗时3分34秒。
 
 ## 遗留项 / 下一轮
 
-- 下一轮在Windows原生编译基线稳定后实现Winget manager的fixture、命令构造和typed result契约。
+- 下一轮实现Winget manager的fixture、命令构造和typed result契约。
 - macOS Homebrew真实只读验证、Windows/macOS窗口启动与发布物仍属于阶段4/6后续迭代。

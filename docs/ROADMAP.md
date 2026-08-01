@@ -146,12 +146,12 @@ GUI/桌面层
 
 关键文件：ui/src/main.rs、ui/Cargo.toml、managers/src/\*\*、原 core/src/pm/common.rs/error.rs、registry builtin registration。
 
-当前进度（Iteration 025，等待原生CI复验）：
+当前进度（Iteration 025已完成）：
 
 - 公共`Platform::current()`已统一目标解析；built-in catalog和registry按descriptor声明的平台过滤，不再在Windows/macOS runtime无条件注册Linux manager。
 - Linux保持现有11个manager；macOS首批注册Homebrew与Cargo、Go、npm、pnpm、pipx；Windows在Winget实现前保持空catalog，不用空壳能力伪装支持。
 - Linux `com.ayi.updater`窗口identity改为target-gated设置，Windows GNU目标的workspace库与二进制check已通过；macOS由原生arm64 GitHub runner验证，Linux不伪装Apple SDK交叉编译结果。
-- CI保留Linux完整质量门禁，并增加Windows x86_64与macOS arm64原生workspace compile job。远端结果通过后关闭Iteration 025，再进入Winget独立迭代。
+- CI保留Linux完整质量门禁，并增加Windows x86_64与macOS arm64原生workspace compile job；run `30686922393`三项job均已通过。下一轮进入Winget独立迭代。
 
 ### 阶段 5：统一视觉与核心用户工作流
 

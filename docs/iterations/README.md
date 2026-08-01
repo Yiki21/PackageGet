@@ -38,4 +38,4 @@
 | 022 | 已完成 | 阶段 5：写操作冻结计划与协作取消文案 | [022-frozen-write-plans.md](022-frozen-write-plans.md) |
 | 023 | 已完成 | 阶段 4/6：品牌化 Polkit 授权链 | [023-branded-polkit-authorization.md](023-branded-polkit-authorization.md) |
 | 024 | 已完成 | 阶段 4/6：Linux Beta 发布硬化 | [024-linux-beta-release-hardening.md](024-linux-beta-release-hardening.md) |
-| 025 | 验证中 | 阶段 4：跨平台编译与目标 Registry 基线 | [025-cross-platform-compile-registry.md](025-cross-platform-compile-registry.md) |
+| 025 | 已完成 | 阶段 4：跨平台编译与目标 Registry 基线 | [025-cross-platform-compile-registry.md](025-cross-platform-compile-registry.md) |
