@@ -1,7 +1,7 @@
 # Iteration 029：Go Windows 原生准入
 
 - 日期：2026-08-01
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——按实际平台能力注册可移植管理器
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -23,8 +23,8 @@
 - [x] 分离Windows逻辑二进制名与实际`.exe`文件名。
 - [x] Go descriptor与内置目录新增Windows能力。
 - [x] 增加Windows原生Go离线合同并接入portable CI。
-- [ ] 串行通过本地完整质量门禁和Windows GNU交叉检查。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 串行通过本地完整质量门禁和Windows GNU交叉检查。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -40,14 +40,24 @@
 
 - Iteration 028完成Cargo Windows原生准入，GitHub Actions run `30691476536`及文档收口run `30691592153`均通过。
 - 审计确认Go调用`go version -m -json`时已持有实际路径，但此前直接把`file_name()`同时用于UI identity和uninstall路径，导致Windows暴露`tool.exe`并破坏逻辑target语义。
+- inventory现在按平台将`.exe`实际文件名映射为无后缀逻辑名，同时保留真实文件名供受控卸载；Linux/macOS身份保持不变。
+- Windows原生runner一次通过`go.cmd`availability/build-info/update/install合同，并验证typed target `tool`最终删除实际`tool.exe`。
 
 ## Git提交
 
-- 待记录。
+- `0dca7e4 feat: admit Go on Windows`
 
 ## 验证记录
 
-- 待执行。
+- `cargo fmt --all -- --check`通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`通过：217 passed，14 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
+- `cargo build --workspace --locked --jobs 1`通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
+- `cargo check -p updater-managers --test go_contract --target x86_64-pc-windows-gnu --locked --jobs 1`通过且无warning。
+- `cargo test -p updater-managers --test go_contract --locked --jobs 1 -- --test-threads=1`通过：7 passed，1 ignored。
+- GitHub Actions CI run `30692627630`通过：Linux完整质量门禁2m02s、Windows x86_64 workspace及manager lib/Cargo/Go原生离线合同2m08s、macOS arm64 workspace及Homebrew合同1m26s。
 
 ## 遗留项 / 下一轮
 
