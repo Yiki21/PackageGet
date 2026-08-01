@@ -1,7 +1,7 @@
 # Iteration 027：原生桌面能力与 macOS Homebrew 验证
 
 - 日期：2026-08-01
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——跨平台原生桌面能力与macOS Homebrew
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -22,8 +22,8 @@
 - [x] 增加typed desktop open target与按平台生成的直接命令spec，并覆盖URL/目录参数测试。
 - [x] Windows executable discovery支持PATHEXT且保持Unix executable-bit语义不变。
 - [x] 冻结macOS Apple Silicon `/opt/homebrew/bin`与Intel `/usr/local/bin`搜索路径。
-- [ ] Windows CI运行manager lib离线测试，macOS CI运行Homebrew contract测试。
-- [x] 串行通过Linux完整质量门禁和Windows GNU check；GitHub Actions三平台原生复验待提交后运行。
+- [x] Windows CI运行manager lib离线测试，macOS CI运行Homebrew contract测试。
+- [x] 串行通过Linux完整质量门禁、Windows GNU check和GitHub Actions三平台原生复验。
 
 ## 验收标准
 
@@ -46,7 +46,7 @@
 
 ## Git提交
 
-- 待提交。
+- `d8d5b79 feat: add native desktop capability paths`
 
 ## 验证记录
 
@@ -57,7 +57,7 @@
 - `cargo build --workspace --locked --jobs 1`通过。
 - `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
 - `cargo test -p updater-managers --test homebrew_contract --locked --jobs 1 -- --test-threads=1`通过：8 passed，1 ignored。
-- GitHub Actions原生Linux/Windows/macOS复验待提交后运行。
+- GitHub Actions CI run `30690411248`通过：Linux完整质量门禁2m05s、Windows x86_64 workspace与全部manager lib离线测试1m54s、macOS arm64 workspace与Homebrew contract 2m05s。
 
 ## 遗留项 / 下一轮
 
