@@ -40,45 +40,48 @@ fn windows_npm(root: &std::path::Path, log: &std::path::Path) -> (TempDir, PathB
         .replace('\\', "\\\\");
     let script = format!(
         r#"@echo off
-if "%1"=="--version" (
-  echo 12.0.1
-  exit /b 0
-)
-if "%1"=="root" if "%2"=="-g" (
-  echo {}
-  exit /b 0
-)
-if "%1"=="config" if "%2"=="get" if "%3"=="registry" (
-  echo https://registry.example.test/
-  exit /b 0
-)
-if "%1"=="ls" if "%2"=="-g" (
-  echo {{"dependencies":{{"@scope/tool":{{"name":"@scope/tool","version":"1.0.0","_id":"@scope/tool@1.0.0","path":"{}"}},"plain-tool":{{"name":"plain-tool","version":"3.0.0","_id":"plain-tool@3.0.0","path":"{}"}}}}}}
-  exit /b 0
-)
-if "%1"=="outdated" if "%2"=="-g" (
-  echo {{"@scope/tool":{{"current":"1.0.0","wanted":"1.1.0","latest":"2.0.0","dependent":"global","location":"{}"}}}}
-  exit /b 1
-)
-if "%1"=="search" (
-  echo [{{"name":"@scope/tool","version":"2.0.0","description":"scoped"}}]
-  exit /b 0
-)
-if "%1"=="install" (
-  echo %*>>"{}"
-  exit /b 0
-)
-if "%1"=="uninstall" (
-  echo %*>>"{}"
-  exit /b 0
-)
+if "%1"=="--version" goto version
+if "%1"=="root" goto root
+if "%1"=="config" goto config
+if "%1"=="ls" goto list
+if "%1"=="outdated" goto outdated
+if "%1"=="search" goto search
+if "%1"=="install" goto write
+if "%1"=="uninstall" goto write
 exit /b 19
+
+:version
+echo 12.0.1
+exit /b 0
+
+:root
+echo {}
+exit /b 0
+
+:config
+echo https://registry.example.test/
+exit /b 0
+
+:list
+echo {{"dependencies":{{"@scope/tool":{{"name":"@scope/tool","version":"1.0.0","_id":"@scope/tool@1.0.0","path":"{}"}},"plain-tool":{{"name":"plain-tool","version":"3.0.0","_id":"plain-tool@3.0.0","path":"{}"}}}}}}
+exit /b 0
+
+:outdated
+echo {{"@scope/tool":{{"current":"1.0.0","wanted":"1.1.0","latest":"2.0.0","dependent":"global","location":"{}"}}}}
+exit /b 1
+
+:search
+echo [{{"name":"@scope/tool","version":"2.0.0","description":"scoped"}}]
+exit /b 0
+
+:write
+echo %*>>"{}"
+exit /b 0
 "#,
         root.display(),
         scoped_json,
         plain_json,
         scoped_json,
-        log.display(),
         log.display()
     );
     fs::write(&executable, script).expect("write fake npm command file");
