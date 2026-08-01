@@ -1,7 +1,7 @@
 # Iteration 030：npm Windows 原生准入
 
 - 日期：2026-08-01
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——按实际平台能力注册可移植管理器
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -22,8 +22,8 @@
 - [x] 审计npm global root、installed path、size、outdated、search与write边界。
 - [x] npm descriptor与内置目录新增Windows能力。
 - [x] 增加Windows原生npm离线合同并接入portable CI。
-- [ ] 串行通过本地完整质量门禁和Windows GNU交叉检查。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 串行通过本地完整质量门禁和Windows GNU交叉检查。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -39,14 +39,25 @@
 
 - Iteration 029完成Go Windows原生准入，GitHub Actions run `30692627630`及文档收口run `30692753373`均通过。
 - 审计确认npm production路径未使用Unix专属API；global root、CLI package path与canonical containment合同可直接由Windows临时目录验证。
+- 首次Windows原生运行发现fake CLI的嵌套batch条件会在未命中的`--depth=0`参数上触发`cmd.exe`解析错误，production尚未进入JSON解析。
+- fake CLI改为按首参数使用label分派，避开带`=`参数的嵌套条件歧义；最终原生runner通过Windows JSON path、size、outdated、search与typed write合同。
 
 ## Git提交
 
-- 待记录。
+- `f174006 feat: admit npm on Windows`
+- `41a02db test: make npm Windows fixture cmd-safe`
 
 ## 验证记录
 
-- 待执行。
+- `cargo fmt --all -- --check`通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`通过：217 passed，14 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
+- `cargo build --workspace --locked --jobs 1`通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
+- `cargo check -p updater-managers --test npm_contract --target x86_64-pc-windows-gnu --locked --jobs 1`通过且无warning。
+- `cargo test -p updater-managers --test npm_contract --locked --jobs 1 -- --test-threads=1`通过：9 passed，1 ignored。
+- GitHub Actions CI run `30693412188`通过：Linux完整质量门禁2m11s、Windows x86_64 workspace及manager lib/Cargo/Go/npm原生离线合同2m37s、macOS arm64 workspace及Homebrew合同2m06s。
 
 ## 遗留项 / 下一轮
 
