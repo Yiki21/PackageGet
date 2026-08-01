@@ -9,7 +9,7 @@ use updater_core::{
     CancellationToken, Config, ManagerRegistry, OperationOutcome, OperationProgress,
     execute_package_groups,
 };
-use updater_manager_api::{ManagerId, PackageAction};
+use updater_manager_api::{ManagerId, PackageAction, PackageTarget};
 
 use crate::{content::shared::PackageSelectionKey, manager_catalog::ManagerCatalog};
 
@@ -22,7 +22,7 @@ enum BatchActionEvent {
 /// Manager/package scope frozen before a package write is confirmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageActionPlan {
-    pub manager_groups: Vec<(ManagerId, Vec<String>)>,
+    pub manager_groups: Vec<(ManagerId, Vec<PackageTarget>)>,
 }
 
 impl PackageActionPlan {
@@ -34,26 +34,26 @@ impl PackageActionPlan {
     }
 }
 
-pub fn collect_selected_package_groups<'a, T: 'a, I, N>(
+pub fn collect_selected_package_groups<'a, T: 'a, I, F>(
     package_sets: I,
     selected_packages: &HashSet<PackageSelectionKey>,
     catalog: &ManagerCatalog,
-    package_name: N,
-) -> Vec<(ManagerId, Vec<String>)>
+    package_target: F,
+) -> Vec<(ManagerId, Vec<PackageTarget>)>
 where
     I: IntoIterator<Item = (ManagerId, &'a [T])>,
-    N: Fn(&T) -> &str,
+    F: Fn(&T) -> PackageTarget,
 {
-    let mut packages_by_manager: BTreeMap<ManagerId, Vec<String>> = BTreeMap::new();
+    let mut packages_by_manager: BTreeMap<ManagerId, Vec<PackageTarget>> = BTreeMap::new();
 
     for (manager, packages) in package_sets {
         for package in packages {
-            let name = package_name(package);
-            if selected_packages.contains(&(manager.clone(), name.to_owned())) {
+            let target = package_target(package);
+            if selected_packages.contains(&(manager.clone(), target.name.clone())) {
                 packages_by_manager
                     .entry(manager.clone())
                     .or_default()
-                    .push(name.to_owned());
+                    .push(target);
             }
         }
     }
@@ -67,7 +67,7 @@ where
     });
     manager_groups
         .iter_mut()
-        .for_each(|(_, package_names)| package_names.sort());
+        .for_each(|(_, targets)| targets.sort_by(|left, right| left.name.cmp(&right.name)));
     manager_groups
 }
 
@@ -75,7 +75,7 @@ pub fn run_grouped_package_action<Message, ProgressMessage, DoneMessage>(
     registry: Arc<ManagerRegistry>,
     config: &Config,
     action: PackageAction,
-    manager_groups: Vec<(ManagerId, Vec<String>)>,
+    manager_groups: Vec<(ManagerId, Vec<PackageTarget>)>,
     cancellation: CancellationToken,
     progress_message: ProgressMessage,
     done_message: DoneMessage,

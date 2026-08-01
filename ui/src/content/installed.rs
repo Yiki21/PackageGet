@@ -388,7 +388,7 @@ impl Installed {
                     }),
                     &info.selected_packages,
                     catalog,
-                    |package| package.name.as_str(),
+                    PackageInfo::target,
                 );
                 let cancellation = CancellationToken::default();
                 let task = run_grouped_package_action(

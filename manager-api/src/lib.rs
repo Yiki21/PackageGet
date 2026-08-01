@@ -588,6 +588,18 @@ impl PackageInfo {
             origin: None,
         }
     }
+
+    /// Freezes this package's manager-owned identity for a write operation.
+    #[must_use]
+    pub fn target(&self) -> PackageTarget {
+        PackageTarget {
+            manager_id: self.manager_id.clone(),
+            name: self.name.clone(),
+            version: None,
+            scope: self.scope,
+            origin: self.origin.clone(),
+        }
+    }
 }
 
 /// A package target frozen for a write operation.
@@ -1058,6 +1070,27 @@ mod tests {
                 ManagerCapabilities::default(),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn package_info_target_preserves_manager_owned_identity() {
+        let manager = ManagerId::parse("builtin:winget").expect("valid manager ID");
+        let mut package = PackageInfo::new(manager.clone(), "Contoso.App", "1.2.3");
+        package.scope = PackageScope::User;
+        package.origin = Some(
+            PackageOrigin::new("winget").with_reference("Microsoft.Winget.Source_8wekyb3d8bbwe"),
+        );
+
+        assert_eq!(
+            package.target(),
+            PackageTarget {
+                manager_id: manager,
+                name: "Contoso.App".to_owned(),
+                version: None,
+                scope: PackageScope::User,
+                origin: package.origin,
+            }
         );
     }
 }

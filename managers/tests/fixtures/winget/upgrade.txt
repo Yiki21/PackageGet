@@ -1,0 +1,6 @@
+Name                          Id                            Version         Available       Source
+-----------------------------------------------------------------------------------------------
+PowerToys (Preview)           Microsoft.PowerToys           0.92.0          0.92.1          winget
+VLC media player              VideoLAN.VLC                  3.0.20          3.0.21          winget
+
+2 upgrades available.

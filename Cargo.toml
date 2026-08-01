@@ -42,6 +42,7 @@ updater_core = { path = "core" }
 updater_manager_api = { package = "updater-manager-api", path = "manager-api" }
 updater_managers = { package = "updater-managers", path = "managers" }
 url = "2"
+unicode-width = "0.2"
 
 [profile.dev]
 opt-level = 1

@@ -7,7 +7,7 @@ use std::{
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
 use updater_core::Config;
-use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo};
+use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo, PackageTarget};
 
 use crate::{manager_catalog::ManagerCatalog, theme};
 
@@ -191,7 +191,7 @@ pub fn muted_badge<'a, Message>(label: &'a str) -> iced::widget::Container<'a, M
 }
 
 pub fn package_action_plan_view<'a, Message>(
-    manager_groups: &'a [(ManagerId, Vec<String>)],
+    manager_groups: &'a [(ManagerId, Vec<PackageTarget>)],
     catalog: &'a ManagerCatalog,
 ) -> Element<'a, Message>
 where
@@ -237,12 +237,18 @@ where
 
             column![
                 header,
-                text(packages.join(", "))
-                    .size(12)
-                    .font(theme::FONT_MONO)
-                    .style(theme::text_on_surface_alt)
-                    .width(iced::Length::Fill)
-                    .wrapping(text::Wrapping::WordOrGlyph),
+                text(
+                    packages
+                        .iter()
+                        .map(|package| package.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+                .size(12)
+                .font(theme::FONT_MONO)
+                .style(theme::text_on_surface_alt)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
             ]
             .spacing(theme::spacing::XS)
             .into()

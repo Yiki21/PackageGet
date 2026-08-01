@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use iced::Task;
 use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
 use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageInfo};
+#[cfg(test)]
+use updater_manager_api::{PackageOrigin, PackageScope, PackageTarget};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_items_result},
@@ -317,7 +319,7 @@ impl Finding {
                         .map(|(manager, packages)| (manager.clone(), packages.as_slice())),
                     &info.selected_packages,
                     catalog,
-                    |package| package.name.as_str(),
+                    PackageInfo::target,
                 );
                 if manager_groups.is_empty() {
                     info.last_install_error =
@@ -1210,9 +1212,12 @@ mod tests {
         let mut info = FindingInfo::default();
         let manager = manager_id("builtin:cargo");
         info.selected_managers.insert(manager.clone());
+        let mut alpha = package(&manager, "alpha");
+        alpha.scope = PackageScope::User;
+        alpha.origin = Some(PackageOrigin::new("stable").with_reference("stable-id"));
         info.search_results.insert(
             manager.clone(),
-            vec![package(&manager, "alpha"), package(&manager, "beta")],
+            vec![alpha.clone(), package(&manager, "beta")],
         );
         info.selected_packages
             .insert(shared::selection_key(&manager, "alpha"));
@@ -1228,7 +1233,7 @@ mod tests {
                 .pending_install
                 .as_ref()
                 .map(|plan| plan.manager_groups.clone()),
-            Some(vec![(manager.clone(), vec!["alpha".to_owned()])])
+            Some(vec![(manager.clone(), vec![alpha.target()],)])
         );
 
         info.selected_packages.clear();
@@ -1274,7 +1279,7 @@ mod tests {
         let mut finding = Finding {
             inspected_package: Some(shared::selection_key(&manager, "alpha")),
             pending_install: Some(PackageActionPlan {
-                manager_groups: vec![(manager, vec!["alpha".to_owned()])],
+                manager_groups: vec![(manager.clone(), vec![PackageTarget::new(manager, "alpha")])],
             }),
             ..Finding::default()
         };

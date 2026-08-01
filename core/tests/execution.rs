@@ -8,12 +8,14 @@ use updater_core::{
 use updater_manager_api::{
     ManagerAvailability, ManagerCapabilities, ManagerCapability, ManagerCategory,
     ManagerDescriptor, ManagerError, ManagerErrorKind, ManagerId, ManagerResult, PackageAction,
-    PackageManager, PackageTarget, Platform, ProgressEvent, ProgressSink,
+    PackageManager, PackageOrigin, PackageScope, PackageTarget, Platform, ProgressEvent,
+    ProgressSink,
 };
 
 struct FakeManager {
     descriptor: ManagerDescriptor,
     execution_order: Arc<Mutex<Vec<ManagerId>>>,
+    received_targets: Option<Arc<Mutex<Vec<PackageTarget>>>>,
     fail_after: Option<usize>,
 }
 
@@ -34,8 +36,14 @@ impl FakeManager {
             )
             .expect("valid fake manager descriptor"),
             execution_order,
+            received_targets: None,
             fail_after,
         }
+    }
+
+    fn with_target_log(mut self, received_targets: Arc<Mutex<Vec<PackageTarget>>>) -> Self {
+        self.received_targets = Some(received_targets);
+        self
     }
 }
 
@@ -60,6 +68,12 @@ impl PackageManager for FakeManager {
             .lock()
             .expect("execution order lock")
             .push(self.descriptor.id().clone());
+        if let Some(received_targets) = &self.received_targets {
+            received_targets
+                .lock()
+                .expect("received targets lock")
+                .extend_from_slice(packages);
+        }
         progress.emit(ProgressEvent::Started {
             action,
             total: packages.len(),
@@ -87,6 +101,10 @@ impl PackageManager for FakeManager {
 
 fn manager_id(value: &str) -> ManagerId {
     ManagerId::parse(value).expect("valid test manager ID")
+}
+
+fn target(manager: &ManagerId, name: &str) -> PackageTarget {
+    PackageTarget::new(manager.clone(), name)
 }
 
 fn config(ids: &[ManagerId]) -> Config {
@@ -124,8 +142,8 @@ async fn executes_groups_in_supplied_order() {
         &config(&[first.clone(), second.clone()]),
         PackageAction::Install,
         &[
-            (second.clone(), vec!["beta".to_owned()]),
-            (first.clone(), vec!["alpha".to_owned()]),
+            (second.clone(), vec![target(&second, "beta")]),
+            (first.clone(), vec![target(&first, "alpha")]),
         ],
         &CancellationToken::default(),
         &|_| {},
@@ -135,6 +153,41 @@ async fn executes_groups_in_supplied_order() {
     assert!(outcome.is_success());
     assert_eq!(outcome.completed_packages, 2);
     assert_eq!(*order.lock().unwrap(), vec![second, first]);
+}
+
+#[tokio::test]
+async fn preserves_manager_owned_target_identity() {
+    let id = manager_id("org.example:scoped");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let received_targets = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(
+            FakeManager::new(
+                id.as_str(),
+                [ManagerCapability::Install],
+                Arc::clone(&order),
+                None,
+            )
+            .with_target_log(Arc::clone(&received_targets)),
+        ))
+        .unwrap();
+    let mut package = target(&id, "alpha");
+    package.scope = PackageScope::User;
+    package.origin = Some(PackageOrigin::new("stable").with_reference("stable-id"));
+
+    let outcome = execute_package_groups(
+        &registry,
+        &config(std::slice::from_ref(&id)),
+        PackageAction::Install,
+        &[(id, vec![package.clone()])],
+        &CancellationToken::default(),
+        &|_| {},
+    )
+    .await;
+
+    assert!(outcome.is_success());
+    assert_eq!(*received_targets.lock().unwrap(), vec![package]);
 }
 
 #[tokio::test]
@@ -155,7 +208,7 @@ async fn unsupported_capability_stops_before_manager_execution() {
         &registry,
         &config(std::slice::from_ref(&id)),
         PackageAction::Update,
-        &[(id.clone(), vec!["alpha".to_owned()])],
+        &[(id.clone(), vec![target(&id, "alpha")])],
         &CancellationToken::default(),
         &|_| {},
     )
@@ -199,8 +252,11 @@ async fn failure_reports_partial_progress_and_skips_later_groups() {
         &config(&[failing.clone(), skipped.clone()]),
         PackageAction::Update,
         &[
-            (failing.clone(), vec!["alpha".to_owned(), "beta".to_owned()]),
-            (skipped, vec!["gamma".to_owned()]),
+            (
+                failing.clone(),
+                vec![target(&failing, "alpha"), target(&failing, "beta")],
+            ),
+            (skipped.clone(), vec![target(&skipped, "gamma")]),
         ],
         &CancellationToken::default(),
         &|_| {},
@@ -239,11 +295,11 @@ async fn cancellation_is_observed_between_manager_groups() {
 
     let outcome = execute_package_groups(
         &registry,
-        &config(&[first.clone(), second]),
+        &config(&[first.clone(), second.clone()]),
         PackageAction::Uninstall,
         &[
-            (first.clone(), vec!["alpha".to_owned()]),
-            (manager_id("org.example:second"), vec!["beta".to_owned()]),
+            (first.clone(), vec![target(&first, "alpha")]),
+            (second.clone(), vec![target(&second, "beta")]),
         ],
         &cancellation,
         &progress,

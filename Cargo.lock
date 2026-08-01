@@ -4457,6 +4457,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "unicode-width",
  "updater-manager-api",
 ]
 

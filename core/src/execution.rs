@@ -102,7 +102,7 @@ pub async fn execute_package_groups(
     registry: &ManagerRegistry,
     config: &Config,
     action: PackageAction,
-    manager_groups: &[(ManagerId, Vec<String>)],
+    manager_groups: &[(ManagerId, Vec<PackageTarget>)],
     cancellation: &CancellationToken,
     on_progress: &(dyn Fn(OperationProgress) + Send + Sync),
 ) -> OperationOutcome {
@@ -117,7 +117,7 @@ pub async fn execute_package_groups(
     let mut completed_packages = 0;
     let mut completed_managers = 0;
 
-    for (manager_id, package_names) in manager_groups
+    for (manager_id, targets) in manager_groups
         .iter()
         .filter(|(_, packages)| !packages.is_empty())
     {
@@ -158,10 +158,22 @@ pub async fn execute_package_groups(
                 error: Some(format!("manager is not configured: {manager_id}")),
             };
         };
-        let targets = package_names
+        if targets
             .iter()
-            .map(|name| PackageTarget::new(manager_id.clone(), name))
-            .collect::<Vec<_>>();
+            .any(|target| &target.manager_id != manager_id)
+        {
+            return OperationOutcome {
+                action,
+                completed_packages,
+                total_packages,
+                completed_managers,
+                total_managers,
+                failed_manager: Some(manager_id.clone()),
+                error: Some(format!(
+                    "package target belongs to a different manager group: {manager_id}"
+                )),
+            };
+        }
         let manager_completed = AtomicUsize::new(0);
         let progress = |event| match event {
             ProgressEvent::Advanced {
@@ -205,7 +217,7 @@ pub async fn execute_package_groups(
             .execute(
                 manager_config,
                 action,
-                &targets,
+                targets,
                 &progress as &dyn ProgressSink,
             )
             .await

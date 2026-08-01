@@ -1,0 +1,26 @@
+{
+  "$schema": "https://aka.ms/winget-packages.schema.2.0.json",
+  "Sources": [
+    {
+      "SourceDetails": {
+        "Name": "winget",
+        "Identifier": "Microsoft.Winget.Source_8wekyb3d8bbwe"
+      },
+      "Packages": [
+        {
+          "PackageIdentifier": "Microsoft.PowerToys",
+          "Version": "0.92.1",
+          "Scope": "user"
+        },
+        {
+          "PackageIdentifier": "VideoLAN.VLC",
+          "Version": "3.0.21",
+          "Scope": "machine"
+        },
+        {
+          "PackageIdentifier": "Contoso.Unknown"
+        }
+      ]
+    }
+  ]
+}

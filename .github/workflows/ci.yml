@@ -76,3 +76,7 @@ jobs:
 
       - name: Check workspace
         run: cargo check --workspace --locked
+
+      - name: Run Winget offline contract tests
+        if: runner.os == 'Windows'
+        run: cargo test -p updater-managers --lib winget::tests --locked -- --test-threads=1

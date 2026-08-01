@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use iced::Task;
 use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
-use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageUpdate};
+use updater_manager_api::{
+    ManagerCapability, ManagerId, PackageAction, PackageTarget, PackageUpdate,
+};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
@@ -344,7 +346,7 @@ impl Updates {
                     }),
                     &info.selected_packages,
                     catalog,
-                    |package| package.target.name.as_str(),
+                    |package| package.target.clone(),
                 );
                 if manager_groups.is_empty() {
                     info.last_update_error =
@@ -1415,12 +1417,12 @@ impl Updates {
             })
             .filter(|(_, (_, packages))| !packages.is_empty())
             .map(|(manager, (_, packages))| {
-                let mut names: Vec<_> = packages
+                let mut targets: Vec<_> = packages
                     .iter()
-                    .map(|package| package.target.name.clone())
+                    .map(|package| package.target.clone())
                     .collect();
-                names.sort();
-                (manager.clone(), names)
+                targets.sort_by(|left, right| left.name.cmp(&right.name));
+                (manager.clone(), targets)
             })
             .collect();
         manager_groups.sort_by(|(left, _), (right, _)| {
@@ -1454,7 +1456,7 @@ impl Updates {
 
     fn update_plan_action(
         pm_config: &updater_core::Config,
-        manager_groups: Vec<(ManagerId, Vec<String>)>,
+        manager_groups: Vec<(ManagerId, Vec<PackageTarget>)>,
         catalog: &ManagerCatalog,
     ) -> Action {
         let cancellation = CancellationToken::default();
@@ -1519,7 +1521,10 @@ mod tests {
         assert_eq!(plan.scope, UpdatePlanScope::Selected);
         assert_eq!(
             plan.packages.manager_groups,
-            vec![(manager.clone(), vec!["alpha".to_owned()])]
+            vec![(
+                manager.clone(),
+                vec![PackageTarget::new(manager.clone(), "alpha")],
+            )]
         );
 
         info.selected_packages.clear();
@@ -1567,7 +1572,10 @@ mod tests {
             pending_update: Some(UpdatePlan {
                 scope: UpdatePlanScope::Selected,
                 packages: PackageActionPlan {
-                    manager_groups: vec![(manager, vec!["alpha".to_owned()])],
+                    manager_groups: vec![(
+                        manager.clone(),
+                        vec![PackageTarget::new(manager, "alpha")],
+                    )],
                 },
                 failed_sources: Vec::new(),
             }),
@@ -1631,7 +1639,10 @@ mod tests {
         assert_eq!(plan.package_count(), 1);
         assert_eq!(plan.manager_count(), 1);
         assert_eq!(plan.packages.manager_groups[0].0, flatpak);
-        assert_eq!(plan.packages.manager_groups[0].1, vec!["retry-me"]);
+        assert_eq!(
+            plan.packages.manager_groups[0].1,
+            vec![PackageTarget::new(flatpak, "retry-me")]
+        );
     }
 
     #[test]

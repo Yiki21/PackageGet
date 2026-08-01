@@ -180,7 +180,10 @@ fn platform_catalogs_only_include_advertised_managers() {
         .into_iter()
         .map(|manager| manager.descriptor().id().as_str().to_owned())
         .collect::<Vec<_>>();
-    let windows = builtin_managers_for(Platform::Windows);
+    let windows = builtin_managers_for(Platform::Windows)
+        .into_iter()
+        .map(|manager| manager.descriptor().id().as_str().to_owned())
+        .collect::<Vec<_>>();
 
     assert_eq!(linux, EXPECTED_IDS);
     assert_eq!(
@@ -194,5 +197,5 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:pipx",
         ]
     );
-    assert!(windows.is_empty());
+    assert_eq!(windows, ["builtin:winget"]);
 }

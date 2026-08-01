@@ -1,0 +1,4 @@
+Name                  Id                              Version       Source
+--------------------------------------------------------------------------
+微信                  Tencent.WeChat.Universal        4.0.3         winget
+VLC media player      VideoLAN.VLC                    3.0.21        winget

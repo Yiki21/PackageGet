@@ -19,6 +19,7 @@ mod pacman;
 mod pipx;
 mod pnpm;
 mod progress;
+mod winget;
 mod zypper;
 
 pub use apt::AptManager;
@@ -33,4 +34,5 @@ pub use pacman::PacmanManager;
 pub use pipx::PipxManager;
 pub use pnpm::PnpmManager;
 pub use progress::CommandProgress;
+pub use winget::WingetManager;
 pub use zypper::ZypperManager;
