@@ -43,7 +43,7 @@ impl NpmManager {
             ManagerId::parse(NPM_ID).expect("npm manager ID must remain valid"),
             "npm",
             ManagerCategory::Development,
-            SupportedPlatforms::from([Platform::Linux, Platform::MacOs]),
+            SupportedPlatforms::from([Platform::Linux, Platform::Windows, Platform::MacOs]),
             ManagerCapabilities::from([
                 ManagerCapability::Installed,
                 ManagerCapability::Updates,

@@ -1,10 +1,17 @@
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf};
+
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use tempfile::{TempDir, tempdir};
+#[cfg(unix)]
+use updater_manager_api::ManagerErrorKind;
 use updater_manager_api::{
-    AuthorizationHint, ManagerAvailability, ManagerCapability, ManagerConfig, ManagerErrorKind,
-    PackageAction, PackageManager, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    AuthorizationHint, ManagerAvailability, ManagerCapability, ManagerConfig, PackageAction,
+    PackageManager, Platform,
 };
+#[cfg(unix)]
+use updater_manager_api::{PackageOrigin, PackageScope, PackageTarget, ProgressEvent};
 use updater_managers::NpmManager;
 
 #[cfg(unix)]
@@ -19,6 +26,65 @@ fn fake_npm(script: &str) -> (TempDir, PathBuf) {
     (directory, executable)
 }
 
+#[cfg(windows)]
+fn windows_npm(root: &std::path::Path, log: &std::path::Path) -> (TempDir, PathBuf) {
+    let directory = tempdir().expect("create fake npm directory");
+    let executable = directory.path().join("npm.cmd");
+    let scoped_json = root
+        .join("@scope/tool")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let plain_json = root
+        .join("plain-tool")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let script = format!(
+        r#"@echo off
+if "%1"=="--version" (
+  echo 12.0.1
+  exit /b 0
+)
+if "%1"=="root" if "%2"=="-g" (
+  echo {}
+  exit /b 0
+)
+if "%1"=="config" if "%2"=="get" if "%3"=="registry" (
+  echo https://registry.example.test/
+  exit /b 0
+)
+if "%1"=="ls" if "%2"=="-g" (
+  echo {{"dependencies":{{"@scope/tool":{{"name":"@scope/tool","version":"1.0.0","_id":"@scope/tool@1.0.0","path":"{}"}},"plain-tool":{{"name":"plain-tool","version":"3.0.0","_id":"plain-tool@3.0.0","path":"{}"}}}}}}
+  exit /b 0
+)
+if "%1"=="outdated" if "%2"=="-g" (
+  echo {{"@scope/tool":{{"current":"1.0.0","wanted":"1.1.0","latest":"2.0.0","dependent":"global","location":"{}"}}}}
+  exit /b 1
+)
+if "%1"=="search" (
+  echo [{{"name":"@scope/tool","version":"2.0.0","description":"scoped"}}]
+  exit /b 0
+)
+if "%1"=="install" (
+  echo %*>>"{}"
+  exit /b 0
+)
+if "%1"=="uninstall" (
+  echo %*>>"{}"
+  exit /b 0
+)
+exit /b 19
+"#,
+        root.display(),
+        scoped_json,
+        plain_json,
+        scoped_json,
+        log.display(),
+        log.display()
+    );
+    fs::write(&executable, script).expect("write fake npm command file");
+    (directory, executable)
+}
+
 fn config(manager: &NpmManager, executable: &PathBuf) -> ManagerConfig {
     ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable)
 }
@@ -30,6 +96,7 @@ fn npm_descriptor_exposes_the_stable_public_contract() {
     assert_eq!(descriptor.id().as_str(), "builtin:npm");
     assert_eq!(descriptor.display_name(), "npm");
     assert_eq!(descriptor.authorization(), &AuthorizationHint::None);
+    assert!(descriptor.platforms().contains(Platform::Windows));
     for capability in [
         ManagerCapability::Installed,
         ManagerCapability::Updates,
@@ -40,6 +107,73 @@ fn npm_descriptor_exposes_the_stable_public_contract() {
     ] {
         assert!(descriptor.capabilities().contains(capability));
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() {
+    let manager = NpmManager::new();
+    let workspace = tempdir().expect("create npm Windows contract workspace");
+    let root = workspace.path().join("node_modules");
+    let scoped = root.join("@scope/tool");
+    let plain = root.join("plain-tool");
+    fs::create_dir_all(&scoped).expect("create scoped npm package");
+    fs::create_dir_all(&plain).expect("create plain npm package");
+    fs::write(scoped.join("index.js"), b"scope").expect("write scoped npm package");
+    fs::write(plain.join("index.js"), b"plain").expect("write plain npm package");
+    let log = workspace.path().join("npm.log");
+    let (_directory, executable) = windows_npm(&root, &log);
+    let config = config(&manager, &executable);
+
+    assert!(matches!(
+        manager.availability(&config).await.expect("npm availability"),
+        ManagerAvailability::Available { version: Some(version) } if version == "12.0.1"
+    ));
+    let packages = manager.installed(&config).await.expect("npm inventory");
+    assert_eq!(packages.len(), 2);
+    assert_eq!(packages[0].name, "@scope/tool");
+    assert_eq!(packages[0].size, Some(5));
+    assert_eq!(packages[1].name, "plain-tool");
+
+    let updates = manager.updates(&config, false).await.expect("npm updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "@scope/tool");
+    assert_eq!(updates[0].available_version, "2.0.0");
+
+    let search = manager
+        .search(&config, "@scope/tool")
+        .await
+        .expect("npm search");
+    assert_eq!(search.len(), 1);
+    assert_eq!(search[0].name, "@scope/tool");
+    assert_eq!(search[0].version, "1.0.0");
+
+    manager
+        .execute(
+            &config,
+            PackageAction::Update,
+            std::slice::from_ref(&updates[0].target),
+            &|_| {},
+        )
+        .await
+        .expect("update typed npm target");
+    manager
+        .execute(
+            &config,
+            PackageAction::Uninstall,
+            &[packages[0].target()],
+            &|_| {},
+        )
+        .await
+        .expect("uninstall installed npm target");
+
+    assert_eq!(
+        fs::read_to_string(log)
+            .expect("npm Windows write log")
+            .lines()
+            .collect::<Vec<_>>(),
+        ["install -g @scope/tool@2.0.0", "uninstall -g @scope/tool",]
+    );
 }
 
 #[cfg(unix)]
