@@ -219,6 +219,8 @@ async fn windows_command_contract_preserves_inventory_size_and_write_arguments()
     registry.origin =
         Some(PackageOrigin::new("crates.io").with_reference("registry:crates.io/ripgrep"));
     let legacy = PackageTarget::new(manager.descriptor().id().clone(), "cargo-edit");
+    let mut uninstall = registry.clone();
+    uninstall.version = None;
 
     manager
         .execute(
@@ -242,7 +244,7 @@ async fn windows_command_contract_preserves_inventory_size_and_write_arguments()
         .execute(
             &config,
             PackageAction::Uninstall,
-            std::slice::from_ref(&registry),
+            std::slice::from_ref(&uninstall),
             &|_| {},
         )
         .await
