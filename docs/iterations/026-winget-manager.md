@@ -1,7 +1,7 @@
 # Iteration 026：Winget Manager 首轮原生契约
 
 - 日期：2026-08-01
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——Windows首批Winget manager
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -24,7 +24,7 @@
 - [x] 为search与updates增加separator/header-padding离线表格fixture，覆盖带空格名称、可选Match列和Unicode列宽。
 - [x] 冻结install/update/uninstall命令参数，拒绝跨manager target、缺失source identity、非法scope和不支持的版本重放。
 - [x] 将Winget HRESULT映射到typed `ManagerErrorKind`，覆盖permission、network、busy、reboot required、cancelled、protocol/no-match。
-- [ ] Windows原生CI运行Winget纯离线单元测试；真实Windows只读smoke保持显式ignored，不执行真实安装、升级或卸载。
+- [x] Windows原生CI运行Winget纯离线单元测试；真实Windows只读smoke保持显式ignored，不执行真实安装、升级或卸载。
 - [x] 串行通过Linux完整质量门禁和Windows GNU check，再由GitHub Actions复验Linux/Windows/macOS。
 
 ## 行为约束
@@ -55,7 +55,7 @@
 
 ## Git提交
 
-- 待实现提交后回填。
+- `473ea9c feat: add native Winget manager`
 
 ## 验证记录
 
@@ -65,7 +65,7 @@
 - `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
 - `cargo build --workspace --locked --jobs 1`通过。
 - `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
-- GitHub Actions原生Linux/Windows/macOS复验待提交后运行。
+- GitHub Actions CI run `30688164727`通过：macOS arm64 51s、Linux完整质量门禁2m21s、Windows x86_64 workspace与Winget离线测试4m11s。
 
 ## 遗留项 / 下一轮
 
