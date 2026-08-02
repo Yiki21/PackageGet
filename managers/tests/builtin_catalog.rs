@@ -5,7 +5,7 @@ use updater_manager_api::{
 };
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 15] = [
+const EXPECTED_IDS: [&str; 16] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
@@ -21,6 +21,7 @@ const EXPECTED_IDS: [&str; 15] = [
     "builtin:uv",
     "builtin:dotnet-tool",
     "builtin:rubygems",
+    "builtin:composer-global",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +170,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::MayRequireElevation,
         ),
+        (
+            "Composer Global",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
     ];
 
     for (manager, (display_name, category, platforms, authorization)) in
@@ -233,6 +240,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:uv",
             "builtin:dotnet-tool",
             "builtin:rubygems",
+            "builtin:composer-global",
         ]
     );
     assert_eq!(
@@ -247,6 +255,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:uv",
             "builtin:dotnet-tool",
             "builtin:rubygems",
+            "builtin:composer-global",
         ]
     );
 }

@@ -113,6 +113,9 @@ jobs:
       - name: Run RubyGems offline contract tests
         run: cargo test -p updater-managers --test rubygems_contract --locked
 
+      - name: Run Composer Global offline contract tests
+        run: cargo test -p updater-managers --test composer_contract --locked
+
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
         run: cargo test -p updater-managers --test homebrew_contract --locked
