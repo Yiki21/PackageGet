@@ -1,7 +1,7 @@
 # Iteration 039：Composer Global manager
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7——扩展Package Manager生态
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -21,10 +21,10 @@
 ## 实施计划
 
 - [x] 核对Composer 2.10.0 CLI帮助、真实空global home输出与上游Show/Search命令JSON合同。
-- [ ] 实现直接ComposerGlobalManager并接入Linux、Windows、macOS built-in catalog。
-- [ ] 增加三平台离线CLI合同、严格JSON parser、direct dependency与home ownership测试。
-- [ ] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读Composer smoke。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 实现直接ComposerGlobalManager并接入Linux、Windows、macOS built-in catalog。
+- [x] 增加三平台离线CLI合同、严格JSON parser、direct dependency与home ownership测试。
+- [x] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读Composer smoke。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -41,14 +41,33 @@
 
 - Iteration 038完成RubyGems manager，按ROADMAP进入Composer Global直接依赖身份合同。
 - 本机Composer 2.10.0确认global home可通过`global config home --absolute`发现，空global inventory/outdated返回JSON空数组；官方ShowCommand源码确认`--direct`按root requires过滤且JSON可提供`direct-dependency`、`version`、`latest`与`latest-status`。
+- 完成`builtin:composer-global`六项能力与三平台catalog接入；每次读写重新发现绝对home，后续命令绑定`COMPOSER_HOME`并移除可重定向manifest的`COMPOSER`环境变量。
+- 官方ShowCommand源码复核确认非空show/outdated结果为`{"installed":[...]}`，空结果才为`[]`；parser冻结这两种合同并拒绝非空顶层数组、重复identity和字段漂移。
+- `--direct`实际合并`require`与`require-dev`；实现同时解析两张根依赖表，只展示/更新`require`，显式跳过合法`require-dev`，但拒绝不属于任一根依赖集合的伪造条目。
+- typed origin以JSON冻结home、package和constraint；install只接受search origin，update/uninstall要求当前`composer.json.require`仍存在且constraint未漂移。
+- 首轮CI `30747158635`中Linux与macOS通过，Windows仅因CMD `%*`保留`"--format=json"`语法引号导致日志断言失败；生产读取、搜索和写命令均已成功。
+- 本机Wine复现同一Windows断言，日志归一化去除命令行语法引号后整份Windows合同4项通过、1项忽略；最终CI `30747439412`全绿：Linux 3m14s、Windows 3m00s、macOS 58s。
 
 ## Git提交
 
-- 待实现后补充。
+- `3ba1b24 docs: plan Composer Global manager iteration`
+- `2f86501 feat: add Composer Global manager`
+- `294d899 test: normalize Composer Windows argv logging`
 
 ## 验证记录
 
-- 待实现后补充。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：251项通过，20项按环境要求忽略。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --locked --jobs 1`：通过；仅打印既有Unix-only测试在Windows target下的cfg import warning，Composer无新增warning。
+- `cargo test -p updater-managers --test composer_contract --locked --jobs 1 -- --test-threads=1`：4项通过，1项忽略。
+- `cargo test -p updater-managers --lib composer --locked --jobs 1 -- --test-threads=1`：5项通过。
+- `cargo test -p updater-managers --test composer_contract --target x86_64-pc-windows-gnu --locked --jobs 1 --no-run`：Windows GNU合同编译通过。
+- Wine执行Windows GNU Composer合同：4项通过，1项忽略。
+- Composer真实只读smoke：1项通过，验证本机availability、global home、inventory/count、outdated与search，不执行写操作。
+- GitHub Actions CI `30747439412`：Linux、Windows、macOS全部通过。
 
 ## 遗留项 / 下一轮
 
