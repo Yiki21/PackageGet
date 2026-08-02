@@ -1,7 +1,7 @@
 # Iteration 037：Linux Snap manager
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7——扩展Package Manager生态
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -21,10 +21,10 @@
 ## 实施计划
 
 - [x] 核对snapd 2.76 CLI源码与官方文档中的list、refresh、find、write和Polkit合同。
-- [ ] 实现直接SnapManager并接入Linux built-in catalog。
-- [ ] 增加Linux离线CLI合同、严格parser与target拒绝测试。
-- [ ] 通过本地完整质量门禁和可用环境中的真实只读Snap smoke。
-- [ ] GitHub Actions在Linux原生runner全部通过。
+- [x] 实现直接SnapManager并接入Linux built-in catalog。
+- [x] 增加Linux离线CLI合同、严格parser与target拒绝测试。
+- [x] 通过本地完整质量门禁；本机没有snap/snapd，真实只读smoke保持显式opt-in且未运行。
+- [x] GitHub Actions在Linux原生runner执行独立Snap合同并通过，Windows/macOS portable check同步通过。
 
 ## 验收标准
 
@@ -32,7 +32,7 @@
 - installed与updates保留snap name、revision/version、system scope、tracking channel、confinement和refresh状态。
 - search保留stable channel、版本、publisher、summary与安装所需confinement。
 - install/update/uninstall argv完全由严格校验的typed target生成，且程序路径前不出现`pkexec`或Updater system helper。
-- malformed表格、重复identity、未知notes/origin、错manager/scope和版本固定target被严格拒绝。
+- malformed表格、重复identity、冲突confinement、非法origin、错manager/scope和版本固定target被严格拒绝；格式合法的新note token完整保留，避免随snapd扩展静默丢状态。
 - format/check/test/clippy/build和Linux原生CI无warning。
 
 ## 进度日志
@@ -41,14 +41,28 @@
 
 - Iteration 036完成Linux 0.3.0-beta.2发布，下一优先级进入Snap manager。
 - snapd 2.76源码确认`list`、`refresh --list`和`find`表格合同；官方授权文档确认状态变更由snapd REST API使用peer credentials与Polkit action `io.snapcraft.snapd.manage`控制。
+- 直接SnapManager进入Linux catalog，installed/update/search保留system scope、channel、confinement、refresh与原始notes；local Snap保持可见但不能伪装成store install target。
+- 首次CI run `30742548500`三平台通过，但Snap专项step被放在仅含Windows/macOS的portable matrix中而始终跳过；随后移入Linux quality job，避免只依赖workspace全测试的隐式覆盖。
+- 最终GitHub Actions run `30742663619`在Linux明确执行Snap专项合同，并与Windows、macOS全部通过。
 
 ## Git提交
 
-- 待实现后补充。
+- `b541d3c docs: plan Snap manager iteration`
+- `0eae27c feat: add Linux Snap manager`
+- `abbdbd8 ci: run Snap contract on Linux`
 
 ## 验证记录
 
-- 待实现后补充。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：233项通过，17项忽略。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
+- `cargo test -p updater-managers --test snap_contract --locked --jobs 1 -- --test-threads=1`：3项通过，1项真实宿主smoke忽略。
+- `cargo test -p updater-managers --lib snap --locked --jobs 1 -- --test-threads=1`：4项Snap parser/identity单元测试通过。
+- 本机未安装`snap`，因此没有执行`host_snap_read_only_smoke_is_explicitly_opt_in`；未进行任何真实Snap写操作。
+- GitHub Actions run `30742663619`：Linux 2m55s、Windows 2m38s、macOS 1m21s，全部通过；Linux独立Snap offline contract step通过。
 
 ## 遗留项 / 下一轮
 
