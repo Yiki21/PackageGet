@@ -1,7 +1,7 @@
 # Iteration 031：pnpm Windows 原生准入
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4——按实际平台能力注册可移植管理器
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -22,8 +22,8 @@
 - [x] 审计pnpm global listing、installed path、size、outdated、search与write边界。
 - [x] pnpm descriptor与内置目录新增Windows能力。
 - [x] 增加Windows原生pnpm离线合同并接入portable CI。
-- [ ] 串行通过本地完整质量门禁和Windows GNU交叉检查。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 串行通过本地完整质量门禁和Windows GNU交叉检查。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -39,14 +39,23 @@
 
 - Iteration 030完成npm Windows原生准入，GitHub Actions run `30693412188`通过。
 - 审计确认pnpm production路径未使用Unix专属API；global root、CLI package path与canonical containment合同可由Windows临时目录验证。
+- Windows原生runner一次通过`pnpm.cmd` availability、反斜杠JSON path、installed size、outdated、search与typed write合同。
 
 ## Git提交
 
-- 待记录。
+- `3c65873 feat: admit pnpm on Windows`
 
 ## 验证记录
 
-- 待记录。
+- `cargo fmt --all -- --check`通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`通过：217 passed，14 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
+- `cargo build --workspace --locked --jobs 1`通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`通过。
+- `cargo check -p updater-managers --test pnpm_contract --target x86_64-pc-windows-gnu --locked --jobs 1`通过且无warning。
+- `cargo test -p updater-managers --test pnpm_contract --locked --jobs 1 -- --test-threads=1`通过：9 passed，1 ignored。
+- GitHub Actions CI run `30733464338`通过：Linux完整质量门禁2m11s、Windows x86_64 workspace及manager lib/Cargo/Go/npm/pnpm原生离线合同2m27s、macOS arm64 workspace及Homebrew合同2m13s。
 
 ## 遗留项 / 下一轮
 
