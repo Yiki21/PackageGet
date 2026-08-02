@@ -13,7 +13,7 @@ license = "MIT"
 [package.metadata.generate-rpm]
 summary = "Graphical interface for multiple package managers"
 vendor = "Yiki21"
-version = "0.3.0~beta.2"
+version = "0.3.0~beta.3"
 release = "1"
 auto-req = "auto"
 require-sh = false

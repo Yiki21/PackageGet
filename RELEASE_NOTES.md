@@ -1,23 +1,26 @@
-# Updater 0.3.0-beta.2
+# Updater 0.3.0-beta.3
 
-`0.3.0-beta.2` is an unsigned Linux preview that expands the built-in manager catalog and freezes portable manager behavior on native Linux, Windows, and macOS runners.
+`0.3.0-beta.3` is an unsigned Linux preview that adds four manager contracts while keeping package identity, scope, source, and write operations explicit.
 
 ## Highlights
 
-- Adds `uv tool` management for installed tools, update discovery, install, update, and uninstall.
-- Adds current-user `.NET global tools` management with JSON inventory, NuGet metadata update discovery, tool-only search, and typed write targets.
-- Adds the first complete Winget manager contract for Windows source builds.
-- Admits Cargo, Go, npm, pnpm, and pipx on Windows with native command and filesystem fixtures; Homebrew remains natively verified on macOS.
-- Keeps manager package identity, source, scope, path containment, and write arguments strict across platforms.
-- Fixes pnpm's no-update exit-status handling and serializes only fixture contracts that share executable state while retaining normal CI parallelism.
+- Adds Linux Snap inventory, update discovery, search, install, update, and uninstall while preserving channel, confinement, revision, and refresh state.
+- Adds RubyGems management with explicit repository, `GEM_HOME`, installed-version, default-gem, and user/system scope boundaries.
+- Adds Composer Global management for direct runtime requirements in the active Composer home; project, development, and transitive dependencies remain outside its inventory.
+- Adds one explicitly selected current-user Nix profile on Linux and macOS, preserving profile element, original/locked flake, attribute, outputs, and store-path identity.
+- Filters Updates and Search sources by advertised capability, so managers without a truthful read-only contract are omitted instead of reported as failures.
+- Verifies the expanded catalog and write argv on native Linux, Windows, and macOS CI runners.
 - Release assets include `.deb`, `.rpm`, and Arch Linux `.pkg.tar.zst` packages plus `SHA256SUMS`.
 
 ## Compatibility
 
 - Configuration and activity history continue to use the direct schemas introduced in `0.3.0-beta.1`; unsupported legacy configuration opens the recovery flow without rewriting the original file.
 - System package writes require the helper and Polkit policy installed by a release package. Running only the GUI binary supports read-only workflows.
-- `uv tool` does not advertise search because the current CLI lacks a safe search contract that preserves configured private-index semantics.
-- `.NET global tools` manages only current-user global scope. Local manifests and arbitrary `--tool-path` installations remain separate.
+- Snap writes use the explicit snapd authorization path; custom executable paths are not promoted into a privileged command.
+- RubyGems preserves multiple installed versions and does not uninstall default gems as ordinary user packages.
+- Composer Global manages only direct `require` entries in one active Composer home.
+- Nix is not auto-enabled. Select one absolute user profile in Settings first; system/default profiles and duplicate manager IDs are rejected.
+- Nix does not advertise update inventory or search because `nix profile` has no read-only list-updates command or profile-scoped catalog.
 
 ## Preview Limits
 

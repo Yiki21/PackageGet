@@ -10,7 +10,18 @@ permissions:
   contents: read
 
 jobs:
+  validate-metadata:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate release metadata
+        run: scripts/validate-release-metadata.sh
+
   build-deb:
+    needs: validate-metadata
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +73,7 @@ jobs:
           if-no-files-found: error
 
   build-rpm:
+    needs: validate-metadata
     strategy:
       fail-fast: false
       matrix:
@@ -121,6 +133,7 @@ jobs:
           if-no-files-found: error
 
   build-arch:
+    needs: validate-metadata
     runs-on: ubuntu-latest
     container:
       image: quay.io/archlinux/archlinux:base-devel

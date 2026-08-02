@@ -157,4 +157,4 @@ Running the unpackaged GUI directly supports all read-only workflows. To exercis
 
 ## Linux preview status
 
-`0.3.0-beta.2` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
+`0.3.0-beta.3` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
