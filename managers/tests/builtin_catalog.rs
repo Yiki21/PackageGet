@@ -5,7 +5,7 @@ use updater_manager_api::{
 };
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 12] = [
+const EXPECTED_IDS: [&str; 13] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
@@ -18,6 +18,7 @@ const EXPECTED_IDS: [&str; 12] = [
     "builtin:pnpm",
     "builtin:pipx",
     "builtin:uv",
+    "builtin:dotnet-tool",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +149,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::None,
         ),
+        (
+            ".NET global tools",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
     ];
 
     for (manager, (display_name, category, platforms, authorization)) in
@@ -210,6 +217,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:pnpm",
             "builtin:pipx",
             "builtin:uv",
+            "builtin:dotnet-tool",
         ]
     );
     assert_eq!(
@@ -222,6 +230,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:pnpm",
             "builtin:pipx",
             "builtin:uv",
+            "builtin:dotnet-tool",
         ]
     );
 }
