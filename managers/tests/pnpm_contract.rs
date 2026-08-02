@@ -15,6 +15,8 @@ use updater_manager_api::{
 };
 use updater_managers::PnpmManager;
 
+static PNPM_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(unix)]
 fn fake_pnpm(script: &str) -> (TempDir, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -106,6 +108,7 @@ fn pnpm_descriptor_exposes_the_stable_public_contract() {
 #[cfg(windows)]
 #[tokio::test]
 async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let workspace = tempdir().expect("create pnpm Windows contract workspace");
     let root = workspace.path().join("global/5");
@@ -172,6 +175,7 @@ async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() 
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_preserves_scoped_identity_metadata_origin_and_strict_size() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let global = tempdir().expect("create global root");
     let scoped = global.path().join("instance/node_modules/@scope/tool");
@@ -227,6 +231,7 @@ exit 20
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_symlink_keeps_identity_without_following_size_target() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     use std::os::unix::fs::symlink;
 
     let manager = PnpmManager::new();
@@ -255,6 +260,7 @@ async fn installed_symlink_keeps_identity_without_following_size_target() {
 #[cfg(unix)]
 #[tokio::test]
 async fn duplicate_and_escaping_package_paths_are_rejected() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let first = tempdir().expect("create first root");
     let second = tempdir().expect("create second root");
@@ -296,6 +302,7 @@ async fn duplicate_and_escaping_package_paths_are_rejected() {
 #[cfg(unix)]
 #[tokio::test]
 async fn outdated_empty_object_and_scoped_updates_preserve_registry_origin() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let (_directory, executable) = fake_pnpm(
         r#"#!/bin/sh
@@ -350,6 +357,7 @@ exit 21
 #[cfg(unix)]
 #[tokio::test]
 async fn nonzero_outdated_is_failure_even_when_stdout_is_valid_json() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let (_directory, executable) = fake_pnpm(
         "#!/bin/sh\nprintf '{\"tool\":{\"current\":\"1.0.0\",\"latest\":\"2.0.0\"}}\\n'\nprintf 'registry unavailable\\n' >&2\nexit 22\n",
@@ -367,6 +375,7 @@ async fn nonzero_outdated_is_failure_even_when_stdout_is_valid_json() {
 #[cfg(unix)]
 #[tokio::test]
 async fn search_uses_typed_registry_origin_full_scope_and_bounded_argv() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let global = tempdir().expect("create empty global root");
     let script = format!(
@@ -401,6 +410,7 @@ exit 23
 #[cfg(unix)]
 #[tokio::test]
 async fn writes_freeze_scoped_specs_origins_and_global_commands() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let log_dir = tempdir().expect("create log directory");
     let log = log_dir.path().join("argv.log");
@@ -459,6 +469,7 @@ exit 0
 #[cfg(unix)]
 #[tokio::test]
 async fn malformed_json_and_target_origin_are_protocol_errors() {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let (_directory, executable) = fake_pnpm("#!/bin/sh\nprintf '{broken json\\n'\n");
     assert_eq!(
@@ -516,6 +527,7 @@ async fn malformed_json_and_target_origin_are_protocol_errors() {
 #[ignore = "requires host pnpm and performs read-only global list/outdated probes"]
 async fn host_pnpm_read_only_smoke_is_explicitly_opt_in()
 -> Result<(), updater_manager_api::ManagerError> {
+    let _guard = PNPM_CONTRACT_LOCK.lock().await;
     let manager = PnpmManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     assert!(manager.availability(&config).await?.is_available());
