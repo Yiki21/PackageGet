@@ -49,3 +49,4 @@
 | 033 | 已完成 | 阶段 4：pipx Windows 原生准入 | [033-pipx-windows.md](033-pipx-windows.md) |
 | 034 | 已完成 | 阶段 7：uv tool manager | [034-uv-tool-manager.md](034-uv-tool-manager.md) |
 | 035 | 已完成 | 阶段 7：.NET global tools manager | [035-dotnet-global-tools.md](035-dotnet-global-tools.md) |
+| 036 | 进行中 | 阶段 6/7：Linux 0.3.0-beta.2 发布 | [036-linux-beta-2-release.md](036-linux-beta-2-release.md) |
