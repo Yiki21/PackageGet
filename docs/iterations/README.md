@@ -48,3 +48,4 @@
 | 032 | 已完成 | 阶段 4/5：pnpm 初始化退出码修复 | [032-pnpm-outdated-exit-status.md](032-pnpm-outdated-exit-status.md) |
 | 033 | 已完成 | 阶段 4：pipx Windows 原生准入 | [033-pipx-windows.md](033-pipx-windows.md) |
 | 034 | 已完成 | 阶段 7：uv tool manager | [034-uv-tool-manager.md](034-uv-tool-manager.md) |
+| 035 | 进行中 | 阶段 7：.NET global tools manager | [035-dotnet-global-tools.md](035-dotnet-global-tools.md) |
