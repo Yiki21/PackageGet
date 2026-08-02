@@ -8,6 +8,8 @@ use updater_manager_api::{
 };
 use updater_managers::HomebrewManager;
 
+static HOMEBREW_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(unix)]
 fn fake_brew(script: &str) -> (TempDir, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -136,6 +138,7 @@ fn homebrew_descriptor_exposes_the_stable_public_contract() {
 
 #[tokio::test]
 async fn missing_custom_executable_is_an_offline_availability_result() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let directory = tempdir().expect("create temporary directory");
     let missing = directory.path().join("missing-brew");
@@ -156,6 +159,7 @@ async fn missing_custom_executable_is_an_offline_availability_result() {
 
 #[tokio::test]
 async fn empty_execution_emits_boundaries_without_running_homebrew() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     let events = Mutex::new(Vec::new());
@@ -183,6 +187,7 @@ async fn empty_execution_emits_boundaries_without_running_homebrew() {
 
 #[tokio::test]
 async fn mismatched_config_and_target_are_rejected_before_progress() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let wrong_config = ManagerConfig::new(
         updater_manager_api::ManagerId::parse("builtin:cargo").expect("valid Cargo ID"),
@@ -221,6 +226,7 @@ async fn mismatched_config_and_target_are_rejected_before_progress() {
 #[cfg(unix)]
 #[tokio::test]
 async fn public_reads_preserve_formula_cask_tap_and_multikeg_identity() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let (_directory, executable) = read_fixture_brew();
     let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(&executable);
@@ -333,6 +339,7 @@ async fn public_reads_preserve_formula_cask_tap_and_multikeg_identity() {
 #[cfg(unix)]
 #[tokio::test]
 async fn refresh_is_explicit_and_precedes_inventory_and_outdated() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let (_directory, executable) = read_fixture_brew();
     let log = executable.with_extension("log");
@@ -351,6 +358,7 @@ async fn refresh_is_explicit_and_precedes_inventory_and_outdated() {
 #[cfg(unix)]
 #[tokio::test]
 async fn public_execute_freezes_kind_tap_and_legacy_argv() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let (_directory, executable) = fake_brew(
         r#"#!/bin/sh
@@ -424,6 +432,7 @@ exit 0
 
 #[tokio::test]
 async fn invalid_scoped_targets_are_rejected_before_progress() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     let mut target = PackageTarget::new(manager.descriptor().id().clone(), "jq");
@@ -470,6 +479,7 @@ async fn invalid_scoped_targets_are_rejected_before_progress() {
 #[tokio::test]
 #[ignore = "requires a readable local Homebrew installation"]
 async fn host_homebrew_read_only_smoke() -> Result<(), updater_manager_api::ManagerError> {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
     let manager = HomebrewManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
 
