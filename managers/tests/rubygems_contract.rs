@@ -93,13 +93,9 @@ fn fake_gem() -> Fixture {
         r#"@echo off
 echo %GEM_HOME%^|%GEM_PATH%^|%*>>"{}"
 if "%1"=="--version" goto version
-if "%1"=="environment" if "%2"=="home" goto home
-if "%1"=="environment" if "%2"=="user_gemhome" goto userhome
-if "%1"=="environment" if "%2"=="path" goto path
-if "%1"=="list" if "%GEM_HOME%"=="{}" goto userlist
-if "%1"=="list" if "%GEM_HOME%"=="{}" goto systemlist
-if "%1"=="outdated" if "%GEM_HOME%"=="{}" goto useroutdated
-if "%1"=="outdated" if "%GEM_HOME%"=="{}" goto systemoutdated
+if "%1"=="environment" goto environment
+if "%1"=="list" goto list
+if "%1"=="outdated" goto outdated
 if "%1"=="search" goto search
 if "%1"=="install" goto write
 if "%1"=="update" goto write
@@ -108,6 +104,11 @@ exit /b 30
 :version
 echo 4.0.10
 exit /b 0
+:environment
+if "%2"=="home" goto home
+if "%2"=="user_gemhome" goto userhome
+if "%2"=="path" goto path
+exit /b 31
 :home
 echo {}
 exit /b 0
@@ -117,6 +118,10 @@ exit /b 0
 :path
 echo {}
 exit /b 0
+:list
+if "%GEM_HOME%"=="{}" goto userlist
+if "%GEM_HOME%"=="{}" goto systemlist
+exit /b 32
 :userlist
 echo rake (13.0.6, 12.3.3)
 echo     Installed at (13.0.6): {}
@@ -129,6 +134,10 @@ echo.
 echo rake (13.0.6)
 echo     Installed at: {}
 exit /b 0
+:outdated
+if "%GEM_HOME%"=="{}" goto useroutdated
+if "%GEM_HOME%"=="{}" goto systemoutdated
+exit /b 33
 :useroutdated
 echo rake (13.0.6 ^< 13.3.0)
 echo bundler (4.0.10 ^< 4.0.17)
@@ -144,16 +153,16 @@ exit /b 0
 exit /b 0
 "#,
         log.display(),
-        user.display(),
-        system.display(),
-        user.display(),
-        system.display(),
         system.display(),
         user.display(),
         gem_path.to_string_lossy(),
         user.display(),
+        system.display(),
+        user.display(),
         user.display(),
         system.display(),
+        system.display(),
+        user.display(),
         system.display(),
     );
     fs::write(&executable, script).expect("write fake gem command file");
