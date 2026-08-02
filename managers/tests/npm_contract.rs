@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 #[cfg(unix)]
-use std::sync::Mutex;
+use std::sync::Mutex as StdMutex;
 
 use tempfile::{TempDir, tempdir};
 #[cfg(unix)]
@@ -13,6 +13,8 @@ use updater_manager_api::{
 #[cfg(unix)]
 use updater_manager_api::{PackageOrigin, PackageScope, PackageTarget, ProgressEvent};
 use updater_managers::NpmManager;
+
+static NPM_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(unix)]
 fn fake_npm(script: &str) -> (TempDir, PathBuf) {
@@ -115,6 +117,7 @@ fn npm_descriptor_exposes_the_stable_public_contract() {
 #[cfg(windows)]
 #[tokio::test]
 async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let workspace = tempdir().expect("create npm Windows contract workspace");
     let root = workspace.path().join("node_modules");
@@ -182,6 +185,7 @@ async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() 
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_uses_typed_dependencies_and_preserves_scoped_identity() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create npm root fixture");
     let root = fixture.path().join("lib/node_modules");
@@ -246,6 +250,7 @@ exit 19
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_symlink_is_read_only_for_size_and_escape_is_rejected() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     use std::os::unix::fs::symlink;
 
     let manager = NpmManager::new();
@@ -295,6 +300,7 @@ exit 2
 #[cfg(unix)]
 #[tokio::test]
 async fn outdated_accepts_only_npm_no_update_and_update_status_contracts() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create npm root fixture");
     let root = fixture.path().join("node_modules");
@@ -347,6 +353,7 @@ exit 2
 #[cfg(unix)]
 #[tokio::test]
 async fn outdated_rejects_success_with_updates_and_ambiguous_arrays() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create npm root fixture");
     let root = fixture.path().join("node_modules");
@@ -387,6 +394,7 @@ async fn outdated_rejects_success_with_updates_and_ambiguous_arrays() {
 #[cfg(unix)]
 #[tokio::test]
 async fn search_uses_typed_array_registry_origin_and_option_delimiter() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create search fixture");
     let log = fixture.path().join("search.log");
@@ -435,6 +443,7 @@ exit 2
 #[cfg(unix)]
 #[tokio::test]
 async fn typed_writes_use_exact_scoped_spec_and_validate_registry() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create write fixture");
     let log = fixture.path().join("write.log");
@@ -456,7 +465,7 @@ exit 2
     target.origin = Some(
         PackageOrigin::new("https://registry.example.test/").with_reference("package:@scope/tool"),
     );
-    let events = Mutex::new(Vec::new());
+    let events = StdMutex::new(Vec::new());
 
     manager
         .execute(
@@ -498,6 +507,7 @@ exit 2
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_origin_allows_only_uninstall_and_legacy_update_uses_latest() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create write fixture");
     let log = fixture.path().join("write.log");
@@ -548,6 +558,7 @@ async fn installed_origin_allows_only_uninstall_and_legacy_update_uses_latest() 
 #[cfg(unix)]
 #[tokio::test]
 async fn malformed_name_and_protocol_output_are_not_silently_accepted() {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let fixture = tempdir().expect("create protocol fixture");
     let root = fixture.path().join("node_modules");
@@ -586,6 +597,7 @@ async fn malformed_name_and_protocol_output_are_not_silently_accepted() {
 #[ignore = "requires host npm and performs read-only global inventory and registry probes"]
 async fn host_npm_read_only_smoke_is_explicitly_opt_in()
 -> Result<(), updater_manager_api::ManagerError> {
+    let _guard = NPM_CONTRACT_LOCK.lock().await;
     let manager = NpmManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     assert!(manager.availability(&config).await?.is_available());
