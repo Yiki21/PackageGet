@@ -43,6 +43,9 @@ jobs:
       - name: Run deterministic tests
         run: cargo test --workspace --all-targets --locked
 
+      - name: Run Snap offline contract tests
+        run: cargo test -p updater-managers --test snap_contract --locked
+
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -106,10 +109,6 @@ jobs:
 
       - name: Run .NET global tool offline contract tests
         run: cargo test -p updater-managers --test dotnet_contract --locked
-
-      - name: Run Snap offline contract tests
-        if: runner.os == 'Linux'
-        run: cargo test -p updater-managers --test snap_contract --locked
 
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
