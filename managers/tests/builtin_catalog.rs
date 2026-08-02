@@ -5,12 +5,13 @@ use updater_manager_api::{
 };
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 13] = [
+const EXPECTED_IDS: [&str; 14] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
     "builtin:zypper",
     "builtin:flatpak",
+    "builtin:snap",
     "builtin:homebrew",
     "builtin:cargo",
     "builtin:go",
@@ -106,6 +107,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             ManagerCategory::Application,
             vec![Platform::Linux],
             AuthorizationClass::MayRequireElevation,
+        ),
+        (
+            "Snap",
+            ManagerCategory::Application,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
         ),
         (
             "Homebrew",

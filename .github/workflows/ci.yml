@@ -107,6 +107,10 @@ jobs:
       - name: Run .NET global tool offline contract tests
         run: cargo test -p updater-managers --test dotnet_contract --locked
 
+      - name: Run Snap offline contract tests
+        if: runner.os == 'Linux'
+        run: cargo test -p updater-managers --test snap_contract --locked
+
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
         run: cargo test -p updater-managers --test homebrew_contract --locked
