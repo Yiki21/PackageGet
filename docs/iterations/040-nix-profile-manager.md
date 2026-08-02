@@ -2,7 +2,7 @@
 
 ## 状态
 
-进行中
+已完成
 
 ## 目标
 
@@ -19,7 +19,7 @@
 - [x] 写操作按 target 串行调用 `nix profile install|upgrade|remove --profile <path>`，并复用 bounded progress/error contract。
 - [x] 不广告 `Updates` 或 `Search`：Nix profile 没有只读 update inventory，`nix search` 也没有单一 profile catalog 语义。
 - [x] 离线 parser、配置、命令构造、伪造 target 与 Linux/macOS 原生 fake CLI 合同全部通过。
-- [ ] 本地串行 workspace 门禁与Windows GNU compile check已通过；GitHub Actions Linux/Windows/macOS CI待推送验证。
+- [x] 本地串行 workspace 门禁、Windows GNU compile check、GitHub Actions Linux/Windows/macOS CI 全部通过。
 
 ## 非目标
 
@@ -48,6 +48,7 @@
 
 - `87eb32b docs: plan Nix profile manager iteration`
 - `ce7f85e feat: add explicit Nix profile manager`
+- `5ca2d27 docs: record Nix profile manager verification`
 
 ## 验证
 
@@ -59,7 +60,7 @@
 - `cargo check -p updater --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
 - `cargo fmt --all -- --check`与`git diff --check`：通过。
 - 当前开发宿主没有`nix`，未伪造真实宿主smoke结果；GitHub Actions原生CI结果见本轮最终提交。
-- GitHub Actions：待推送验证。
+- GitHub Actions CI `30749365137`：Linux、Windows、macOS全部通过；macOS与Windows均执行Nix profile contract，Linux通过完整format/check/test/clippy/build门禁。
 
 ## 遗留项 / 下一轮
 

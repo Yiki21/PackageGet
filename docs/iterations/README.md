@@ -53,4 +53,4 @@
 | 037 | 已完成 | 阶段 7：Linux Snap manager | [037-snap-manager.md](037-snap-manager.md) |
 | 038 | 已完成 | 阶段 7：RubyGems manager | [038-rubygems-manager.md](038-rubygems-manager.md) |
 | 039 | 已完成 | 阶段 7：Composer Global manager | [039-composer-global-manager.md](039-composer-global-manager.md) |
-| 040 | 进行中 | 阶段 7：Nix profile manager | [040-nix-profile-manager.md](040-nix-profile-manager.md) |
+| 040 | 已完成 | 阶段 7：Nix profile manager | [040-nix-profile-manager.md](040-nix-profile-manager.md) |
