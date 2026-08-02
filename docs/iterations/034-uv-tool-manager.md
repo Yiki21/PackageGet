@@ -1,7 +1,7 @@
 # Iteration 034：uv tool manager
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7——扩展Package Manager生态
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -21,8 +21,8 @@
 - [x] 核对当前uv CLI与官方文档的tool list/outdated/upgrade合同。
 - [x] 实现直接UvManager并接入三平台built-in catalog。
 - [x] 增加Linux/Windows/macOS可运行的离线CLI与文件系统合同。
-- [ ] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读uv smoke。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读uv smoke。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -39,14 +39,25 @@
 - Iteration 033完成pipx Windows准入；随后移除CI全局`--test-threads=1`，仅对实际共享fixture的Cargo合约做文件内串行，run `30735554809`在默认CI并行度下三平台通过。
 - 本机`uv 0.11.32`确认installed header为`name vVERSION (path)`，outdated header增加`[latest: VERSION]`；官方文档确认upgrade保留原安装约束。
 - 首次原生CI的Linux与macOS合同通过；Windows batch fixture在outdated行的复合`echo ... & exit`前写入一个尾随空格，严格parser按设计拒绝。fixture改为label dispatch，production解析合同不放宽。
+- GitHub Actions run `30736297578`最终在Linux、Windows和macOS全部通过；Windows与macOS原生runner均执行了uv离线CLI、路径、updates和write合同。
 
 ## Git提交
 
-- 待记录。
+- `0d2063f feat: add uv tool manager`
+- `23216ca test: normalize uv Windows outdated fixture`
 
 ## 验证记录
 
-- 待记录。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：220项通过，15项忽略。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
+- `cargo check -p updater-managers --test uv_contract --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
+- `cargo test -p updater-managers --test uv_contract --locked --jobs 1 -- --test-threads=1`：3项通过，1项真实宿主smoke忽略。
+- `cargo test -p updater-managers --test uv_contract host_uv_read_only_smoke_is_explicitly_opt_in --locked --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：本机真实`uv 0.11.32`只读inventory/count通过。
+- GitHub Actions run `30736297578`：Linux 2m13s、Windows 2m49s、macOS 1m54s，全部通过。
 
 ## 遗留项 / 下一轮
 
