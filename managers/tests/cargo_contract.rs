@@ -15,6 +15,8 @@ use updater_manager_api::{
 };
 use updater_managers::CargoManager;
 
+static CARGO_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(unix)]
 fn fake_cargo(script: &str) -> (TempDir, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -190,6 +192,7 @@ fn cargo_descriptor_exposes_the_stable_public_contract() {
 #[cfg(windows)]
 #[tokio::test]
 async fn windows_command_contract_preserves_inventory_size_and_write_arguments() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let workspace = tempdir().expect("create Cargo Windows contract workspace");
     let log = workspace.path().join("cargo.log");
@@ -266,6 +269,7 @@ async fn windows_command_contract_preserves_inventory_size_and_write_arguments()
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_preserves_registry_path_git_and_custom_registry_identity() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
     let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
@@ -328,6 +332,7 @@ async fn installed_preserves_registry_path_git_and_custom_registry_identity() {
 #[cfg(unix)]
 #[tokio::test]
 async fn updates_query_only_crates_io_and_freeze_registry_origin() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
     let (api, request_task) = serve_once(
@@ -361,6 +366,7 @@ async fn updates_query_only_crates_io_and_freeze_registry_origin() {
 #[cfg(unix)]
 #[tokio::test]
 async fn search_uses_structured_query_encoding_and_typed_schema() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
     let (api, request_task) = serve_once(
@@ -391,6 +397,7 @@ async fn search_uses_structured_query_encoding_and_typed_schema() {
 #[cfg(unix)]
 #[tokio::test]
 async fn registry_status_and_schema_failures_are_not_swallowed() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
 
@@ -400,7 +407,7 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
         .search(&config_with_api(&manager, &executable, &busy_api), "cargo")
         .await
         .expect_err("surface registry rate limit");
-    assert_eq!(busy.kind(), ManagerErrorKind::Busy);
+    assert_eq!(busy.kind(), ManagerErrorKind::Busy, "{busy:?}");
     busy_task.await.expect("busy request task");
 
     let (policy_api, policy_task) =
@@ -412,7 +419,7 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
         )
         .await
         .expect_err("surface registry policy refusal");
-    assert_eq!(policy.kind(), ManagerErrorKind::Busy);
+    assert_eq!(policy.kind(), ManagerErrorKind::Busy, "{policy:?}");
     policy_task.await.expect("policy request task");
 
     let (schema_api, schema_task) = serve_once(
@@ -427,13 +434,14 @@ async fn registry_status_and_schema_failures_are_not_swallowed() {
         )
         .await
         .expect_err("surface invalid registry schema");
-    assert_eq!(schema.kind(), ManagerErrorKind::Protocol);
+    assert_eq!(schema.kind(), ManagerErrorKind::Protocol, "{schema:?}");
     schema_task.await.expect("schema request task");
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn transient_response_body_failure_is_retried_once() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
     let (api, request_task) = serve_truncated_then(
@@ -454,6 +462,7 @@ async fn transient_response_body_failure_is_retried_once() {
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_size_uses_the_configured_install_root() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = inventory_cargo();
     let install_root = tempdir().expect("create Cargo install root");
@@ -472,6 +481,7 @@ async fn installed_size_uses_the_configured_install_root() {
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_freezes_registry_version_and_local_write_boundaries() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = fake_cargo(
         r#"#!/bin/sh
@@ -546,6 +556,7 @@ exit 0
 
 #[tokio::test]
 async fn empty_execution_emits_stable_boundaries() {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     let events = Mutex::new(Vec::new());
@@ -572,6 +583,7 @@ async fn empty_execution_emits_stable_boundaries() {
 #[tokio::test]
 #[ignore = "machine-specific host availability and installed inventory smoke test"]
 async fn host_cargo_read_only_smoke() -> Result<(), updater_manager_api::ManagerError> {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
     assert!(manager.availability(&config).await?.is_available());
@@ -592,6 +604,7 @@ async fn host_cargo_read_only_smoke() -> Result<(), updater_manager_api::Manager
 #[ignore = "requires read-only access to the live crates.io API"]
 async fn crates_io_bluetui_detail_read_only_smoke() -> Result<(), updater_manager_api::ManagerError>
 {
+    let _guard = CARGO_CONTRACT_LOCK.lock().await;
     let manager = CargoManager::new();
     let (_directory, executable) = fake_cargo(
         r#"#!/bin/sh
