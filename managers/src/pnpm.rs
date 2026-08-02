@@ -235,9 +235,29 @@ impl PackageManager for PnpmManager {
         self.validate_config(config)?;
         let pnpm = resolve_executable(config, PNPM_COMMAND);
         let spec = pnpm_command(&pnpm).args(["outdated", "--global", "--format", "json"]);
-        let output = run_success(&spec, "pnpm outdated query timed out").await?;
+        let output = timeout(COMMAND_TIMEOUT, run_output(&spec))
+            .await
+            .map_err(|_| {
+                ManagerError::new(ManagerErrorKind::Timeout, "pnpm outdated query timed out")
+                    .with_detail(spec.program().to_string_lossy())
+            })??;
+        if !matches!(output.status.code(), Some(0 | 1)) {
+            let detail = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Err(command_status_error(&spec, output.status, detail.trim()));
+        }
         let response: BTreeMap<String, PnpmOutdated> =
             decode_json(&output.stdout, "pnpm outdated response is invalid")?;
+        if output.status.code() == Some(1) && response.is_empty() {
+            return Err(command_status_error(
+                &spec,
+                output.status,
+                "pnpm outdated exited with status 1 without reporting updates",
+            ));
+        }
         let registry = self.registry(config).await?;
         let mut updates = Vec::with_capacity(response.len());
         for (name, detail) in response {

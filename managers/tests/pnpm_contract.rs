@@ -301,7 +301,7 @@ async fn outdated_empty_object_and_scoped_updates_preserve_registry_origin() {
         r#"#!/bin/sh
 if [ "$1" = "outdated" ] && [ "$2" = "--global" ] && [ "$3" = "--format" ] && [ "$4" = "json" ]; then
   if [ "${EMPTY:-}" = "1" ]; then printf '{}\n'; else printf '{"@scope/tool":{"current":"1.0.0","wanted":"1.1.0","latest":"2.0.0"}}\n'; fi
-  exit 0
+  exit 1
 fi
 if [ "$1" = "config" ]; then printf 'https://registry.example.test/\n'; exit 0; fi
 exit 21
@@ -333,6 +333,17 @@ exit 21
             .await
             .expect("empty pnpm updates")
             .is_empty()
+    );
+
+    let (_directory, executable) =
+        fake_pnpm("#!/bin/sh\nif [ \"$1\" = \"outdated\" ]; then echo '{}'; exit 1; fi\nexit 0\n");
+    assert_ne!(
+        manager
+            .updates(&config(&manager, &executable), false)
+            .await
+            .expect_err("reject status 1 without updates")
+            .kind(),
+        ManagerErrorKind::Protocol
     );
 }
 
