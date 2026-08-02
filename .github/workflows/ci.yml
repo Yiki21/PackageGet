@@ -41,7 +41,7 @@ jobs:
         run: cargo check --workspace --all-targets --locked
 
       - name: Run deterministic tests
-        run: cargo test --workspace --all-targets --locked -- --test-threads=1
+        run: cargo test --workspace --all-targets --locked
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -79,28 +79,28 @@ jobs:
 
       - name: Run Windows manager offline tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --lib --locked -- --test-threads=1
+        run: cargo test -p updater-managers --lib --locked
 
       - name: Run Cargo Windows offline contract tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test cargo_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test cargo_contract --locked
 
       - name: Run Go Windows offline contract tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test go_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test go_contract --locked
 
       - name: Run npm Windows offline contract tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test npm_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test npm_contract --locked
 
       - name: Run pnpm Windows offline contract tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test pnpm_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test pnpm_contract --locked
 
       - name: Run pipx Windows offline contract tests
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test pipx_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test pipx_contract --locked
 
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
-        run: cargo test -p updater-managers --test homebrew_contract --locked -- --test-threads=1
+        run: cargo test -p updater-managers --test homebrew_contract --locked
