@@ -1,7 +1,7 @@
 # Iteration 035：.NET global tools manager
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7——扩展Package Manager生态
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -20,10 +20,10 @@
 ## 实施计划
 
 - [x] 核对当前.NET CLI与官方文档的global list、NuGet exact search和write合同。
-- [ ] 实现直接DotnetToolManager并接入三平台built-in catalog。
-- [ ] 增加Linux/Windows/macOS可运行的离线CLI合同。
-- [ ] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读dotnet smoke。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 实现直接DotnetToolManager并接入三平台built-in catalog。
+- [x] 增加Linux/Windows/macOS可运行的离线CLI合同。
+- [x] 通过本地完整质量门禁、Windows GNU交叉检查与真实只读dotnet smoke。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -40,16 +40,30 @@
 
 - Iteration 034完成`uv tool` manager，GitHub Actions run `30736297578`在Linux、Windows和macOS原生runner全部通过。
 - 本机.NET SDK 10.0.302确认`tool list --global --format json`输出versioned JSON，`package search --exact-match --format json`按NuGet.Config源返回全部版本；`tool search`保持tool-only但不提供JSON格式。
+- 首次原生run `30738224120`的Windows与macOS `.NET`合同通过；Linux在既有pnpm symlink fixture并行执行时命中`Text file busy (os error 26)`，与本轮manager无关。pnpm合同改为文件内串行，未恢复CI全局单测试线程。
+- GitHub Actions run `30738366150`最终在Linux、Windows和macOS全部通过；Windows与macOS原生runner均执行了.NET离线global inventory、NuGet updates、tool search和write argv合同。
 
 ## Git提交
 
-- 待记录。
+- `388f026 feat: add dotnet global tools manager`
+- `ca319ea test: serialize pnpm fixture contracts`
 
 ## 验证记录
 
-- 待记录。
+- `cargo fmt --all -- --check`：通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`：通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`：227项通过，16项忽略。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`：通过。
+- `cargo build --workspace --locked --jobs 1`：通过。
+- `cargo check --workspace --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
+- `cargo check -p updater-managers --test dotnet_contract --target x86_64-pc-windows-gnu --locked --jobs 1`：通过。
+- `cargo test -p updater-managers --test dotnet_contract --locked --jobs 1 -- --test-threads=1`：3项通过，1项真实宿主smoke忽略。
+- `cargo test -p updater-managers --test dotnet_contract host_dotnet_read_only_smoke_is_explicitly_opt_in --locked --jobs 1 -- --ignored --exact --test-threads=1 --nocapture`：本机真实.NET SDK 10.0.302只读availability/inventory/count通过。
+- pnpm fixture修复后，`cargo test -p updater-managers --test pnpm_contract --locked --jobs 1`在默认测试并行度下9项通过，1项真实宿主smoke忽略；对应Clippy与Windows GNU合同check通过。
+- GitHub Actions run `30738366150`：Linux 2m15s、Windows 2m44s、macOS 1m54s，全部通过。
 
 ## 遗留项 / 下一轮
 
 - local manifest、任意`--tool-path`和多manager-instance identity不在本轮范围。
 - private authenticated NuGet source由dotnet CLI及用户NuGet.Config负责；Updater不读取或持有源凭证。
+- 下一轮按ROADMAP进入Linux Snap授权与channel/confinement/refresh状态合同。
