@@ -212,12 +212,15 @@ async fn native_contract_preserves_home_direct_identity_search_and_writes() {
         .expect("remove Composer global package");
 
     let lines = fs::read_to_string(&log).expect("read Composer argv log");
-    let normalized = lines.replace('\\', "/");
+    let normalized = lines.replace('\\', "/").replace('"', "");
     let expected_home = home.to_string_lossy().replace('\\', "/");
     assert!(normalized.contains("|global config home --absolute --no-interaction --no-ansi"));
-    assert!(normalized.contains(&format!(
-        "{expected_home}|global show --direct --format=json --no-interaction --no-ansi"
-    )));
+    assert!(
+        normalized.contains(&format!(
+            "{expected_home}|global show --direct --format=json --no-interaction --no-ansi"
+        )),
+        "unexpected Composer fixture log: {normalized:?}"
+    );
     assert!(normalized.contains(&format!(
         "{expected_home}|global outdated --direct --format=json --no-interaction --no-ansi"
     )));
