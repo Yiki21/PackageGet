@@ -1,7 +1,7 @@
 # Iteration 032：pnpm 初始化退出码修复
 
 - 日期：2026-08-02
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段4/5——便携manager真实CLI合同与初始化可靠性
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -21,8 +21,8 @@
 - [x] 使用本机asdf pnpm复现真实list/outdated输出与退出码。
 - [x] 修正pnpm outdated状态1更新语义。
 - [x] 增加状态1非空成功、状态0空集合成功、状态1空集合失败与其他非零状态失败的离线回归合同。
-- [ ] 串行通过完整本地质量门禁。
-- [ ] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
+- [x] 串行通过完整本地质量门禁。
+- [x] GitHub Actions在Linux、Windows和macOS原生runner全部通过。
 
 ## 验收标准
 
@@ -38,14 +38,22 @@
 - 应用菜单明确执行`/usr/bin/updater`，RPM数据库版本为`0.2.4-1`；用户确认当前`cargo run`同样复现，排除仅旧RPM二进制导致的问题。
 - 本机真实命令返回两项更新：`playwright 1.62.0 -> 1.62.1`、`@volcengine/cli 1.0.52 -> 1.1.0`，stdout为合法JSON、stderr为空、退出状态为1。
 - 同环境installed list返回状态0及合法global root/dependency JSON，根因收敛到outdated退出状态解释。
+- 修复后真实主机pnpm只读smoke通过availability、installed/count、outdated与search；将PATH收窄为桌面会话的系统目录后再次通过，确认asdf shim discovery与退出码解释均正常。
 
 ## Git提交
 
-- 待记录。
+- `6132882 fix: accept pnpm outdated update status`
 
 ## 验证记录
 
-- 待记录。
+- `cargo fmt --all -- --check`通过。
+- `cargo check --workspace --all-targets --locked --jobs 1`通过。
+- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`通过：217 passed，14 ignored。
+- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`通过。
+- `cargo build --workspace --locked --jobs 1`通过。
+- `cargo test -p updater-managers --test pnpm_contract --locked --jobs 1 -- --test-threads=1`通过：9 passed，1 ignored。
+- `cargo test -p updater-managers --test pnpm_contract host_pnpm_read_only_smoke_is_explicitly_opt_in --locked --jobs 1 -- --ignored --exact --test-threads=1`通过：真实pnpm只读链路1 passed；精简桌面PATH下复验同样通过。
+- GitHub Actions CI run `30734000047`通过：Linux完整质量门禁2m04s、Windows x86_64 workspace及manager原生离线合同2m32s、macOS arm64 workspace及Homebrew合同1m47s。
 
 ## 遗留项 / 下一轮
 

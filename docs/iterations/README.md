@@ -45,4 +45,4 @@
 | 029 | 已完成 | 阶段 4：Go Windows 原生准入 | [029-go-windows.md](029-go-windows.md) |
 | 030 | 已完成 | 阶段 4：npm Windows 原生准入 | [030-npm-windows.md](030-npm-windows.md) |
 | 031 | 已完成 | 阶段 4：pnpm Windows 原生准入 | [031-pnpm-windows.md](031-pnpm-windows.md) |
-| 032 | 进行中 | 阶段 4/5：pnpm 初始化退出码修复 | [032-pnpm-outdated-exit-status.md](032-pnpm-outdated-exit-status.md) |
+| 032 | 已完成 | 阶段 4/5：pnpm 初始化退出码修复 | [032-pnpm-outdated-exit-status.md](032-pnpm-outdated-exit-status.md) |
