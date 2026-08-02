@@ -52,3 +52,4 @@
 | 036 | 已完成 | 阶段 6/7：Linux 0.3.0-beta.2 发布 | [036-linux-beta-2-release.md](036-linux-beta-2-release.md) |
 | 037 | 已完成 | 阶段 7：Linux Snap manager | [037-snap-manager.md](037-snap-manager.md) |
 | 038 | 已完成 | 阶段 7：RubyGems manager | [038-rubygems-manager.md](038-rubygems-manager.md) |
+| 039 | 进行中 | 阶段 7：Composer Global manager | [039-composer-global-manager.md](039-composer-global-manager.md) |
