@@ -4,7 +4,7 @@ use updater_manager_api::{PackageManager, Platform};
 
 use crate::{
     AptManager, CargoManager, DnfManager, FlatpakManager, GoManager, HomebrewManager, NpmManager,
-    PacmanManager, PipxManager, PnpmManager, WingetManager, ZypperManager,
+    PacmanManager, PipxManager, PnpmManager, UvManager, WingetManager, ZypperManager,
 };
 
 /// Creates the direct built-in package managers for the current target.
@@ -43,5 +43,6 @@ fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
         Arc::new(NpmManager::new()),
         Arc::new(PnpmManager::new()),
         Arc::new(PipxManager::new()),
+        Arc::new(UvManager::new()),
     ]
 }

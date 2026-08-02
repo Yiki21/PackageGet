@@ -5,7 +5,7 @@ use updater_manager_api::{
 };
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 11] = [
+const EXPECTED_IDS: [&str; 12] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
@@ -17,6 +17,7 @@ const EXPECTED_IDS: [&str; 11] = [
     "builtin:npm",
     "builtin:pnpm",
     "builtin:pipx",
+    "builtin:uv",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +52,6 @@ fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
         for capability in [
             ManagerCapability::Installed,
             ManagerCapability::Updates,
-            ManagerCapability::Search,
             ManagerCapability::Install,
             ManagerCapability::Update,
             ManagerCapability::Uninstall,
@@ -62,6 +62,14 @@ fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
                 descriptor.id()
             );
         }
+        assert_eq!(
+            descriptor
+                .capabilities()
+                .contains(ManagerCapability::Search),
+            descriptor.id().as_str() != "builtin:uv",
+            "{} search capability does not match its implemented contract",
+            descriptor.id()
+        );
     }
 }
 
@@ -134,6 +142,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::None,
         ),
+        (
+            "uv tool",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
     ];
 
     for (manager, (display_name, category, platforms, authorization)) in
@@ -195,6 +209,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:npm",
             "builtin:pnpm",
             "builtin:pipx",
+            "builtin:uv",
         ]
     );
     assert_eq!(
@@ -206,6 +221,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:npm",
             "builtin:pnpm",
             "builtin:pipx",
+            "builtin:uv",
         ]
     );
 }

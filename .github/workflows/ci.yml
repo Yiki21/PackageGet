@@ -101,6 +101,9 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test pipx_contract --locked
 
+      - name: Run uv tool offline contract tests
+        run: cargo test -p updater-managers --test uv_contract --locked
+
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
         run: cargo test -p updater-managers --test homebrew_contract --locked
