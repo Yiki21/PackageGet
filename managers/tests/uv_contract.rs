@@ -70,9 +70,13 @@ echo {}
 exit /b 0
 
 :list
-if "%3"=="--outdated" echo example-tool v1.0.0 [latest: 2.0.0] ^({}\example-tool^) & exit /b 0
+if "%3"=="--outdated" goto outdated
 echo example-tool v1.0.0 ^({}\example-tool^)
 echo - example-tool ^({}\bin\example-tool.exe^)
+exit /b 0
+
+:outdated
+echo example-tool v1.0.0 [latest: 2.0.0] ^({}\example-tool^)
 exit /b 0
 
 :write

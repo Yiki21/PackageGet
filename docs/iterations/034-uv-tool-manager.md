@@ -38,6 +38,7 @@
 
 - Iteration 033完成pipx Windows准入；随后移除CI全局`--test-threads=1`，仅对实际共享fixture的Cargo合约做文件内串行，run `30735554809`在默认CI并行度下三平台通过。
 - 本机`uv 0.11.32`确认installed header为`name vVERSION (path)`，outdated header增加`[latest: VERSION]`；官方文档确认upgrade保留原安装约束。
+- 首次原生CI的Linux与macOS合同通过；Windows batch fixture在outdated行的复合`echo ... & exit`前写入一个尾随空格，严格parser按设计拒绝。fixture改为label dispatch，production解析合同不放宽。
 
 ## Git提交
 
