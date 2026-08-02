@@ -22,8 +22,10 @@ It is especially useful when:
 
 Currently supported package managers:
 
-- System packages: `apt`, `dnf`, `pacman`, `zypper`
-- Applications and development tools: `flatpak`, `homebrew`, `cargo`, `go`, `npm`, `pnpm`, `pipx`
+- System packages: `apt`, `dnf`, `pacman`, `zypper`, and Windows `winget`
+- Applications and development tools: `flatpak`, `homebrew`, `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, and `.NET global tools`
+
+The built-in catalog is filtered by platform. Linux release packages expose the applicable Linux managers. Windows and macOS manager contracts are tested on native CI runners, but packaged installers for those platforms are not published yet.
 
 ## Features
 
@@ -151,4 +153,4 @@ Running the unpackaged GUI directly supports all read-only workflows. To exercis
 
 ## Linux preview status
 
-`0.3.0-beta.1` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
+`0.3.0-beta.2` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.

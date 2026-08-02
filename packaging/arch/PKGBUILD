@@ -1,6 +1,6 @@
 # Maintainer: zhangyi <zy1772696711@gmail.com>
 pkgname=updater
-pkgver=0.3.0beta.1
+pkgver=0.3.0beta.2
 pkgrel=1
 pkgdesc='Desktop GUI for managing packages across multiple package managers'
 arch=('x86_64')
@@ -20,14 +20,16 @@ depends=(
 makedepends=('cargo' 'clang' 'mold')
 optdepends=(
   'cargo: manage globally installed Rust crates'
+  'dotnet-sdk: manage current-user .NET global tools'
   'flatpak: manage Flatpak applications'
   'go: manage globally installed Go tools'
   'npm: manage global npm packages'
   'pnpm: manage global pnpm packages'
   'python-pipx: manage pipx applications'
+  'uv: manage Python applications installed with uv tool'
   'xdg-desktop-portal: native file and directory chooser integration'
 )
-_upstream_version='0.3.0-beta.1'
+_upstream_version='0.3.0-beta.2'
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/Build-v$_upstream_version.tar.gz")
 b2sums=('SKIP')
 

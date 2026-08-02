@@ -4414,7 +4414,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "updater"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "directories-next",
  "env_logger",
@@ -4435,7 +4435,7 @@ dependencies = [
 
 [[package]]
 name = "updater-manager-api"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "async-trait",
  "serde",
@@ -4445,7 +4445,7 @@ dependencies = [
 
 [[package]]
 name = "updater-managers"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4463,7 +4463,7 @@ dependencies = [
 
 [[package]]
 name = "updater_core"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "async-trait",
  "directories-next",
