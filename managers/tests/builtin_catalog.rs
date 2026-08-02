@@ -125,7 +125,7 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
         (
             "pnpm",
             ManagerCategory::Development,
-            vec![Platform::Linux, Platform::MacOs],
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::None,
         ),
         (
@@ -204,6 +204,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:cargo",
             "builtin:go",
             "builtin:npm",
+            "builtin:pnpm",
         ]
     );
 }

@@ -43,7 +43,7 @@ impl PnpmManager {
             ManagerId::parse(PNPM_ID).expect("pnpm manager ID must remain valid"),
             "pnpm",
             ManagerCategory::Development,
-            SupportedPlatforms::from([Platform::Linux, Platform::MacOs]),
+            SupportedPlatforms::from([Platform::Linux, Platform::Windows, Platform::MacOs]),
             ManagerCapabilities::from([
                 ManagerCapability::Installed,
                 ManagerCapability::Updates,

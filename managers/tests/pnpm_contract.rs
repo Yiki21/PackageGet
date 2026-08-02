@@ -1,9 +1,17 @@
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf};
+
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use tempfile::{TempDir, tempdir};
+#[cfg(windows)]
+use updater_manager_api::ManagerAvailability;
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerConfig, ManagerErrorKind, PackageAction,
-    PackageManager, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager, Platform,
+};
+#[cfg(unix)]
+use updater_manager_api::{
+    ManagerErrorKind, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
 };
 use updater_managers::PnpmManager;
 
@@ -19,6 +27,58 @@ fn fake_pnpm(script: &str) -> (TempDir, PathBuf) {
     (directory, executable)
 }
 
+#[cfg(windows)]
+fn windows_pnpm(root: &std::path::Path, log: &std::path::Path) -> (TempDir, PathBuf) {
+    let directory = tempdir().expect("create fake pnpm directory");
+    let executable = directory.path().join("pnpm.cmd");
+    let root_json = root.to_string_lossy().replace('\\', "\\\\");
+    let package_json = root
+        .join("node_modules/@scope/tool")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let script = format!(
+        r#"@echo off
+if "%1"=="--version" goto version
+if "%1"=="list" goto list
+if "%1"=="config" goto config
+if "%1"=="outdated" goto outdated
+if "%1"=="search" goto search
+if "%1"=="add" goto write
+if "%1"=="remove" goto write
+exit /b 20
+
+:version
+echo 11.5.1
+exit /b 0
+
+:list
+echo [{{"path":"{}","private":true,"dependencies":{{"@scope/tool":{{"from":"@scope/tool","version":"1.0.0","description":"Scoped tool","path":"{}"}}}}}}]
+exit /b 0
+
+:config
+echo https://registry.example.test/
+exit /b 0
+
+:outdated
+echo {{"@scope/tool":{{"current":"1.0.0","wanted":"1.1.0","latest":"2.0.0"}}}}
+exit /b 0
+
+:search
+echo [{{"name":"@scope/tool","version":"2.0.0","description":"scoped"}}]
+exit /b 0
+
+:write
+echo %*>>"{}"
+exit /b 0
+"#,
+        root_json,
+        package_json,
+        log.display()
+    );
+    fs::write(&executable, script).expect("write fake pnpm command file");
+    (directory, executable)
+}
+
 fn config(manager: &PnpmManager, executable: &PathBuf) -> ManagerConfig {
     ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable)
 }
@@ -30,6 +90,7 @@ fn pnpm_descriptor_exposes_the_stable_public_contract() {
     assert_eq!(descriptor.id().as_str(), "builtin:pnpm");
     assert_eq!(descriptor.display_name(), "pnpm");
     assert_eq!(descriptor.authorization(), &AuthorizationHint::None);
+    assert!(descriptor.platforms().contains(Platform::Windows));
     for capability in [
         ManagerCapability::Installed,
         ManagerCapability::Updates,
@@ -40,6 +101,72 @@ fn pnpm_descriptor_exposes_the_stable_public_contract() {
     ] {
         assert!(descriptor.capabilities().contains(capability));
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_contract_preserves_scoped_paths_registry_and_write_arguments() {
+    let manager = PnpmManager::new();
+    let workspace = tempdir().expect("create pnpm Windows contract workspace");
+    let root = workspace.path().join("global/5");
+    let package = root.join("node_modules/@scope/tool");
+    fs::create_dir_all(&package).expect("create scoped pnpm package");
+    fs::write(package.join("index.js"), b"scope").expect("write scoped pnpm package");
+    let log = workspace.path().join("pnpm.log");
+    let (_directory, executable) = windows_pnpm(&root, &log);
+    let config = config(&manager, &executable);
+
+    assert!(matches!(
+        manager
+            .availability(&config)
+            .await
+            .expect("pnpm availability"),
+        ManagerAvailability::Available { version: Some(version) } if version == "11.5.1"
+    ));
+    let packages = manager.installed(&config).await.expect("pnpm inventory");
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].name, "@scope/tool");
+    assert_eq!(packages[0].size, Some(5));
+
+    let updates = manager.updates(&config, false).await.expect("pnpm updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "@scope/tool");
+    assert_eq!(updates[0].available_version, "2.0.0");
+
+    let search = manager
+        .search(&config, "@scope/tool")
+        .await
+        .expect("pnpm search");
+    assert_eq!(search.len(), 1);
+    assert_eq!(search[0].name, "@scope/tool");
+    assert_eq!(search[0].version, "1.0.0");
+
+    manager
+        .execute(
+            &config,
+            PackageAction::Update,
+            std::slice::from_ref(&updates[0].target),
+            &|_| {},
+        )
+        .await
+        .expect("update typed pnpm target");
+    manager
+        .execute(
+            &config,
+            PackageAction::Uninstall,
+            &[packages[0].target()],
+            &|_| {},
+        )
+        .await
+        .expect("uninstall installed pnpm target");
+
+    assert_eq!(
+        fs::read_to_string(log)
+            .expect("pnpm Windows write log")
+            .lines()
+            .collect::<Vec<_>>(),
+        ["add -g @scope/tool@2.0.0", "remove -g @scope/tool"]
+    );
 }
 
 #[cfg(unix)]

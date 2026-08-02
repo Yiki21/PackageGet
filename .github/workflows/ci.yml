@@ -93,6 +93,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test npm_contract --locked -- --test-threads=1
 
+      - name: Run pnpm Windows offline contract tests
+        if: runner.os == 'Windows'
+        run: cargo test -p updater-managers --test pnpm_contract --locked -- --test-threads=1
+
       - name: Run Homebrew offline contract tests
         if: runner.os == 'macOS'
         run: cargo test -p updater-managers --test homebrew_contract --locked -- --test-threads=1

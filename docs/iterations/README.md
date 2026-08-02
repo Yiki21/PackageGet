@@ -44,3 +44,4 @@
 | 028 | 已完成 | 阶段 4：Cargo Windows 原生准入 | [028-cargo-windows.md](028-cargo-windows.md) |
 | 029 | 已完成 | 阶段 4：Go Windows 原生准入 | [029-go-windows.md](029-go-windows.md) |
 | 030 | 已完成 | 阶段 4：npm Windows 原生准入 | [030-npm-windows.md](030-npm-windows.md) |
+| 031 | 进行中 | 阶段 4：pnpm Windows 原生准入 | [031-pnpm-windows.md](031-pnpm-windows.md) |
