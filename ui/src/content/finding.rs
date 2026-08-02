@@ -604,7 +604,11 @@ impl Finding {
         };
 
         let manager_filter: iced::Element<'_, Message> = {
-            let all_managers = shared::configured_managers(pm_config);
+            let all_managers = shared::configured_managers_with_capability(
+                pm_config,
+                catalog,
+                ManagerCapability::Search,
+            );
             let filters: iced::Element<'_, Message> = if all_managers.is_empty() {
                 iced::widget::text("No package managers detected")
                     .size(13)

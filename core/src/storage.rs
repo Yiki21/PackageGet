@@ -192,6 +192,18 @@ impl Config {
                     manager.id
                 )));
             }
+            if manager.id.as_str() == "builtin:nix-profile" {
+                let profile = manager
+                    .settings
+                    .get("profile")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CoreError::ConfigError(
+                            "settings for manager builtin:nix-profile require profile".into(),
+                        )
+                    })?;
+                validate_nix_profile_path(profile)?;
+            }
         }
 
         Ok(())
@@ -213,6 +225,35 @@ impl Config {
     pub fn manager_executable(&self, id: &ManagerId) -> Option<PathBuf> {
         self.manager(id)
             .and_then(|manager| manager.executable().map(Path::to_path_buf))
+    }
+
+    /// Returns the explicitly configured Nix profile path.
+    #[must_use]
+    pub fn nix_profile(&self) -> Option<&str> {
+        let id = ManagerId::parse("builtin:nix-profile")
+            .expect("built-in Nix profile manager ID must be valid");
+        self.manager(&id)
+            .and_then(|manager| manager.settings.get("profile"))
+            .and_then(Value::as_str)
+    }
+
+    /// Sets the single user profile owned by the configured Nix manager.
+    pub fn set_nix_profile(&mut self, profile: String) -> CoreResult<()> {
+        validate_nix_profile_path(&profile)?;
+        let id = ManagerId::parse("builtin:nix-profile")
+            .expect("built-in Nix profile manager ID must be valid");
+        let manager = self.manager_mut(&id).ok_or_else(|| {
+            CoreError::ConfigError(
+                "cannot configure Nix profile settings when builtin:nix-profile is disabled".into(),
+            )
+        })?;
+        let settings = manager.settings.as_object_mut().ok_or_else(|| {
+            CoreError::ConfigError(
+                "settings for manager builtin:nix-profile must be a JSON object".into(),
+            )
+        })?;
+        settings.insert("profile".to_owned(), Value::String(profile));
+        Ok(())
     }
 
     /// Returns the configured Go binary directory, when explicitly set.
@@ -277,6 +318,29 @@ fn temporary_path(path: &Path) -> PathBuf {
         std::process::id(),
         sequence
     ))
+}
+
+fn validate_nix_profile_path(profile: &str) -> CoreResult<()> {
+    let path = Path::new(profile);
+    if profile.trim() != profile
+        || profile.is_empty()
+        || profile.chars().any(char::is_control)
+        || !path.is_absolute()
+    {
+        return Err(CoreError::ConfigError(
+            "Nix profile path must be a non-empty absolute path".into(),
+        ));
+    }
+    let normalized = profile.replace('\\', "/");
+    if normalized == "/nix/var/nix/profiles/system"
+        || normalized.starts_with("/nix/var/nix/profiles/system-")
+        || normalized == "/nix/var/nix/profiles/default"
+    {
+        return Err(CoreError::ConfigError(
+            "Nix system profiles cannot be configured as a user profile".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn config_io_error(action: &str, path: &Path, error: std::io::Error) -> CoreError {
@@ -427,6 +491,44 @@ mod tests {
         config.set_go_bin_dir(None).expect("clear Go bin directory");
         assert_eq!(config.go_bin_dir(), None);
         assert_eq!(config.managers[0].settings, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn nix_profile_is_explicit_and_owned_by_manager_settings() {
+        let mut config = Config {
+            managers: vec![manager("builtin:nix-profile")],
+            ..Config::default()
+        };
+
+        assert!(config.validate().is_err());
+        config
+            .set_nix_profile("/home/test/.local/state/nix/profiles/profile".to_owned())
+            .expect("set explicit Nix profile");
+        assert_eq!(
+            config.nix_profile(),
+            Some("/home/test/.local/state/nix/profiles/profile")
+        );
+        config.validate().expect("validate configured Nix profile");
+    }
+
+    #[test]
+    fn nix_profile_rejects_relative_and_system_paths() {
+        let mut config = Config {
+            managers: vec![manager("builtin:nix-profile")],
+            ..Config::default()
+        };
+
+        for profile in [
+            "profiles/current",
+            "/nix/var/nix/profiles/system",
+            "/nix/var/nix/profiles/system-42-link",
+            "/nix/var/nix/profiles/default",
+        ] {
+            assert!(
+                config.set_nix_profile(profile.to_owned()).is_err(),
+                "unexpectedly accepted {profile}"
+            );
+        }
     }
 
     #[tokio::test]

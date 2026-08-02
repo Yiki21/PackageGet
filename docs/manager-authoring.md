@@ -113,7 +113,7 @@ UI catalog与执行任务共享同一个`ManagerRegistry`。已注册且已配�
 - ID使用稳定的小写namespace格式，例如`org.example:packages`；发布后不要复用ID表示另一种manager。
 - descriptor只广告已经实现并有测试保护的capability。
 - `ManagerConfig.id`和每个`PackageTarget.manager_id`必须在边界验证。
-- Config要求`ManagerConfig.settings`为JSON object；manager拥有其内部schema并负责typed解析与校验，core只负责不透明保存。
+- Config要求`ManagerConfig.settings`为JSON object；manager拥有其内部schema并负责typed解析与运行时校验。带一等Settings UI的built-in可以在core额外冻结必填持久化不变量，例如Nix的单一绝对user profile；其他manager-private字段仍由core不透明保存。
 - manager settings升级必须由manager自身保持兼容；不要把manager私有字段提升为Config顶层字段。
 - `PackageInfo.name`与`PackageTarget.name`使用manager真实write identity；展示别名放在metadata/origin中。
 - 所有write target先整组验证，再开始命令与progress，防止部分写入。

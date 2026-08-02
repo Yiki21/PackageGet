@@ -5,7 +5,7 @@ use updater_manager_api::{
 };
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 16] = [
+const EXPECTED_IDS: [&str; 17] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
@@ -22,6 +22,7 @@ const EXPECTED_IDS: [&str; 16] = [
     "builtin:dotnet-tool",
     "builtin:rubygems",
     "builtin:composer-global",
+    "builtin:nix-profile",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +48,7 @@ fn catalog_contains_every_direct_builtin_in_stable_product_order() {
 }
 
 #[test]
-fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
+fn catalog_is_object_safe_and_descriptors_advertise_truthful_operations() {
     let managers: Vec<Arc<dyn PackageManager>> = builtin_managers_for(Platform::Linux);
 
     for manager in managers {
@@ -55,7 +56,6 @@ fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
         assert!(descriptor.id().as_str().starts_with("builtin:"));
         for capability in [
             ManagerCapability::Installed,
-            ManagerCapability::Updates,
             ManagerCapability::Install,
             ManagerCapability::Update,
             ManagerCapability::Uninstall,
@@ -69,8 +69,19 @@ fn catalog_is_object_safe_and_all_descriptors_advertise_complete_operations() {
         assert_eq!(
             descriptor
                 .capabilities()
+                .contains(ManagerCapability::Updates),
+            descriptor.id().as_str() != "builtin:nix-profile",
+            "{} updates capability does not match its implemented contract",
+            descriptor.id()
+        );
+        assert_eq!(
+            descriptor
+                .capabilities()
                 .contains(ManagerCapability::Search),
-            descriptor.id().as_str() != "builtin:uv",
+            !matches!(
+                descriptor.id().as_str(),
+                "builtin:uv" | "builtin:nix-profile"
+            ),
             "{} search capability does not match its implemented contract",
             descriptor.id()
         );
@@ -176,6 +187,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             vec![Platform::Linux, Platform::Windows, Platform::MacOs],
             AuthorizationClass::None,
         ),
+        (
+            "Nix profile",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
     ];
 
     for (manager, (display_name, category, platforms, authorization)) in
@@ -241,6 +258,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:dotnet-tool",
             "builtin:rubygems",
             "builtin:composer-global",
+            "builtin:nix-profile",
         ]
     );
     assert_eq!(

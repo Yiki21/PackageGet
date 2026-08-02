@@ -1342,6 +1342,20 @@ impl App {
         let configured: HashSet<_> = Self::configured_managers(&self.pm_config)
             .into_iter()
             .collect();
+        let update_managers: HashSet<_> = content::configured_managers_with_capability(
+            &self.pm_config,
+            &self.manager_catalog,
+            ManagerCapability::Updates,
+        )
+        .into_iter()
+        .collect();
+        let search_managers: HashSet<_> = content::configured_managers_with_capability(
+            &self.pm_config,
+            &self.manager_catalog,
+            ManagerCapability::Search,
+        )
+        .into_iter()
+        .collect();
         let preserve_context = reason.preserves_page_context();
 
         if preserve_context {
@@ -1352,12 +1366,12 @@ impl App {
             );
             Self::reconcile_selected_managers(
                 &mut self.updates_info.selected_managers,
-                &configured,
+                &update_managers,
                 true,
             );
             Self::reconcile_selected_managers(
                 &mut self.finding_info.selected_managers,
-                &configured,
+                &search_managers,
                 true,
             );
         } else {
@@ -1366,10 +1380,10 @@ impl App {
                 &configured,
                 false,
             );
-            self.updates_info.selected_managers = configured.clone();
+            self.updates_info.selected_managers = update_managers;
             Self::reconcile_selected_managers(
                 &mut self.finding_info.selected_managers,
-                &configured,
+                &search_managers,
                 false,
             );
         }
@@ -1411,7 +1425,11 @@ impl App {
         config: updater_core::Config,
         generation: u64,
     ) -> Task<Message> {
-        let managers = Self::configured_managers(&config);
+        let managers = content::configured_managers_with_capability(
+            &config,
+            &self.manager_catalog,
+            ManagerCapability::Installed,
+        );
         let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.installed_info
             .installed_packages
@@ -1472,7 +1490,11 @@ impl App {
         config: updater_core::Config,
         generation: u64,
     ) -> Task<Message> {
-        let managers = Self::configured_managers(&config);
+        let managers = content::configured_managers_with_capability(
+            &config,
+            &self.manager_catalog,
+            ManagerCapability::Updates,
+        );
         let manager_set: HashSet<_> = managers.iter().cloned().collect();
         self.updates_info
             .updates_by_manager

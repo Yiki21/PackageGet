@@ -432,7 +432,11 @@ impl Updates {
                 {
                     return Action::None;
                 }
-                let pm_types = shared::configured_managers(pm_config);
+                let pm_types = shared::configured_managers_with_capability(
+                    pm_config,
+                    catalog,
+                    ManagerCapability::Updates,
+                );
 
                 if pm_types.is_empty() {
                     return Action::None;
@@ -465,7 +469,11 @@ impl Updates {
                 {
                     return Action::None;
                 }
-                let managers = shared::configured_managers(pm_config);
+                let managers = shared::configured_managers_with_capability(
+                    pm_config,
+                    catalog,
+                    ManagerCapability::Updates,
+                );
                 if managers.is_empty() {
                     return Action::None;
                 }
@@ -648,7 +656,12 @@ impl Updates {
             .values()
             .map(|(count, _)| *count)
             .sum();
-        let configured_managers = shared::configured_managers(pm_config).len();
+        let configured_managers = shared::configured_managers_with_capability(
+            pm_config,
+            catalog,
+            ManagerCapability::Updates,
+        )
+        .len();
         let can_refresh = !info.is_updating
             && self.pending_update.is_none()
             && self.update_all_refreshing.is_empty();
@@ -740,6 +753,7 @@ impl Updates {
             shared::loading_manager_filter_view(
                 pm_config,
                 catalog,
+                ManagerCapability::Updates,
                 if info.is_loading_count {
                     "Loading update information..."
                 } else {
@@ -747,7 +761,11 @@ impl Updates {
                 },
             )
         } else {
-            let managers = shared::configured_managers(pm_config);
+            let managers = shared::configured_managers_with_capability(
+                pm_config,
+                catalog,
+                ManagerCapability::Updates,
+            );
 
             if managers.is_empty() {
                 return iced::widget::column![

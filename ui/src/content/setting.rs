@@ -77,6 +77,10 @@ pub enum Message {
     SelectedGoBinDir(FileHandle),
     /// Go-bin directory clear message.
     ClearGoBinDir,
+    /// Nix profile path dialog message.
+    OpenNixProfileDialog,
+    /// Nix profile path selection message.
+    SelectedNixProfile(FileHandle),
     /// Revert all unsaved settings changes.
     RevertChanges,
     /// Change the preferred application appearance.
@@ -220,7 +224,13 @@ impl Settings {
                             .then_some(manager.clone())
                     })
                     .collect();
-                self.availability = results.into_iter().collect();
+                self.availability = results
+                    .into_iter()
+                    .filter(|(manager, _)| {
+                        manager.as_str() != "builtin:nix-profile"
+                            || self.draft.manager(manager).is_some()
+                    })
+                    .collect();
                 Action::None
             }
             Message::AddDetectedManager(manager) => {
@@ -250,7 +260,10 @@ impl Settings {
                 let managers_to_validate = config
                     .managers
                     .iter()
-                    .filter(|configured| configured.executable().is_some())
+                    .filter(|configured| {
+                        configured.executable().is_some()
+                            || configured.id.as_str() == "builtin:nix-profile"
+                    })
                     .filter(|configured| catalog.supports_current_platform(&configured.id))
                     .filter_map(|configured| {
                         registry
@@ -387,6 +400,49 @@ impl Settings {
             Message::ClearGoBinDir => {
                 if let Err(error) = self.draft.set_go_bin_dir(None) {
                     self.save_status = Some(SaveStatus::Error(error.to_string()));
+                }
+                Action::None
+            }
+            Message::OpenNixProfileDialog => {
+                let task = Task::future(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Select Nix User Profile")
+                        .pick_file(),
+                )
+                .then(|handle| match handle {
+                    Some(file_handle) => Task::done(Message::SelectedNixProfile(file_handle)),
+                    None => Task::done(Message::CancelSelection),
+                });
+                Action::Run(task)
+            }
+            Message::SelectedNixProfile(file_handle) => {
+                let id = ManagerId::parse("builtin:nix-profile")
+                    .expect("built-in Nix profile manager ID must remain valid");
+                let added_manager = self.draft.manager(&id).is_none();
+                if added_manager {
+                    self.draft.managers.push(ManagerConfig::new(id.clone()));
+                }
+                match file_handle.path().to_str() {
+                    Some(path) => match self.draft.set_nix_profile(path.to_owned()) {
+                        Ok(()) => {
+                            self.availability.remove(&id);
+                            self.save_status = None;
+                        }
+                        Err(error) => {
+                            if added_manager {
+                                self.draft.managers.retain(|manager| manager.id != id);
+                            }
+                            self.save_status = Some(SaveStatus::Error(error.to_string()));
+                        }
+                    },
+                    None => {
+                        if added_manager {
+                            self.draft.managers.retain(|manager| manager.id != id);
+                        }
+                        self.save_status = Some(SaveStatus::Error(
+                            "Nix profile path must be valid UTF-8".to_owned(),
+                        ));
+                    }
                 }
                 Action::None
             }
@@ -662,13 +718,18 @@ impl Settings {
                     .map(|manager| {
                         let detected_in_path = self.detected_in_path.contains(manager);
 
-                        let action_message = if detected_in_path {
+                        let is_nix_profile = manager.as_str() == "builtin:nix-profile";
+                        let action_message = if is_nix_profile {
+                            Message::OpenNixProfileDialog
+                        } else if detected_in_path {
                             Message::AddDetectedManager(manager.clone())
                         } else {
                             Message::OpenDialog(manager.clone())
                         };
 
-                        let action_label = if detected_in_path {
+                        let action_label = if is_nix_profile {
+                            "Choose Profile"
+                        } else if detected_in_path {
                             "Add"
                         } else {
                             "Select Path"
@@ -859,6 +920,10 @@ impl Settings {
             content_items.extend(self.view_go_bin_config(pm_config));
         }
 
+        if is_configured && manager.as_str() == "builtin:nix-profile" {
+            content_items.extend(self.view_nix_profile_config(pm_config));
+        }
+
         shared::styled_container(column(content_items).spacing(8)).into()
     }
 
@@ -898,6 +963,31 @@ impl Settings {
         };
 
         [info_elem, buttons.into()].into_iter()
+    }
+
+    fn view_nix_profile_config(
+        &self,
+        pm_config: &updater_core::Config,
+    ) -> impl Iterator<Item = iced::Element<'static, Message>> {
+        use iced::widget::{row, text};
+
+        let profile = pm_config
+            .nix_profile()
+            .map(|path| format!("Profile: {path}"))
+            .unwrap_or_else(|| "Profile: not configured".to_owned());
+        let info = text(profile)
+            .size(12)
+            .font(theme::FONT_MONO)
+            .style(theme::text_on_surface_alt)
+            .into();
+        let actions = row![Self::secondary_button(
+            "Change Profile",
+            13.0,
+            Some(Message::OpenNixProfileDialog),
+        )]
+        .spacing(10)
+        .into();
+        [info, actions].into_iter()
     }
 
     /// Action buttons row.
@@ -1112,6 +1202,32 @@ mod tests {
         assert_eq!(settings.draft.manager_executable(&manager), None);
         assert!(!settings.availability.contains_key(&manager));
         assert!(settings.is_dirty());
+    }
+
+    #[test]
+    fn unconfigured_nix_scan_waits_for_explicit_profile_selection() {
+        let active = updater_core::Config::default();
+        let manager = manager_id("builtin:nix-profile");
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings {
+            is_detecting: true,
+            ..Settings::default()
+        };
+
+        let action = settings.update(
+            Message::FinishDetect(vec![(
+                manager.clone(),
+                Err("Nix profile settings are invalid".to_owned()),
+            )]),
+            &active,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(!settings.is_detecting);
+        assert!(!settings.detected_in_path.contains(&manager));
+        assert!(!settings.availability.contains_key(&manager));
+        assert!(settings.draft.manager(&manager).is_none());
     }
 
     #[test]

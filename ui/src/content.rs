@@ -15,7 +15,7 @@ pub use finding::FindingInfo;
 pub(crate) use installed::Installed;
 pub use installed::InstalledInfo;
 pub use setting::Message as SettingsMessage;
-pub(crate) use shared::{open_directory, search_input_id};
+pub(crate) use shared::{configured_managers_with_capability, open_directory, search_input_id};
 pub(crate) use updater_core::CancellationToken;
 pub use updater_core::OperationOutcome;
 pub use updates::UpdatesInfo;

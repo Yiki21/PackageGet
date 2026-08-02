@@ -637,6 +637,7 @@ impl Installed {
             shared::loading_manager_filter_view(
                 pm_config,
                 catalog,
+                ManagerCapability::Installed,
                 if info.is_loading_count {
                     "Loading package information..."
                 } else {

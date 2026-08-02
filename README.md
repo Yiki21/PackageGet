@@ -23,9 +23,12 @@ It is especially useful when:
 Currently supported package managers:
 
 - System packages: `apt`, `dnf`, `pacman`, `zypper`, and Windows `winget`
-- Applications and development tools: `flatpak`, `homebrew`, `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, and `.NET global tools`
+- Applications: `flatpak`, `snap`, and `homebrew`
+- Development tools: `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
 
-The built-in catalog is filtered by platform. Linux release packages expose the applicable Linux managers. Windows and macOS manager contracts are tested on native CI runners, but packaged installers for those platforms are not published yet.
+The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget` plus the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners, but packaged installers for those platforms are not published yet.
+
+Nix is deliberately not auto-enabled: choose one user profile from Settings first. Its initial contract supports installed packages and explicit install/update/uninstall operations while preserving flake identity. It does not advertise update inventory or package search, because `nix profile` has no read-only list-updates command or profile-scoped catalog.
 
 ## Features
 
@@ -37,6 +40,7 @@ The built-in catalog is filtered by platform. Linux release packages expose the 
 - Manages enabled package managers from the settings page
 - Supports custom executable paths for package managers
 - Supports a custom binary installation directory for Go packages
+- Supports one explicitly selected current-user Nix profile on Linux and macOS
 - Saves configuration in the user configuration directory for use across restarts
 
 ## Build requirements
@@ -134,7 +138,7 @@ On first launch, the application automatically detects package managers availabl
 2. Select packages and run a batch update.
 3. Open the installed packages page to browse, search, sort, or remove packages in batches.
 4. Open the search page to find and install new packages across package managers.
-5. Open the settings page to enable or disable package managers and configure custom executable paths.
+5. Open the settings page to enable or disable package managers, configure custom executable paths, and select a Nix user profile when needed.
 
 Additional notes:
 

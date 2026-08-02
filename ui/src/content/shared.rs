@@ -7,7 +7,9 @@ use std::{
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Border, Element};
 use updater_core::Config;
-use updater_manager_api::{AuthorizationHint, ManagerId, PackageInfo, PackageTarget, Platform};
+use updater_manager_api::{
+    AuthorizationHint, ManagerCapability, ManagerId, PackageInfo, PackageTarget, Platform,
+};
 
 use crate::{manager_catalog::ManagerCatalog, theme};
 
@@ -312,6 +314,21 @@ pub fn configured_managers(pm_config: &Config) -> Vec<ManagerId> {
         .managers
         .iter()
         .map(|manager| manager.id.clone())
+        .collect()
+}
+
+pub fn configured_managers_with_capability(
+    pm_config: &Config,
+    catalog: &ManagerCatalog,
+    capability: ManagerCapability,
+) -> Vec<ManagerId> {
+    configured_managers(pm_config)
+        .into_iter()
+        .filter(|manager| {
+            catalog
+                .descriptor(manager)
+                .is_some_and(|descriptor| descriptor.capabilities().contains(capability))
+        })
         .collect()
 }
 
@@ -808,12 +825,13 @@ where
 pub fn loading_manager_filter_view<'a, Message>(
     pm_config: &Config,
     catalog: &'a ManagerCatalog,
+    capability: ManagerCapability,
     loading_text: &'static str,
 ) -> Element<'a, Message>
 where
     Message: 'a,
 {
-    let all_managers = configured_managers(pm_config);
+    let all_managers = configured_managers_with_capability(pm_config, catalog, capability);
 
     if all_managers.is_empty() {
         return empty_filter_view("No package managers detected");
@@ -956,7 +974,7 @@ mod tests {
     use std::ffi::{OsStr, OsString};
 
     use super::{DesktopOpenCommand, DesktopTargetKind, desktop_open_commands, validate_http_url};
-    use updater_manager_api::{ManagerId, Platform};
+    use updater_manager_api::{ManagerCapability, ManagerConfig, ManagerId, Platform};
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
@@ -1010,6 +1028,35 @@ mod tests {
         assert!(validate_http_url("file:///etc/passwd").is_err());
         assert!(validate_http_url("javascript:alert(1)").is_err());
         assert!(validate_http_url("https://user:secret@example.com/").is_err());
+    }
+
+    #[test]
+    fn manager_sources_are_filtered_by_advertised_capability() {
+        let config = updater_core::Config {
+            managers: ["builtin:cargo", "builtin:uv", "builtin:nix-profile"]
+                .into_iter()
+                .map(|id| ManagerConfig::new(manager_id(id)))
+                .collect(),
+            ..updater_core::Config::default()
+        };
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        assert_eq!(
+            super::configured_managers_with_capability(
+                &config,
+                &catalog,
+                ManagerCapability::Search,
+            ),
+            [manager_id("builtin:cargo")]
+        );
+        assert_eq!(
+            super::configured_managers_with_capability(
+                &config,
+                &catalog,
+                ManagerCapability::Updates,
+            ),
+            [manager_id("builtin:cargo"), manager_id("builtin:uv")]
+        );
     }
 
     #[test]
