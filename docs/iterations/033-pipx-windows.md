@@ -38,6 +38,7 @@
 
 - Iteration 032完成pnpm真实初始化退出码修复，最终GitHub Actions run `30734098003`通过。
 - 审计确认pipx production路径未使用Unix专属API；Windows特有风险集中在`.cmd`执行、反斜杠绝对目录、venv direct-child containment及包含`==`的install参数。
+- 首次Windows原生运行已通过availability、inventory、PyPI updates/search与三类write执行，仅fixture使用原始`%*`记录到Rust为含`==`参数添加的cmd安全引号；改用`%~1/%~2`记录cmd解析后的逻辑argv，production命令构造不变。
 
 ## Git提交
 

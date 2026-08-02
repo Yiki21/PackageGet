@@ -56,7 +56,7 @@ echo {{"pipx_spec_version":"0.1","venvs":{{"tool-env":{{"metadata":{{"main_packa
 exit /b 0
 
 :write
-echo %*>>"{}"
+echo %~1 %~2>>"{}"
 exit /b 0
 "#,
         home.display(),
