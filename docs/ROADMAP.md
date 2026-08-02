@@ -12,7 +12,7 @@
 已确认的产品决策
 
 - 平台支持分阶段交付：首轮保留 Linux Wayland，新增 Linux X11、Windows、macOS GUI；Windows 首批接入 Winget，macOS 首批迁移并验证现有
-  Homebrew。Chocolatey、Scoop、macOS softwareupdate/MAS 后续通过同一接口添加。
+  Homebrew。Chocolatey、Scoop 与 macOS MAS 后续通过同一接口添加；softwareupdate 待 manager-level transaction、pending state 与 reboot-required 模型落地后接入。
 - PackageManager 首轮采用编译时扩展：第三方 crate 依赖公共 API、实现 trait 并显式注册；不直接加载 Rust 动态库，也不在本轮承诺免重编译的运行时插件。
 - 依赖按风险分组升级到实施时最新稳定版：Iced/窗口后端单独迁移，其他依赖分组更新；继续提交 Cargo.lock 保证发布可复现。
 - 首轮提供未签名发布物：Linux .deb/.rpm/Arch `.pkg.tar.zst`、Windows 便携包与安装包、macOS .app/.dmg；清楚标注未签名限制。Windows 签名和 Apple signing/notarization 在证书与 CI
@@ -189,7 +189,7 @@ GUI/桌面层
 关键文件：ui/src/theme.rs、ui/src/content/shared.rs、ui/src/sidebar.rs、ui/src/app.rs、ui/src/content/{finding,updates,installed,setting,workflows}.rs、ui/s
 rc/status_panel.rs、ui/src/activity.rs、manager API package model、command executor。
 
-阶段 6：跨平台发布物、文档和后续 manager
+### 阶段 6：跨平台发布物、文档和后续 manager
 
 1.  保留并验证 Linux amd64/arm64 .deb/.rpm与Arch x86_64 `.pkg.tar.zst`，同时打包Polkit policy与固定特权helper并验证X11/Wayland desktop entry；修正 RPM package 选择器。
 2.  通过通用 Rust 二进制打包工具配置 Windows x86_64 便携 .zip 与安装包，增加 .ico、版本信息和 application identity。
@@ -198,8 +198,19 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 4.  .github/workflows/package.yml 增加 Windows/macOS runner、架构化 artifact 名称、checksums 和 release 汇总；签名/notarization job
     预留清晰输入，但在没有证书/secrets 时不伪装成已签名发布。
 5.  更新 README 和 manager-authoring 文档，按平台列出实际支持的 manager、提权模型、安装方式和限制。
-6.  后续独立增量通过同一 registry 接入 Chocolatey、Scoop、macOS softwareupdate/MAS；若将来需要免重编译插件，另建带版本协商、权限、超时和隔离的子进程
-    JSON/Wasm 协议，不直接加载不稳定 Rust ABI 动态库。
+6.  后续独立增量通过同一 registry 接入 Chocolatey、Scoop 与 macOS MAS；softwareupdate 在阶段 7 要求的 manager-level transaction、pending state 与 reboot-required 模型落地后接入。若将来需要免重编译插件，另建带版本协商、权限、超时和隔离的子进程 JSON/Wasm 协议，不直接加载不稳定 Rust ABI 动态库。
+
+### 阶段 7：扩展 Package Manager 生态
+
+本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
+
+1.  第一优先级新增 `uv tool`，首批覆盖 installed、updates、install、update 和 uninstall，使用 `uv tool list --outdated` 获取更新；只有在搜索能够尊重用户配置的 Python index 时才广告 search，不硬编码 PyPI 结果覆盖私有源语义。实现优先复用 pipx 已验证的包模型和测试边界，但不共享只使用一次的解析包装。
+2.  新增 `.NET global tools`，首批只管理 current-user global scope，使用 `dotnet tool list --global --format json` 读取已安装工具，并通过 NuGet 版本元数据发现更新，不能用真实 update 命令充当只读探测；同时覆盖 search、install、update 和 uninstall。local tool manifest 与任意 `--tool-path` 暂不混入同一列表；availability 必须实际执行 CLI，正确处理 asdf 等 shim 存在但当前未选择 SDK 的情况。
+3.  新增 Linux `Snap` application manager，覆盖 installed、updates、search、install、update 和 uninstall，并保留 channel、confinement 与自动刷新状态。所有需要授权的写操作必须通过 snapd 的明确授权路径或扩展后的固定 Polkit helper 执行，不能把用户配置的可执行路径直接提升为 root。
+4.  随后新增 RubyGems 与 Composer Global。RubyGems 必须区分 user/system `GEM_HOME` 与多版本安装；Composer 只管理 `$COMPOSER_HOME` 中的直接全局依赖并优先解析结构化输出，不能把项目依赖或传递依赖伪装成独立全局工具。
+5.  在上述 manager 稳定后评估 `Nix profile`。首批只支持明确配置的单一用户 profile，并保留 flake/source identity；多 profile 支持必须先引入独立 manager instance identity，不能通过重复 `ManagerId` 绕过现有 Config 唯一性约束。
+6.  较低优先级候选包括 Bun Global、Krew、LuaRocks，以及面向新增发行版构建目标的 APK、XBPS、Portage、eopkg 和 swupd。`paru`/`yay` 只能作为 Pacman/AUR 的显式替代后端评估，不能与 Pacman 默认同时展示重复包；安装流程必须保留 PKGBUILD 审阅和交互安全边界。
+7.  以下工具在领域模型扩展前不作为普通 PackageManager 接入：Conda/Mamba/Micromamba 需要 environment identity 与多实例配置；asdf/mise/rustup 需要独立 runtime/toolchain manager 模型；rpm-ostree 与 macOS softwareupdate 需要 manager-level transaction、pending deployment 和 reboot-required 状态。AppImage 在没有统一可信的搜索、安装和更新协议前不列为 manager。
 
 验证方案
 
