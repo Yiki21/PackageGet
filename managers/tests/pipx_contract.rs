@@ -1,4 +1,7 @@
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf};
+
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use tempfile::{TempDir, tempdir};
 use tokio::{
@@ -7,9 +10,11 @@ use tokio::{
     task::JoinHandle,
 };
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerConfig, ManagerErrorKind, PackageAction,
-    PackageManager, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager,
+    PackageOrigin, PackageScope, PackageTarget, Platform,
 };
+#[cfg(unix)]
+use updater_manager_api::{ManagerErrorKind, ProgressEvent};
 use updater_managers::PipxManager;
 
 #[cfg(unix)]
@@ -21,6 +26,43 @@ fn fake_pipx(script: &str) -> (TempDir, PathBuf) {
     fs::write(&executable, script).expect("write fake pipx executable");
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
         .expect("mark fake pipx executable");
+    (directory, executable)
+}
+
+#[cfg(windows)]
+fn windows_pipx(home: &std::path::Path, log: &std::path::Path) -> (TempDir, PathBuf) {
+    let directory = tempdir().expect("create fake pipx directory");
+    let executable = directory.path().join("pipx.cmd");
+    let script = format!(
+        r#"@echo off
+if "%1"=="--version" goto version
+if "%1"=="environment" goto environment
+if "%1"=="list" goto list
+if "%1"=="install" goto write
+if "%1"=="upgrade" goto write
+if "%1"=="uninstall" goto write
+exit /b 30
+
+:version
+echo 1.15.0
+exit /b 0
+
+:environment
+echo {}
+exit /b 0
+
+:list
+echo {{"pipx_spec_version":"0.1","venvs":{{"tool-env":{{"metadata":{{"main_package":{{"package":"Example_Tool","package_or_url":"example-tool==1.0.0","package_version":"1.0.0","pinned":false,"pip_args":[]}}}}}}}}}}
+exit /b 0
+
+:write
+echo %*>>"{}"
+exit /b 0
+"#,
+        home.display(),
+        log.display()
+    );
+    fs::write(&executable, script).expect("write fake pipx command file");
     (directory, executable)
 }
 
@@ -90,6 +132,7 @@ exit 30
     fake_pipx(&script)
 }
 
+#[cfg(unix)]
 fn create_inventory_home() -> TempDir {
     let home = tempdir().expect("create PIPX_HOME");
     let tool = home.path().join("venvs/tool-env");
@@ -108,6 +151,7 @@ fn pipx_descriptor_exposes_the_stable_public_contract() {
     assert_eq!(descriptor.id().as_str(), "builtin:pipx");
     assert_eq!(descriptor.display_name(), "pipx");
     assert_eq!(descriptor.authorization(), &AuthorizationHint::None);
+    assert!(descriptor.platforms().contains(Platform::Windows));
     for capability in [
         ManagerCapability::Installed,
         ManagerCapability::Updates,
@@ -118,6 +162,113 @@ fn pipx_descriptor_exposes_the_stable_public_contract() {
     ] {
         assert!(descriptor.capabilities().contains(capability));
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_contract_preserves_venv_paths_identity_pypi_and_write_arguments() {
+    let manager = PipxManager::new();
+    let home = tempdir().expect("create Windows PIPX_HOME");
+    let venv = home.path().join("venvs/tool-env");
+    fs::create_dir_all(&venv).expect("create Windows pipx venv");
+    fs::write(venv.join("tool.py"), b"12345").expect("write Windows pipx venv file");
+    let log = home.path().join("pipx.log");
+    let (_directory, executable) = windows_pipx(home.path(), &log);
+
+    let (updates_api, updates_task) = serve_once(
+        "200 OK",
+        r#"{"info":{"name":"example-tool","version":"2.0.0","summary":"tool"}}"#,
+    )
+    .await;
+    let updates_config = config_with_api(&manager, &executable, &updates_api);
+    assert!(
+        manager
+            .availability(&updates_config)
+            .await
+            .expect("pipx availability")
+            .is_available()
+    );
+    let packages = manager
+        .installed(&updates_config)
+        .await
+        .expect("pipx inventory");
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].name, "tool-env");
+    assert_eq!(packages[0].version, "1.0.0");
+    assert_eq!(packages[0].size, Some(5));
+    assert_eq!(packages[0].scope, PackageScope::User);
+    assert_eq!(
+        packages[0].origin,
+        Some(
+            PackageOrigin::new("PyPI")
+                .with_reference("registry:venv=tool-env;distribution=Example_Tool")
+        )
+    );
+
+    let updates = manager
+        .updates(&updates_config, false)
+        .await
+        .expect("pipx updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "tool-env");
+    assert_eq!(updates[0].available_version, "2.0.0");
+    updates_task.await.expect("pipx update metadata request");
+
+    let (search_api, search_task) = serve_once(
+        "200 OK",
+        r#"{"info":{"name":"example-tool","version":"2.0.0","summary":"tool"}}"#,
+    )
+    .await;
+    let search = manager
+        .search(
+            &config_with_api(&manager, &executable, &search_api),
+            "Example.Tool",
+        )
+        .await
+        .expect("pipx exact search");
+    assert_eq!(search.len(), 1);
+    assert_eq!(search[0].name, "example-tool");
+    assert_eq!(search[0].version, "1.0.0");
+    search_task.await.expect("pipx search metadata request");
+
+    let mut install = PackageTarget::new(manager.descriptor().id().clone(), "example-tool");
+    install.scope = PackageScope::User;
+    install.version = Some("2.1.0".to_owned());
+    install.origin =
+        Some(PackageOrigin::new("PyPI").with_reference("registry:distribution=example-tool"));
+    manager
+        .execute(&updates_config, PackageAction::Install, &[install], &|_| {})
+        .await
+        .expect("install pipx distribution");
+    manager
+        .execute(
+            &updates_config,
+            PackageAction::Update,
+            std::slice::from_ref(&updates[0].target),
+            &|_| {},
+        )
+        .await
+        .expect("upgrade pipx venv");
+    manager
+        .execute(
+            &updates_config,
+            PackageAction::Uninstall,
+            &[packages[0].target()],
+            &|_| {},
+        )
+        .await
+        .expect("uninstall pipx venv");
+    assert_eq!(
+        fs::read_to_string(log)
+            .expect("pipx Windows write log")
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "install example-tool==2.1.0",
+            "upgrade tool-env",
+            "uninstall tool-env",
+        ]
+    );
 }
 
 #[cfg(unix)]

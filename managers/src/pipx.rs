@@ -45,7 +45,7 @@ impl PipxManager {
             ManagerId::parse(PIPX_ID).expect("pipx manager ID must remain valid"),
             "pipx",
             ManagerCategory::Development,
-            SupportedPlatforms::from([Platform::Linux, Platform::MacOs]),
+            SupportedPlatforms::from([Platform::Linux, Platform::Windows, Platform::MacOs]),
             ManagerCapabilities::from([
                 ManagerCapability::Installed,
                 ManagerCapability::Updates,
