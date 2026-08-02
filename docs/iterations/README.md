@@ -46,4 +46,4 @@
 | 030 | 已完成 | 阶段 4：npm Windows 原生准入 | [030-npm-windows.md](030-npm-windows.md) |
 | 031 | 已完成 | 阶段 4：pnpm Windows 原生准入 | [031-pnpm-windows.md](031-pnpm-windows.md) |
 | 032 | 已完成 | 阶段 4/5：pnpm 初始化退出码修复 | [032-pnpm-outdated-exit-status.md](032-pnpm-outdated-exit-status.md) |
-| 033 | 进行中 | 阶段 4：pipx Windows 原生准入 | [033-pipx-windows.md](033-pipx-windows.md) |
+| 033 | 已完成 | 阶段 4：pipx Windows 原生准入 | [033-pipx-windows.md](033-pipx-windows.md) |
