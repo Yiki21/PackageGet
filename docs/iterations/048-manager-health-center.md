@@ -1,7 +1,7 @@
 # Iteration 048：Package Manager Health Center
 
 - 日期：2026-08-03
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7 Package Manager 生态扩展的运行时可观测性基线
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -27,10 +27,11 @@
 ## 验收
 
 - Health stale generation、取消 token、运行时 degraded 和诊断脱敏均有单元测试；Sidebar badge 优先级有单元测试。
-- `cargo check -p updater --all-targets --all-features --locked --jobs 1`、定向 Health/Sidebar tests 和 clippy 已验证；完整 workspace 门禁及 CI/Package 结果待本轮提交后记录。
+- `cargo check -p updater --all-targets --all-features --locked --jobs 1`、定向 Health/Sidebar tests、完整 workspace tests、clippy、build 和 release metadata 已验证。
+- [CI run 30808354940](https://github.com/Yiki21/PackageGet/actions/runs/30808354940)已通过Linux fmt/check/test/clippy/build、Windows离线契约矩阵和macOS arm64 workspace check。
+- [Package run 30808354332](https://github.com/Yiki21/PackageGet/actions/runs/30808354332)已通过17项跨平台产物构建、Health 图标 notice 校验和统一 checksums bundle。
 - 本地 GUI 仍遵守既定约束：不把 headless Wayland compositor 的黑帧或 wgpu surface failure 记作视觉验收；需要视觉证据时使用隔离 X11 路径并明确记录限制。
 
 ## 后续
 
-- 在完整串行门禁通过后提交并推送，记录 CI 与 Package run。
 - 继续补充 manager-specific health detail 与平台 smoke evidence，但不改变 Health Center 的只读边界。
