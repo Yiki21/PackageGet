@@ -1,5 +1,6 @@
 mod errors;
 mod finding;
+mod health;
 mod installed;
 mod setting;
 mod shared;
@@ -7,11 +8,13 @@ mod updates;
 mod workflows;
 
 use crate::{
-    content::{finding::Finding, setting::Settings, updates::Updates},
+    content::{finding::Finding, health::HealthCenter, setting::Settings, updates::Updates},
     shortcut::SelectionDirection,
 };
 
 pub use finding::FindingInfo;
+pub use health::ManagerHealthInfo;
+pub(crate) use health::Message as HealthMessage;
 pub(crate) use installed::Installed;
 pub use installed::InstalledInfo;
 pub use setting::Message as SettingsMessage;
@@ -34,6 +37,8 @@ pub enum ActiveContentPage {
     Updates,
     /// Installed packages page.
     Installed,
+    /// Package-manager health page.
+    Health,
     /// Settings page.
     Settings,
 }
@@ -50,6 +55,8 @@ pub struct Content {
     pub updates: Updates,
     /// Finding page state.
     pub finding: Finding,
+    /// Package-manager health page state.
+    pub health: HealthCenter,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +69,8 @@ pub enum Message {
     Updates(updates::Message),
     /// Finding page message.
     Finding(finding::Message),
+    /// Package-manager health page message.
+    Health(health::Message),
 }
 
 pub enum Action {
@@ -84,6 +93,8 @@ pub enum Action {
         reload: bool,
         follow_up: iced::Task<Message>,
     },
+    /// Navigate to another content page.
+    Navigate(ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +114,7 @@ impl ReloadReason {
 }
 
 impl Content {
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         message: Message,
@@ -110,6 +122,7 @@ impl Content {
         installed_info: &mut InstalledInfo,
         updates_info: &mut UpdatesInfo,
         finding_info: &mut FindingInfo,
+        health_info: &mut ManagerHealthInfo,
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
         let pm_config_ref: &updater_core::Config = pm_config;
@@ -188,6 +201,24 @@ impl Content {
                     finding::Action::None => Action::None,
                 }
             }
+            Message::Health(health_msg) => {
+                let action = self.health.update(
+                    health_msg,
+                    pm_config_ref,
+                    health_info,
+                    catalog,
+                    installed_info,
+                    updates_info,
+                );
+                match action {
+                    health::Action::Run(task) => Action::Run(task.map(Message::Health)),
+                    health::Action::OpenSettings(manager) => {
+                        self.settings.filter_to_manager(&manager, catalog);
+                        Action::Navigate(ActiveContentPage::Settings)
+                    }
+                    health::Action::None => Action::None,
+                }
+            }
         }
     }
 
@@ -196,6 +227,7 @@ impl Content {
             ActiveContentPage::Finding => self.finding.dismiss_transient(),
             ActiveContentPage::Updates => self.updates.dismiss_transient(),
             ActiveContentPage::Installed => self.installed.dismiss_transient(installed_info),
+            ActiveContentPage::Health => false,
             ActiveContentPage::Settings => false,
         }
     }
@@ -213,6 +245,7 @@ impl Content {
             .then_some(Message::Updates(updates::Message::RefreshSelected)),
             ActiveContentPage::Installed => (!installed_info.is_removing)
                 .then_some(Message::Installed(installed::Message::RefreshInfo)),
+            ActiveContentPage::Health => Some(Message::Health(health::Message::StartScan)),
             ActiveContentPage::Settings => None,
         }
     }
@@ -236,6 +269,7 @@ impl Content {
                 .installed
                 .primary_action(installed_info)
                 .map(Message::Installed),
+            ActiveContentPage::Health => None,
             ActiveContentPage::Settings => self
                 .settings
                 .is_dirty()
@@ -262,6 +296,7 @@ impl Content {
                     Message::Installed(installed::Message::ToggleSelectAll(true)),
                 )
             }
+            ActiveContentPage::Health => None,
             ActiveContentPage::Settings => None,
         }
     }
@@ -287,6 +322,7 @@ impl Content {
                 .installed
                 .move_keyboard_selection(installed_info, catalog, direction)
                 .map(Message::Installed),
+            ActiveContentPage::Health => None,
             ActiveContentPage::Settings => None,
         }
     }
@@ -310,6 +346,7 @@ impl Content {
                 .installed
                 .toggle_keyboard_selection(installed_info)
                 .map(Message::Installed),
+            ActiveContentPage::Health => None,
             ActiveContentPage::Settings => None,
         }
     }
@@ -319,16 +356,19 @@ impl Content {
             ActiveContentPage::Finding => self.finding.has_inspector_selection(),
             ActiveContentPage::Updates => self.updates.has_inspector_selection(),
             ActiveContentPage::Installed => self.installed.has_inspector_selection(),
+            ActiveContentPage::Health => false,
             ActiveContentPage::Settings => false,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
         &'a self,
         pm_config: &'a updater_core::Config,
         installed_info: &'a InstalledInfo,
         updates_info: &'a UpdatesInfo,
         finding_info: &'a FindingInfo,
+        health_info: &'a ManagerHealthInfo,
         catalog: &'a crate::manager_catalog::ManagerCatalog,
         options: ViewOptions,
     ) -> iced::Element<'a, Message> {
@@ -367,9 +407,19 @@ impl Content {
                     inspector_drawer,
                 )
                 .map(Message::Installed),
+            ActiveContentPage::Health => self
+                .health
+                .view(
+                    pm_config,
+                    health_info,
+                    catalog,
+                    installed_info,
+                    updates_info,
+                )
+                .map(Message::Health),
             ActiveContentPage::Settings => self
                 .settings
-                .view(pm_config, catalog)
+                .view(pm_config, catalog, health_info)
                 .map(Message::Settings),
         }
     }

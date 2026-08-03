@@ -19,6 +19,7 @@ pub enum Shortcut {
     NavigateFinding,
     NavigateUpdates,
     NavigateInstalled,
+    NavigateHealth,
     NavigateSettings,
     FocusPageSearch,
     Dismiss,
@@ -186,7 +187,8 @@ fn shortcut_before_children(event: &Event) -> Option<Shortcut> {
             key::Physical::Code(key::Code::Digit1) => Some(Shortcut::NavigateFinding),
             key::Physical::Code(key::Code::Digit2) => Some(Shortcut::NavigateUpdates),
             key::Physical::Code(key::Code::Digit3) => Some(Shortcut::NavigateInstalled),
-            key::Physical::Code(key::Code::Digit4) => Some(Shortcut::NavigateSettings),
+            key::Physical::Code(key::Code::Digit4) => Some(Shortcut::NavigateHealth),
+            key::Physical::Code(key::Code::Digit5) => Some(Shortcut::NavigateSettings),
             _ => None,
         };
     }

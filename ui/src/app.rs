@@ -7,7 +7,7 @@ use iced::{Length, Subscription, Task};
 use updater_manager_api::{ManagerCapability, ManagerId, PackageUpdate};
 
 use crate::{
-    content::{self, Content, FindingInfo, InstalledInfo, UpdatesInfo},
+    content::{self, Content, FindingInfo, InstalledInfo, ManagerHealthInfo, UpdatesInfo},
     init_workflows::{InitProgress, ManagerInitTask, run_manager_init_task},
     manager_catalog::ManagerCatalog,
     shortcut::Shortcut,
@@ -52,6 +52,8 @@ pub struct App {
     pub updates_info: UpdatesInfo,
     /// Finding page data.
     pub finding_info: FindingInfo,
+    /// Shared package-manager health state.
+    pub manager_health: ManagerHealthInfo,
     /// Status panel state.
     pub status_panel: StatusPanel,
     /// Bounded structured operation history.
@@ -225,6 +227,7 @@ impl App {
             installed_info: InstalledInfo::default(),
             updates_info: UpdatesInfo::default(),
             finding_info: FindingInfo::default(),
+            manager_health: ManagerHealthInfo::default(),
             status_panel: StatusPanel::new(now),
             activity_history: crate::activity::ActivityHistory::default(),
             activity_center_open: false,
@@ -299,7 +302,7 @@ impl App {
                         self.sidebar.active_tab = self.content.active_content.into();
                         self.pending_settings_exit = Some(PendingSettingsExit::Navigate(target));
                     } else {
-                        self.content.active_content = target;
+                        task = self.activate_page(target);
                         self.pending_settings_exit = None;
                         if self.layout_mode() == LayoutMode::Narrow {
                             self.sidebar_expanded = false;
@@ -316,6 +319,7 @@ impl App {
                     &mut self.installed_info,
                     &mut self.updates_info,
                     &mut self.finding_info,
+                    &mut self.manager_health,
                     &self.manager_catalog,
                 );
 
@@ -328,6 +332,9 @@ impl App {
                         content_task.map(Message::Content)
                     }
                     content::Action::ReloadPackageData { reason, follow_up } => {
+                        if reason == content::ReloadReason::ConfigurationChanged {
+                            self.manager_health.invalidate();
+                        }
                         let reload = self.reload_package_data(reason);
                         let pending_exit = if reason == content::ReloadReason::ConfigurationChanged
                             && !self.content.settings.is_dirty()
@@ -360,6 +367,7 @@ impl App {
                         };
                         Task::batch(vec![completion, notification])
                     }
+                    content::Action::Navigate(target) => self.activate_page(target),
                     content::Action::None => Task::none(),
                 };
             }
@@ -443,6 +451,7 @@ impl App {
                         self.config_load_state = ConfigLoadState::Ready;
                         self.content.settings.sync_from_config(&config);
                         self.pm_config = config;
+                        self.manager_health.invalidate();
                         self.reload_package_data(content::ReloadReason::Startup)
                     }
                     Err(error) => {
@@ -652,7 +661,8 @@ impl App {
                     true,
                     ActiveContentPage::Finding
                     | ActiveContentPage::Updates
-                    | ActiveContentPage::Installed,
+                    | ActiveContentPage::Installed
+                    | ActiveContentPage::Health,
                 ) => self.focus_search(self.content.active_content),
                 _ => Task::none(),
             };
@@ -678,6 +688,7 @@ impl App {
             Shortcut::NavigateFinding => self.navigate_to(ActiveContentPage::Finding),
             Shortcut::NavigateUpdates => self.navigate_to(ActiveContentPage::Updates),
             Shortcut::NavigateInstalled => self.navigate_to(ActiveContentPage::Installed),
+            Shortcut::NavigateHealth => self.navigate_to(ActiveContentPage::Health),
             Shortcut::NavigateSettings => self.navigate_to(ActiveContentPage::Settings),
             Shortcut::FocusPageSearch => self.focus_search(self.content.active_content),
             Shortcut::PrimaryAction => {
@@ -727,10 +738,21 @@ impl App {
             return Task::none();
         }
 
+        self.pending_settings_exit = None;
+        self.activate_page(target)
+    }
+
+    fn activate_page(&mut self, target: content::ActiveContentPage) -> Task<Message> {
         self.content.active_content = target;
         self.sidebar.active_tab = target.into();
-        self.pending_settings_exit = None;
-        Task::none()
+        if target == content::ActiveContentPage::Health && self.manager_health.should_scan_on_open()
+        {
+            Task::done(Message::Content(content::Message::Health(
+                content::HealthMessage::StartScan,
+            )))
+        } else {
+            Task::none()
+        }
     }
 
     fn focus_search(&self, page: content::ActiveContentPage) -> Task<Message> {
@@ -998,6 +1020,12 @@ impl App {
                 || !self.updates_info.loading_updates.is_empty(),
             updates_failed: !self.updates_info.init_errors.is_empty()
                 || !self.updates_info.load_errors.is_empty(),
+            health_checking: self.manager_health.is_checking(),
+            health_has_issues: self.manager_health.has_issues(
+                &self.pm_config,
+                &self.installed_info,
+                &self.updates_info,
+            ),
             settings_dirty: self.content.settings.is_dirty(),
         };
         let mode = self.layout_mode();
@@ -1028,6 +1056,7 @@ impl App {
                 &self.installed_info,
                 &self.updates_info,
                 &self.finding_info,
+                &self.manager_health,
                 &self.manager_catalog,
                 content::ViewOptions {
                     show_inspector,
@@ -1105,8 +1134,11 @@ impl App {
                     content::ActiveContentPage::Installed => {
                         "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Remove"
                     }
+                    content::ActiveContentPage::Health => {
+                        "Ctrl+R Recheck  ·  / Focus  ·  Tab Move Focus"
+                    }
                     content::ActiveContentPage::Settings => {
-                        "Alt+1–4 Navigate  ·  Tab Move Focus  ·  Ctrl+Enter Save"
+                        "Alt+1–5 Navigate  ·  Tab Move Focus  ·  Ctrl+Enter Save"
                     }
                 })
                 .size(11)
@@ -1345,11 +1377,7 @@ impl App {
 
     fn complete_pending_settings_exit(&mut self) -> Task<Message> {
         match self.pending_settings_exit.take() {
-            Some(PendingSettingsExit::Navigate(target)) => {
-                self.content.active_content = target;
-                self.sidebar.active_tab = target.into();
-                Task::none()
-            }
+            Some(PendingSettingsExit::Navigate(target)) => self.activate_page(target),
             Some(PendingSettingsExit::Close(window_id)) => iced::window::close(window_id),
             None => Task::none(),
         }

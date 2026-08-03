@@ -5,7 +5,7 @@ use iced::{
 
 use crate::{
     content::ActiveContentPage,
-    icon::{FIND_ICON, INSTALLED_ICON, SETTINGS_ICON, UPDATE_ICON},
+    icon::{FIND_ICON, HEALTH_ICON, INSTALLED_ICON, SETTINGS_ICON, UPDATE_ICON},
     theme,
 };
 
@@ -14,6 +14,8 @@ pub struct Summary {
     pub update_count: usize,
     pub updates_loading: bool,
     pub updates_failed: bool,
+    pub health_checking: bool,
+    pub health_has_issues: bool,
     pub settings_dirty: bool,
 }
 
@@ -33,6 +35,16 @@ impl Summary {
             Some(Badge::Loading)
         } else if self.update_count > 0 {
             Some(Badge::Count(self.update_count))
+        } else {
+            None
+        }
+    }
+
+    fn health_badge(self) -> Option<Badge> {
+        if self.health_has_issues {
+            Some(Badge::Warning)
+        } else if self.health_checking {
+            Some(Badge::Loading)
         } else {
             None
         }
@@ -67,6 +79,8 @@ pub enum Tab {
     Updates,
     /// Installed packages page.
     Installed,
+    /// Package-manager health page.
+    Health,
     /// Settings page.
     Settings,
 }
@@ -95,6 +109,7 @@ impl From<Tab> for ActiveContentPage {
             Tab::Finding => ActiveContentPage::Finding,
             Tab::Updates => ActiveContentPage::Updates,
             Tab::Installed => ActiveContentPage::Installed,
+            Tab::Health => ActiveContentPage::Health,
             Tab::Settings => ActiveContentPage::Settings,
         }
     }
@@ -106,6 +121,7 @@ impl From<ActiveContentPage> for Tab {
             ActiveContentPage::Finding => Tab::Finding,
             ActiveContentPage::Updates => Tab::Updates,
             ActiveContentPage::Installed => Tab::Installed,
+            ActiveContentPage::Health => Tab::Health,
             ActiveContentPage::Settings => Tab::Settings,
         }
     }
@@ -137,6 +153,7 @@ impl SideBar {
             brand_dot(theme::colors::DISCOVER),
             brand_dot(theme::colors::UPDATES),
             brand_dot(theme::colors::INSTALLED),
+            brand_dot(theme::colors::HEALTH),
             brand_dot(theme::colors::SETTINGS),
         ]
         .spacing(3)
@@ -172,6 +189,7 @@ impl SideBar {
                 tab.icon(),
                 match tab {
                     Tab::Updates => summary.updates_badge(),
+                    Tab::Health => summary.health_badge(),
                     _ => None,
                 },
                 compact,
@@ -198,13 +216,14 @@ impl SideBar {
 }
 
 impl Tab {
-    const PRIMARY: [Tab; 3] = [Tab::Finding, Tab::Updates, Tab::Installed];
+    const PRIMARY: [Tab; 4] = [Tab::Finding, Tab::Updates, Tab::Installed, Tab::Health];
 
     fn label(self) -> &'static str {
         match self {
             Tab::Finding => "Discover",
             Tab::Updates => "Updates",
             Tab::Installed => "Installed",
+            Tab::Health => "Health",
             Tab::Settings => "Settings",
         }
     }
@@ -214,6 +233,7 @@ impl Tab {
             Tab::Finding => (theme::colors::DISCOVER, theme::colors::DISCOVER_SOFT),
             Tab::Updates => (theme::colors::UPDATES, theme::colors::UPDATES_SOFT),
             Tab::Installed => (theme::colors::INSTALLED, theme::colors::INSTALLED_SOFT),
+            Tab::Health => (theme::colors::HEALTH, theme::colors::HEALTH_SOFT),
             Tab::Settings => (theme::colors::SETTINGS, theme::colors::SETTINGS_SOFT),
         }
     }
@@ -223,6 +243,7 @@ impl Tab {
             Tab::Finding => FIND_ICON.clone(),
             Tab::Updates => UPDATE_ICON.clone(),
             Tab::Installed => INSTALLED_ICON.clone(),
+            Tab::Health => HEALTH_ICON.clone(),
             Tab::Settings => SETTINGS_ICON.clone(),
         }
     }
@@ -353,6 +374,8 @@ mod tests {
                 update_count: 12,
                 updates_loading: true,
                 updates_failed: true,
+                health_checking: false,
+                health_has_issues: false,
                 settings_dirty: false,
             }
             .updates_badge(),
@@ -363,6 +386,8 @@ mod tests {
                 update_count: 12,
                 updates_loading: true,
                 updates_failed: false,
+                health_checking: false,
+                health_has_issues: false,
                 settings_dirty: false,
             }
             .updates_badge(),
@@ -373,10 +398,33 @@ mod tests {
                 update_count: 12,
                 updates_loading: false,
                 updates_failed: false,
+                health_checking: false,
+                health_has_issues: false,
                 settings_dirty: false,
             }
             .updates_badge(),
             Some(Badge::Count(12))
+        );
+    }
+
+    #[test]
+    fn health_badge_prioritizes_issues_over_checking() {
+        assert_eq!(
+            Summary {
+                health_checking: true,
+                health_has_issues: true,
+                ..Summary::default()
+            }
+            .health_badge(),
+            Some(Badge::Warning)
+        );
+        assert_eq!(
+            Summary {
+                health_checking: true,
+                ..Summary::default()
+            }
+            .health_badge(),
+            Some(Badge::Loading)
         );
     }
 

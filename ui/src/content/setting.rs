@@ -6,7 +6,7 @@ use updater_core::ManagerConfig;
 use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerCategory, ManagerId};
 
 use crate::{
-    content::shared,
+    content::{ManagerHealthInfo, shared},
     icon::{self, ADD_ICON, REFRESH_ICON, SAVE_ICON},
     manager_catalog::ManagerCatalog,
     theme,
@@ -114,6 +114,10 @@ impl Settings {
 
     pub fn is_dirty(&self) -> bool {
         self.is_initialized && self.draft != self.baseline
+    }
+
+    pub fn filter_to_manager(&mut self, manager: &ManagerId, catalog: &ManagerCatalog) {
+        self.manager_query = catalog.display_name(manager).to_owned();
     }
 
     pub fn appearance_value(&self) -> String {
@@ -475,6 +479,7 @@ impl Settings {
         &self,
         _active_config: &updater_core::Config,
         catalog: &ManagerCatalog,
+        health_info: &ManagerHealthInfo,
     ) -> iced::Element<'static, Message> {
         use iced::Length;
         use iced::widget::{column, container, scrollable};
@@ -488,8 +493,8 @@ impl Settings {
                 theme::colors::SETTINGS,
             ),
             self.view_appearance_section(pm_config),
-            self.view_configured_managers_section(pm_config, catalog),
-            self.view_selection_list(pm_config, catalog),
+            self.view_configured_managers_section(pm_config, catalog, health_info),
+            self.view_selection_list(pm_config, catalog, health_info),
             self.view_buttons(),
             self.view_status(),
         ]
@@ -526,6 +531,7 @@ impl Settings {
         &self,
         pm_config: &updater_core::Config,
         catalog: &ManagerCatalog,
+        health_info: &ManagerHealthInfo,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
         use iced::widget::{column, container, row, text, text_input};
@@ -554,6 +560,7 @@ impl Settings {
                     false,
                     pm_config,
                     catalog,
+                    health_info,
                 ))
                 .width(iced::Length::Fill);
                 let mut manager_row = row![item]
@@ -661,6 +668,7 @@ impl Settings {
         &self,
         pm_config: &updater_core::Config,
         catalog: &ManagerCatalog,
+        health_info: &ManagerHealthInfo,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
@@ -746,6 +754,7 @@ impl Settings {
                         detected_in_path,
                         pm_config,
                         catalog,
+                        health_info,
                     ))
                     .width(iced::Length::Fill),
                     add_btn,
@@ -811,6 +820,7 @@ impl Settings {
         detected_in_path: bool,
         pm_config: &updater_core::Config,
         catalog: &ManagerCatalog,
+        health_info: &ManagerHealthInfo,
     ) -> iced::Element<'static, Message> {
         use iced::Alignment;
         use iced::widget::{column, row, text};
@@ -886,8 +896,16 @@ impl Settings {
                     .style(theme::text_warning)
                     .into(),
             );
-        } else if is_configured || detected_in_path || self.availability.contains_key(manager) {
-            let status = match self.availability.get(manager) {
+        } else if is_configured
+            || detected_in_path
+            || self.availability.contains_key(manager)
+            || health_info.result(manager).is_some()
+        {
+            let availability = self
+                .availability
+                .get(manager)
+                .or_else(|| health_info.result(manager));
+            let status = match availability {
                 None => text("Status: not scanned")
                     .size(13)
                     .style(theme::text_on_surface_alt)

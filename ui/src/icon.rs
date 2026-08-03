@@ -42,6 +42,10 @@ pub static SETTINGS_ICON: LazyLock<svg::Handle> = LazyLock::new(|| {
     svg::Handle::from_memory(include_bytes!("../../assets/icons/settings.svg").to_vec())
 });
 
+pub static HEALTH_ICON: LazyLock<svg::Handle> = LazyLock::new(|| {
+    svg::Handle::from_memory(include_bytes!("../../assets/icons/health.svg").to_vec())
+});
+
 #[derive(Debug, Clone)]
 struct ManagerLogo {
     handle: svg::Handle,

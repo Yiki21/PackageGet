@@ -240,6 +240,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - Simple Icons来源、CC0许可和商标边界进入第三方notice；DEB、RPM、Arch、portable tar、AppImage、Windows和macOS包均携带该文件。
 - CI run `30805679742`已通过Linux、Windows和macOS质量矩阵；Package run `30805679816`已通过17项跨平台产物构建、notice校验和统一checksums bundle。
 
+当前进度（Iteration 048进行中）：
+
+- 新增应用级 Package Manager Health Center，仅检查当前配置的 manager，并集中显示 Healthy、Degraded、Unavailable、Error 和 Unchecked 状态。
+- 健康检查沿用现有 availability contract，按 manager 串行执行并支持 cooperative cancel；generation 会拒绝配置变更或重检产生的过期结果。
+- 已有 Installed/Updates 初始化或加载错误会将可用 manager 标记为 Degraded；页面提供搜索、状态筛选、Recheck、Cancel、诊断报告和跳转 Settings，所有操作保持只读。
+- Sidebar 增加 Health 入口和检查/问题 badge；Settings 复用最近的 Health 结果，并明确区分自定义 executable 与 `System PATH`。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

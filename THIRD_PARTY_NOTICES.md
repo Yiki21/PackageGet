@@ -15,3 +15,10 @@ Flatpak, Snapcraft, Homebrew, Rust, Go, npm, pnpm, Python, uv, .NET,
 RubyGems, Composer, and NixOS names and logos may be trademarks of their
 respective owners. PackageGet is not affiliated with or endorsed by those
 projects.
+
+## Lucide
+
+The Health navigation mark is based on the Lucide Activity icon.
+
+- Lucide: <https://lucide.dev/>
+- License: ISC

@@ -160,6 +160,8 @@ pub mod colors {
     pub const UPDATES_SOFT: Color = palette::TEAL_0;
     pub const INSTALLED: Color = palette::BLUE_8;
     pub const INSTALLED_SOFT: Color = palette::BLUE_0;
+    pub const HEALTH: Color = palette::ORANGE_9;
+    pub const HEALTH_SOFT: Color = Color::from_rgb8(255, 249, 219);
     pub const SETTINGS: Color = palette::GRAPE_8;
     pub const SETTINGS_SOFT: Color = palette::GRAPE_0;
 

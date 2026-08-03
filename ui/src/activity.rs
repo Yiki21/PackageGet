@@ -207,7 +207,7 @@ fn history_path() -> Option<PathBuf> {
         .map(|directories| directories.data_local_dir().join("activity.json"))
 }
 
-fn redact_detail(detail: &str) -> String {
+pub(crate) fn redact_detail(detail: &str) -> String {
     let redacted = detail
         .split_whitespace()
         .map(|part| {

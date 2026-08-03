@@ -139,6 +139,7 @@ pub fn search_input_id(page: crate::content::ActiveContentPage) -> iced::widget:
         crate::content::ActiveContentPage::Finding => iced::widget::Id::new("finding-search"),
         crate::content::ActiveContentPage::Updates => iced::widget::Id::new("updates-search"),
         crate::content::ActiveContentPage::Installed => iced::widget::Id::new("installed-search"),
+        crate::content::ActiveContentPage::Health => iced::widget::Id::new("health-search"),
         crate::content::ActiveContentPage::Settings => iced::widget::Id::new("settings-search"),
     }
 }
