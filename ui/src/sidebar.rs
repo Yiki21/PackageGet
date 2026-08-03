@@ -223,7 +223,7 @@ impl Tab {
             Tab::Finding => "Discover",
             Tab::Updates => "Updates",
             Tab::Installed => "Installed",
-            Tab::Health => "Health",
+            Tab::Health => "Managers",
             Tab::Settings => "Settings",
         }
     }

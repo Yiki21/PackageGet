@@ -6,9 +6,7 @@ use std::sync::Arc;
 use futures::channel::mpsc;
 use iced::{Element, Length, Task};
 use updater_core::{CancellationToken, ManagerRegistry};
-use updater_manager_api::{
-    AuthorizationHint, AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerId,
-};
+use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerId};
 
 use crate::{
     activity,
@@ -464,8 +462,11 @@ impl HealthCenter {
 
         column![
             shared::page_header(
-                "Manager Health",
-                format!("{} configured package managers", config.managers.len()),
+                "Package Managers",
+                format!(
+                    "{} configured managers · availability checks are read-only",
+                    config.managers.len()
+                ),
                 theme::colors::HEALTH,
             ),
             shared::summary_row([
@@ -489,7 +490,7 @@ impl HealthCenter {
             ]),
             toolbar,
             text(scan_state)
-                .size(12)
+                .size(14)
                 .style(if info.cancellation_requested {
                     theme::text_warning
                 } else {
@@ -553,30 +554,12 @@ fn manager_health_row<'a>(
         || "Executable: System PATH".to_owned(),
         |path| format!("Executable: {}", path.display()),
     );
-    let descriptor = catalog.descriptor(manager);
-    let category = descriptor.map_or("Other", |descriptor| {
-        shared::manager_category_label(descriptor.category())
-    });
-    let capabilities = descriptor.map_or_else(
-        || "None registered".to_owned(),
-        |descriptor| {
-            descriptor
-                .capabilities()
-                .iter()
-                .map(|capability| capability_label(*capability))
-                .collect::<Vec<_>>()
-                .join(" · ")
-        },
-    );
-    let authorization = descriptor.map_or("Unavailable", |descriptor| {
-        authorization_label(descriptor.authorization())
-    });
     let checked_at = record.map_or("Never checked", |record| record.checked_at.as_str());
 
     let badge_color = status.color();
     let status_badge = container(
         text(status.label())
-            .size(11)
+            .size(12)
             .font(theme::FONT_SEMIBOLD)
             .style(move |_theme| iced::widget::text::Style {
                 color: Some(badge_color),
@@ -602,8 +585,8 @@ fn manager_health_row<'a>(
         ..Default::default()
     });
 
-    let settings = button(text("Settings").size(12))
-        .padding([6, 10])
+    let settings = button(text("Configure").size(13))
+        .padding([7, 12])
         .style(theme::secondary_button(true))
         .on_press(Message::OpenSettings(manager.clone()));
     let state_detail = if is_current {
@@ -614,14 +597,14 @@ fn manager_health_row<'a>(
 
     let mut details = column![
         row![
-            icon::manager_logo(manager, display_name, 36.0),
+            icon::manager_logo(manager, display_name, 42.0),
             column![
                 text(display_name)
-                    .size(15)
+                    .size(17)
                     .font(theme::FONT_SEMIBOLD)
                     .style(theme::text_on_surface),
-                text(format!("{} · {category}", manager.as_str()))
-                    .size(11)
+                text(manager.as_str())
+                    .size(12)
                     .font(theme::FONT_MONO)
                     .style(theme::text_on_surface_muted),
             ]
@@ -634,7 +617,7 @@ fn manager_health_row<'a>(
         .align_y(iced::Alignment::Center)
         .wrap(),
         text(state_detail)
-            .size(12)
+            .size(14)
             .style(if matches!(status, HealthStatus::Error) {
                 theme::text_error
             } else if matches!(status, HealthStatus::Degraded | HealthStatus::Unavailable) {
@@ -646,32 +629,24 @@ fn manager_health_row<'a>(
             .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
         row![
             text(executable)
-                .size(11)
+                .size(13)
                 .font(theme::FONT_MONO)
                 .style(theme::text_on_surface_muted),
             text(format!("Version: {version}"))
-                .size(11)
-                .style(theme::text_on_surface_muted),
-            text(format!("Authorization: {authorization}"))
-                .size(11)
+                .size(13)
                 .style(theme::text_on_surface_muted),
         ]
         .spacing(theme::spacing::LG)
         .wrap(),
-        text(format!("Capabilities: {capabilities}"))
-            .size(11)
-            .style(theme::text_on_surface_muted)
-            .width(Length::Fill)
-            .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
         text(format!("Last checked: {checked_at}"))
-            .size(11)
+            .size(12)
             .style(theme::text_on_surface_alt),
     ]
     .spacing(theme::spacing::SM);
     if let Some(runtime_detail) = runtime_detail {
         details = details.push(
             text(runtime_detail)
-                .size(11)
+                .size(13)
                 .style(theme::text_warning)
                 .width(Length::Fill)
                 .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
@@ -739,28 +714,6 @@ fn runtime_issue_detail(
         issues.push(format!("Update discovery: {error}"));
     }
     (!issues.is_empty()).then(|| issues.join(" | "))
-}
-
-fn capability_label(capability: updater_manager_api::ManagerCapability) -> &'static str {
-    use updater_manager_api::ManagerCapability;
-    match capability {
-        ManagerCapability::Installed => "Installed",
-        ManagerCapability::Updates => "Updates",
-        ManagerCapability::Search => "Search",
-        ManagerCapability::Install => "Install",
-        ManagerCapability::Update => "Update",
-        ManagerCapability::Uninstall => "Uninstall",
-        _ => "Other",
-    }
-}
-
-fn authorization_label(authorization: &AuthorizationHint) -> &'static str {
-    match authorization {
-        AuthorizationHint::None => "Current user",
-        AuthorizationHint::MayRequireElevation { .. } => "May require elevation",
-        AuthorizationHint::RequiresElevation { .. } => "Requires elevation",
-        _ => "Manager-defined",
-    }
 }
 
 fn diagnostics_report(

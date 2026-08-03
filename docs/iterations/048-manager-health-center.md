@@ -1,4 +1,4 @@
-# Iteration 048：Package Manager Health Center
+# Iteration 048：Package Manager 管理页
 
 - 日期：2026-08-03
 - 状态：已完成
@@ -7,15 +7,16 @@
 
 ## 本轮目标
 
-随着 Package Manager 数量增加，用户需要一个集中、只读、可解释的健康检查入口，而不是在 Settings 或单个页面中拼接零散的 availability 状态。本轮建立应用级健康状态，并让 Sidebar、Health Center 和 Settings 共享同一份结果。
+随着 Package Manager 数量增加，用户需要一个集中、易扫描的管理入口，而不是在 Settings 或单个页面中拼接零散的 availability 状态。本轮建立应用级健康状态，并让 Sidebar、Package Managers 管理页和 Settings 共享同一份结果。
 
 ## 实现范围
 
-- 新增 Health Center 页面，只扫描当前配置的 manager，并按 Healthy、Degraded、Unavailable、Error、Unchecked 分类。
+- 新增 Package Managers 管理页，只扫描当前配置的 manager，并按 Healthy、Degraded、Unavailable、Error、Unchecked 分类。
 - 健康扫描沿用 manager registry 的 availability contract，按配置顺序串行执行；扫描期间支持 cooperative cancel，generation 会拒绝过期结果。
 - Degraded 由已有 Installed/Updates 初始化或加载错误派生；健康检查不安装包、不刷新仓库、不执行自动修复。
-- 页面提供名称/ID搜索、状态筛选、进度、Recheck、Cancel、Copy report 和跳转 Settings；诊断报告沿用 Activity 的路径、凭据和敏感字段脱敏规则。
-- Sidebar 显示 Health 入口，并在检查中或存在问题时显示 badge；Settings 对已配置 manager 回退显示 Health Center 的最近结果。
+- 管理页提供名称/ID搜索、状态筛选、进度、Recheck、Cancel、Copy report 和 Configure 入口；诊断报告沿用 Activity 的路径、凭据和敏感字段脱敏规则。
+- 管理页只展示 manager identity、状态、版本、可执行摘要和最后检查时间；capability、authorization 等详细配置不再与 Settings 重复。
+- Sidebar 显示 Health 入口，并在检查中或存在问题时显示 badge；Settings 对已配置 manager 回退显示管理页的最近结果。
 - 新增 Health 图标及 Lucide ISC 来源声明；自动解析 executable 明确显示为`System PATH`，不伪造实际路径。
 
 ## 非目标
@@ -34,4 +35,4 @@
 
 ## 后续
 
-- 继续补充 manager-specific health detail 与平台 smoke evidence，但不改变 Health Center 的只读边界。
+- 继续补充 manager-specific health detail 与平台 smoke evidence，但不改变管理页的只读检查边界。
