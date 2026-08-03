@@ -87,7 +87,8 @@ cargo run -p updater
 
 If the repository has published a release for your platform, download one of these artifacts:
 
-- Linux: `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst`
+- Linux native packages: `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst`
+- Linux portable packages: glibc/musl `.tar.gz` or glibc `.AppImage`, for x86_64 and aarch64
 - Windows x86_64: portable `.zip` or per-user setup `.exe`
 - macOS arm64/x86_64: `.app.zip` or `.dmg`
 
@@ -100,6 +101,25 @@ sudo pacman -U ./updater-*.pkg.tar.zst
 ```
 
 After installing a release package, launch Updater from your desktop application menu.
+
+To run a portable glibc or musl archive:
+
+```bash
+tar -xzf updater-*-linux-*-glibc.tar.gz
+cd updater-*-linux-*-glibc
+./updater
+```
+
+The musl archive is built and validated on Alpine Linux. It still uses the host Wayland/X11, font, graphics, and desktop runtime libraries, so it is not a fully static binary and is not intended for glibc distributions.
+
+To run an AppImage:
+
+```bash
+chmod +x updater-*-linux-*.AppImage
+./updater-*-linux-*.AppImage
+```
+
+Portable archives and AppImages do not install the fixed-path Polkit helper or policy. Read-only workflows and user-scoped managers work directly; use a DEB, RPM, or Arch package when privileged APT, DNF, Pacman, or Zypper writes are required. A Flatpak distribution is intentionally not published yet because the sandbox cannot execute the current host package-manager CLI contract without a separately reviewed host bridge.
 
 ### Option 2: Build from source
 
@@ -154,7 +174,7 @@ Additional notes:
 
 ## System package authorization
 
-Release packages install `/usr/lib/updater/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
+Native DEB, RPM, and Arch release packages install `/usr/lib/updater/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. Portable tar archives and AppImages do not install these system files. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
 
 The helper accepts only `install`, `update`, `remove`, and metadata `refresh` requests for APT, DNF, Pacman, and Zypper. It validates package identifiers and directly executes fixed system binaries without a shell. Custom executable paths remain available for detection and read-only queries, but are deliberately not used by privileged system package operations.
 
@@ -162,4 +182,4 @@ Running the unpackaged GUI directly supports all read-only workflows. To exercis
 
 ## Linux preview status
 
-`0.3.0-beta.3` is an unsigned Linux preview. Its release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included in that existing tag; they are produced by the newer packaging pipeline for the next release candidate. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
+`0.3.0-beta.3` is an unsigned Linux preview. Its existing release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows, macOS, portable tar, and AppImage packages are not included in that existing tag; they are produced by the newer packaging pipeline for the next release candidate. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.

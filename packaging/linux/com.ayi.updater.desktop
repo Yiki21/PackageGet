@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Updater
+GenericName=Software Updater
+Comment=Manage packages across multiple package managers
+Exec=updater
+Icon=updater
+Terminal=false
+Categories=Settings;PackageManager;
+Keywords=update;upgrade;install;packages;software;
+StartupNotify=true
+StartupWMClass=com.ayi.updater
+X-GNOME-UsesNotifications=true

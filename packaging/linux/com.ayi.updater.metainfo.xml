@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.ayi.updater</id>
+  <name>Updater</name>
+  <summary>Manage packages across multiple package managers</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      Updater provides one desktop interface for discovering, inspecting, and
+      updating packages managed by supported system and language package managers.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.ayi.updater.desktop</launchable>
+  <url type="homepage">https://github.com/Yiki21/PackageGet</url>
+  <content_rating type="oars-1.1" />
+</component>

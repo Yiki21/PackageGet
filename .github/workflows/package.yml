@@ -252,6 +252,230 @@ jobs:
           path: packaging/arch/*.pkg.tar.zst
           if-no-files-found: error
 
+  build-portable-glibc:
+    needs: validate-metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+            file-arch: x86-64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            file-arch: ARM aarch64
+
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:22.04
+
+    steps:
+      - name: Install portable build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates \
+            build-essential \
+            clang \
+            cmake \
+            curl \
+            desktop-file-utils \
+            file \
+            git \
+            jq \
+            libx11-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            mold \
+            perl \
+            pkg-config \
+            zstd
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: portable-glibc-${{ matrix.arch }}
+
+      - name: Build portable release binary
+        run: cargo build --release --locked -p updater
+
+      - name: Build glibc tar and AppImage
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          tool_dir="$RUNNER_TEMP/appimage-tools"
+          mkdir -p "$tool_dir" release-artifacts
+
+          for filename in \
+            "linuxdeploy-${{ matrix.arch }}.AppImage" \
+            "appimagetool-${{ matrix.arch }}.AppImage" \
+            "runtime-${{ matrix.arch }}"
+          do
+            case "$filename" in
+              linuxdeploy-*) repo=linuxdeploy/linuxdeploy ;;
+              appimagetool-*) repo=AppImage/AppImageKit ;;
+              runtime-*) repo=AppImage/type2-runtime ;;
+            esac
+            curl --fail --location --retry 5 \
+              "https://github.com/$repo/releases/download/continuous/$filename" \
+              --output "$tool_dir/$filename"
+            expected="$(awk -v filename="$filename" '$2 == filename { print $1 }' packaging/linux/appimage-tools.sha256)"
+            test -n "$expected"
+            printf '%s  %s\n' "$expected" "$tool_dir/$filename" | sha256sum -c -
+          done
+
+          chmod +x \
+            "$tool_dir/linuxdeploy-${{ matrix.arch }}.AppImage" \
+            "$tool_dir/appimagetool-${{ matrix.arch }}.AppImage"
+          packaging/linux/package-portable.sh \
+            "$version" \
+            "${{ matrix.arch }}" \
+            glibc \
+            target/release/updater \
+            release-artifacts
+          packaging/linux/package-appimage.sh \
+            "$version" \
+            "${{ matrix.arch }}" \
+            target/release/updater \
+            "$tool_dir/linuxdeploy-${{ matrix.arch }}.AppImage" \
+            "$tool_dir/appimagetool-${{ matrix.arch }}.AppImage" \
+            "$tool_dir/runtime-${{ matrix.arch }}" \
+            release-artifacts
+
+      - name: Verify glibc portable artifacts
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          archive="release-artifacts/updater-$version-linux-${{ matrix.arch }}-glibc.tar.gz"
+          appimage="release-artifacts/updater-$version-linux-${{ matrix.arch }}.AppImage"
+          extract="$RUNNER_TEMP/portable-tar"
+          mkdir -p "$extract"
+          tar -xzf "$archive" -C "$extract"
+          binary="$extract/updater-$version-linux-${{ matrix.arch }}-glibc/updater"
+          file "$binary" | grep -Fq '${{ matrix.file-arch }}'
+          ldd "$binary" | tee glibc-needed.txt
+          if grep -Fq 'not found' glibc-needed.txt; then
+            exit 1
+          fi
+
+          appimage_extract="$RUNNER_TEMP/appimage-extract"
+          mkdir -p "$appimage_extract"
+          (
+            cd "$appimage_extract"
+            "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+            test -L squashfs-root/AppRun
+            test -L squashfs-root/com.ayi.updater.desktop
+            test -L squashfs-root/updater.png
+            test -x squashfs-root/usr/bin/updater
+            test -f squashfs-root/usr/share/metainfo/com.ayi.updater.appdata.xml
+            file squashfs-root/usr/bin/updater | grep -Fq '${{ matrix.file-arch }}'
+          )
+
+      - name: Upload glibc portable artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: portable-glibc-${{ matrix.arch }}-${{ github.ref_name }}
+          path: |
+            release-artifacts/*.tar.gz
+            release-artifacts/*.AppImage
+          if-no-files-found: error
+
+  build-portable-musl:
+    needs: validate-metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            file-arch: x86-64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            file-arch: ARM aarch64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache musl cargo artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cargo-musl/git
+            .cargo-musl/registry
+            target-musl
+          key: portable-musl-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            portable-musl-${{ matrix.arch }}-
+
+      - name: Read release version
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package in Alpine
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/src" \
+            --workdir /src \
+            --env CARGO_HOME=/src/.cargo-musl \
+            --env CARGO_TARGET_DIR=/src/target-musl \
+            --env UPDATER_VERSION="${{ steps.metadata.outputs.version }}" \
+            rust:1.97-alpine3.22 \
+            sh -c '
+              set -eu
+              apk add --no-cache \
+                bash \
+                build-base \
+                clang \
+                cmake \
+                dbus-dev \
+                file \
+                fontconfig-dev \
+                freetype-dev \
+                libx11-dev \
+                libxcb-dev \
+                libxkbcommon-dev \
+                mesa-dev \
+                perl \
+                pkgconf \
+                tar \
+                wayland-dev
+              cargo build --release --locked -p updater
+              mkdir -p release-artifacts
+              packaging/linux/package-portable.sh \
+                "$UPDATER_VERSION" \
+                "${{ matrix.arch }}" \
+                musl \
+                target-musl/release/updater \
+                release-artifacts
+              file target-musl/release/updater | grep -Fq "${{ matrix.file-arch }}"
+              ldd target-musl/release/updater | tee musl-needed.txt
+              if grep -Fq "not found" musl-needed.txt; then
+                exit 1
+              fi
+            '
+
+      - name: Upload musl portable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: portable-musl-${{ matrix.arch }}-${{ github.ref_name }}
+          path: release-artifacts/*-musl.tar.gz
+          if-no-files-found: error
+
   build-windows:
     needs: validate-metadata
     runs-on: windows-latest
@@ -413,6 +637,8 @@ jobs:
       - build-arch
       - build-deb
       - build-macos
+      - build-portable-glibc
+      - build-portable-musl
       - build-rpm
       - build-windows
     runs-on: ubuntu-latest
@@ -442,6 +668,22 @@ jobs:
           )
           test "${#linux_packages[@]}" -eq 5
 
+          mapfile -t portable_packages < <(
+            find release-artifacts -maxdepth 1 -type f \
+              \( -name '*-linux-*-glibc.tar.gz' -o -name '*-linux-*-musl.tar.gz' \) \
+              -printf '%f\n' \
+              | sort
+          )
+          test "${#portable_packages[@]}" -eq 4
+
+          mapfile -t appimage_packages < <(
+            find release-artifacts -maxdepth 1 -type f \
+              -name '*-linux-*.AppImage' \
+              -printf '%f\n' \
+              | sort
+          )
+          test "${#appimage_packages[@]}" -eq 2
+
           mapfile -t windows_packages < <(
             find release-artifacts -maxdepth 1 -type f \
               \( -name '*-windows-x86_64.zip' -o -name '*-windows-x86_64-setup.exe' \) \
@@ -461,10 +703,12 @@ jobs:
 
           packages=(
             "${linux_packages[@]}"
+            "${portable_packages[@]}"
+            "${appimage_packages[@]}"
             "${windows_packages[@]}"
             "${macos_packages[@]}"
           )
-          test "${#packages[@]}" -eq 11
+          test "${#packages[@]}" -eq 17
 
           cd release-artifacts
           sha256sum "${packages[@]}" > SHA256SUMS
@@ -518,7 +762,9 @@ jobs:
             release-artifacts/*.dmg
             release-artifacts/*.exe
             release-artifacts/*.app.zip
+            release-artifacts/*.AppImage
             release-artifacts/*.rpm
             release-artifacts/*.pkg.tar.zst
+            release-artifacts/*.tar.gz
             release-artifacts/*-windows-x86_64.zip
             release-artifacts/SHA256SUMS
