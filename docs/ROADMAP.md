@@ -199,6 +199,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
     预留清晰输入，但在没有证书/secrets 时不伪装成已签名发布。
 5.  更新 README 和 manager-authoring 文档，按平台列出实际支持的 manager、提权模型、安装方式和限制。
 6.  后续独立增量通过同一 registry 接入 Chocolatey、Scoop 与 macOS MAS；softwareupdate 在阶段 7 要求的 manager-level transaction、pending state 与 reboot-required 模型落地后接入。若将来需要免重编译插件，另建带版本协商、权限、超时和隔离的子进程 JSON/Wasm 协议，不直接加载不稳定 Rust ABI 动态库。
+7.  扩展Linux分发格式：提供x86_64/aarch64 glibc portable tar与AppImage；musl只作为经过Alpine原生验证的runtime-specific tar，不宣传为全静态通用GUI。Flatpak必须在宿主CLI桥接或受限capability profile完成后再发布，不能让沙箱静默移除核心manager能力。
 
 当前进度（Iteration 042已完成）：
 
@@ -208,6 +209,12 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - bundle job严格汇总5个Linux、2个Windows、4个macOS产物，为全部11项生成同一`SHA256SUMS`；Package run `30782732075`的所有原生构建、artifact结构验证和bundle校验均已通过。
 - Arch Cargo cache已绕开`makepkg --cleanbuild`的源码目录清理边界，exact-key命中后job由20分30秒降到8分50秒；release build与完整release tests仍保留。
 - 当前公开`0.3.0-beta.3`仍是Linux-only prerelease；跨平台产物将在下一beta或RC tag首次公开。Windows/macOS产物仍是unsigned preview，不描述为已签名或已notarize。
+
+当前进度（Iteration 043实施中）：
+
+- 已冻结portable格式的能力边界：tar/AppImage不携带已安装的Polkit系统集成，系统manager特权写操作仍推荐使用DEB/RPM/Arch原生包。
+- glibc tar与AppImage进入双架构实现；musl必须通过Alpine原生构建与运行时依赖检查后才进入bundle。
+- Flatpak分发延后到显式宿主执行桥接或受限capability profile完成后，避免发布只能启动UI却无法管理宿主软件的产物。
 
 ### 阶段 7：扩展 Package Manager 生态
 
