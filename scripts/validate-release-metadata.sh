@@ -23,7 +23,7 @@ for package in updater updater-manager-api updater-managers updater_core; do
 done
 
 rpm_version="${version/-/\~}"
-test "$(sed -n 's/^version = "\([0-9].*~beta\.[0-9]*\)"/\1/p' ui/Cargo.toml)" = "$rpm_version"
+test "$(sed -n 's/^version = "\([0-9][^"]*\)"/\1/p' ui/Cargo.toml)" = "$rpm_version"
 
 arch_version="${version/-/}"
 (
@@ -35,6 +35,6 @@ grep -Fxq $'\t'"pkgver = $arch_version" packaging/arch/.SRCINFO
 grep -Fxq $'\t'"source = updater-$arch_version.tar.gz::https://github.com/Yiki21/PackageGet/archive/refs/tags/Build-v$version.tar.gz" packaging/arch/.SRCINFO
 
 grep -Fxq "# Updater $version" RELEASE_NOTES.md
-grep -Fq "\`$version\` is an unsigned Linux preview." README.md
+grep -Fq "\`$version\` is an unsigned cross-platform release." README.md
 
 printf 'release metadata is consistent for %s\n' "$version"

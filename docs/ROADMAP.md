@@ -227,6 +227,11 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 旧Activity JSON通过serde defaults继续读取，新字段缺失时显示历史时间不可用及mixed/unknown scope；既有有界保留、ManagerId identity和redaction规则保持不变。
 - 1.0剩余发布门禁收敛为真实平台smoke证据：Linux Wayland/X11、Windows和macOS的安装、启动、升级、卸载，以及各平台unsigned限制提示。
 
+当前进度（Iteration 046已完成）：
+
+- 用户已完成发布资产的真实安装验证，确认可以进入1.0发布；签名和notarization按既定政策不作为门禁。
+- workspace、DEB/RPM、Arch、README、release notes和metadata preflight统一升为`1.0.0`；tag Release将公开17个资产及同一`SHA256SUMS`。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

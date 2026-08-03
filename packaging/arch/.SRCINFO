@@ -1,6 +1,6 @@
 pkgbase = updater
 	pkgdesc = Desktop GUI for managing packages across multiple package managers
-	pkgver = 0.3.0beta.3
+	pkgver = 1.0.0
 	pkgrel = 1
 	url = https://github.com/Yiki21/PackageGet
 	arch = x86_64
@@ -31,7 +31,7 @@ pkgbase = updater
 	optdepends = xdg-desktop-portal: native file and directory chooser integration
 	options = !debug
 	options = !lto
-	source = updater-0.3.0beta.3.tar.gz::https://github.com/Yiki21/PackageGet/archive/refs/tags/Build-v0.3.0-beta.3.tar.gz
+	source = updater-1.0.0.tar.gz::https://github.com/Yiki21/PackageGet/archive/refs/tags/Build-v1.0.0.tar.gz
 	b2sums = SKIP
 
 pkgname = updater

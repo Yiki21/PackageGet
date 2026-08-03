@@ -26,7 +26,7 @@ Currently supported package managers:
 - Applications: `flatpak`, `snap`, and `homebrew`
 - Development tools: `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
 
-The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget` plus the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners. The packaging pipeline also builds unsigned Windows x86_64 and macOS arm64/x86_64 artifacts; the latest public `0.3.0-beta.3` release predates that pipeline and remains Linux-only.
+The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget` plus the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners. The `1.0.0` packaging pipeline builds unsigned Linux, Windows, and macOS artifacts with a shared checksum manifest.
 
 Nix is deliberately not auto-enabled: choose one user profile from Settings first. Its initial contract supports installed packages and explicit install/update/uninstall operations while preserving flake identity. It does not advertise update inventory or package search, because `nix profile` has no read-only list-updates command or profile-scoped catalog.
 
@@ -180,6 +180,6 @@ The helper accepts only `install`, `update`, `remove`, and metadata `refresh` re
 
 Running the unpackaged GUI directly supports all read-only workflows. To exercise privileged system package changes from a source build, install the release helper, policy, and icon as root first; installing a generated release package is the recommended way to keep these assets consistent.
 
-## Linux preview status
+## Release status
 
-`0.3.0-beta.3` is an unsigned Linux preview. Its existing release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows, macOS, portable tar, and AppImage packages are not included in that existing tag; they are produced by the newer packaging pipeline for the next release candidate. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
+`1.0.0` is an unsigned cross-platform release. It includes Linux native packages, glibc/musl portable archives, AppImages, Windows x86_64 portable/setup packages, and macOS arm64/x86_64 app archives and DMGs. Verify every download against the matching `SHA256SUMS`; Windows SmartScreen and macOS Gatekeeper may warn because signing and notarization are intentionally outside the 1.0 policy. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for platform limitations and compatibility notes.
