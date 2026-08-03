@@ -1,7 +1,7 @@
 # Iteration 047：可扩展的 Package Manager 选择体验
 
 - 日期：2026-08-03
-- 状态：本地完成，待GitHub Actions复验
+- 状态：已完成
 - ROADMAP阶段：阶段7 Package Manager 生态扩展的 UI 基线
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -28,4 +28,5 @@
 - UI新增3项单元测试，覆盖Finding、Updates和Installed筛选后批量清除不会破坏隐藏manager状态；完整workspace tests通过。
 - workspace fmt、check、test、clippy和build已按ROADMAP要求串行通过；release metadata、Shell语法及portable tar真实清单验证通过。
 - Gamescope headless Wayland仍触发已知的wgpu `ERROR_SURFACE_LOST_KHR`；强制Xwayland后应用在700×600目标下稳定运行至受控超时，但compositor截图是黑帧，因此不把它记录成视觉验收。
-- Package workflow将验证所有发布格式均包含第三方notice；原生平台产物等待GitHub Actions复验。
+- [CI run 30805679742](https://github.com/Yiki21/PackageGet/actions/runs/30805679742)已通过Linux fmt/check/test/clippy/build、Windows全部离线contracts和macOS原生workspace check。
+- [Package run 30805679816](https://github.com/Yiki21/PackageGet/actions/runs/30805679816)已通过DEB/RPM（amd64/arm64）、Arch、glibc/musl portable、AppImage、Windows ZIP/installer、macOS Intel/arm64构建与产物校验；bundle checksums已生成。
