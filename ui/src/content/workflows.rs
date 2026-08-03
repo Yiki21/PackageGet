@@ -9,7 +9,7 @@ use updater_core::{
     CancellationToken, Config, ManagerRegistry, OperationOutcome, OperationProgress,
     execute_package_groups,
 };
-use updater_manager_api::{ManagerId, PackageAction, PackageTarget};
+use updater_manager_api::{ManagerId, PackageAction, PackageScope, PackageTarget};
 
 use crate::{content::shared::PackageSelectionKey, manager_catalog::ManagerCatalog};
 
@@ -98,6 +98,8 @@ where
             failed_manager: None,
             error: None,
             cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope: PackageScope::Unknown,
         }));
     }
 
@@ -184,6 +186,8 @@ mod tests {
             failed_manager: None,
             error: None,
             cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope: PackageScope::Unknown,
         };
 
         assert_eq!(outcome.summary(), "12 packages updated across 3 sources");
@@ -200,6 +204,8 @@ mod tests {
             failed_manager: Some(manager_id("builtin:cargo")),
             error: Some("failed".to_owned()),
             cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope: PackageScope::Unknown,
         };
 
         assert_eq!(

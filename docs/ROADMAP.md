@@ -216,6 +216,17 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - bundle严格汇总既有11项与新增6项，为17个发布资产生成统一`SHA256SUMS`；Package run `30785115485`全部成功，两个musl Cargo cache也已成功保存。
 - Flatpak分发已明确移出1.0范围，避免为一种发布格式引入host-spawn权限、独立capability profile和新的安全架构；现有Flatpak manager本身不受影响。
 
+当前进度（Iteration 044已完成）：
+
+- 取消已从manager group边界扩展到内置manager正在运行的命令；Unix process group与Windows process tree均等待底层进程退出后才报告`cancelled`。
+- UI区分cancellation requested、terminating和最终结果；取消不再伪装成普通failure，1.0 unsigned发布政策、SHA256SUMS校验和CI provenance已写入发布文档。
+
+当前进度（Iteration 045已完成）：
+
+- Activity record现在记录RFC3339 UTC毫秒开始/完成时间、aggregate scope和有序per-manager outcome；成功、失败、取消与未启动manager均可区分。
+- 旧Activity JSON通过serde defaults继续读取，新字段缺失时显示历史时间不可用及mixed/unknown scope；既有有界保留、ManagerId identity和redaction规则保持不变。
+- 1.0剩余发布门禁收敛为真实平台smoke证据：Linux Wayland/X11、Windows和macOS的安装、启动、升级、卸载，以及各平台unsigned限制提示。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

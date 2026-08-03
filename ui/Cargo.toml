@@ -106,6 +106,7 @@ polkit = "*"
 name = "updater"
 
 [dependencies]
+chrono.workspace = true
 directories-next.workspace = true
 env_logger.workspace = true
 futures.workspace = true

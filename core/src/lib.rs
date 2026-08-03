@@ -8,7 +8,8 @@ mod storage;
 
 pub use builtin_managers::{register_builtin_managers, register_builtin_managers_for};
 pub use execution::{
-    CancellationToken, OperationOutcome, OperationProgress, execute_package_groups,
+    CancellationToken, ManagerOperationOutcome, ManagerOperationStatus, OperationOutcome,
+    OperationProgress, execute_package_groups,
 };
 pub use registry::{ManagerRegistry, RegistryError};
 pub use storage::Config;

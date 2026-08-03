@@ -62,6 +62,7 @@ pub struct App {
     next_operation_id: u64,
     /// Cooperative cancellation token for the active package operation.
     active_operation_cancellation: Option<content::CancellationToken>,
+    active_operation_started_at: Option<String>,
     /// Current application window size.
     window_size: iced::Size,
     /// Whether the medium-width sidebar is explicitly expanded.
@@ -229,6 +230,7 @@ impl App {
             activity_center_open: false,
             next_operation_id: 1,
             active_operation_cancellation: None,
+            active_operation_started_at: None,
             window_size: iced::Size::new(1200.0, 800.0),
             sidebar_expanded: false,
             inspector_drawer_open: false,
@@ -322,6 +324,7 @@ impl App {
                     content::Action::CancellableRun(content_task, cancellation) => {
                         self.status_panel.begin_package_operation();
                         self.active_operation_cancellation = Some(cancellation);
+                        self.active_operation_started_at = Some(crate::activity::now_timestamp());
                         content_task.map(Message::Content)
                     }
                     content::Action::ReloadPackageData { reason, follow_up } => {
@@ -341,7 +344,11 @@ impl App {
                         follow_up,
                     } => {
                         self.active_operation_cancellation = None;
-                        let notification = self.record_operation(&outcome);
+                        let started_at = self
+                            .active_operation_started_at
+                            .take()
+                            .unwrap_or_else(crate::activity::now_timestamp);
+                        let notification = self.record_operation(&outcome, started_at);
                         self.status_panel.record_outcome(outcome);
                         let completion = if reload {
                             Task::batch(vec![
@@ -746,11 +753,20 @@ impl App {
         )
     }
 
-    fn record_operation(&mut self, outcome: &content::OperationOutcome) -> Task<Message> {
+    fn record_operation(
+        &mut self,
+        outcome: &content::OperationOutcome,
+        started_at: String,
+    ) -> Task<Message> {
         let id = self.next_operation_id;
         self.next_operation_id = self.next_operation_id.saturating_add(1);
         self.activity_history
-            .push(crate::activity::ActivityRecord::from_outcome(id, outcome));
+            .push(crate::activity::ActivityRecord::from_outcome(
+                id,
+                outcome,
+                started_at,
+                crate::activity::now_timestamp(),
+            ));
         let persist = self.save_activity_history();
 
         if !self.pm_config.notifications_enabled {
@@ -1144,13 +1160,30 @@ impl App {
                 ]
             } else {
                 column(self.activity_history.iter().map(|record| {
+                    let manager_details = record
+                        .manager_summaries(&self.manager_catalog)
+                        .into_iter()
+                        .fold(column![], |details, summary| {
+                            details.push(
+                                iced::widget::text(summary)
+                                    .size(11)
+                                    .style(crate::theme::text_on_surface_muted),
+                            )
+                        });
                     column![
                         iced::widget::text(record.title())
                             .size(13)
                             .font(crate::theme::FONT_SEMIBOLD),
+                        iced::widget::text(record.time_summary())
+                            .size(11)
+                            .style(crate::theme::text_on_surface_muted),
+                        iced::widget::text(format!("Scope: {}", record.scope_summary()))
+                            .size(11)
+                            .style(crate::theme::text_on_surface_muted),
                         iced::widget::text(record.summary(&self.manager_catalog))
                             .size(12)
                             .style(crate::theme::text_on_surface_muted),
+                        manager_details,
                     ]
                     .spacing(3)
                     .into()

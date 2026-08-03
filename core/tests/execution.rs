@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use updater_core::{
-    CancellationToken, Config, ManagerConfig, ManagerRegistry, OperationProgress,
-    execute_package_groups,
+    CancellationToken, Config, ManagerConfig, ManagerOperationStatus, ManagerRegistry,
+    OperationProgress, execute_package_groups,
 };
 use updater_manager_api::{
     ManagerAvailability, ManagerCapabilities, ManagerCapability, ManagerCategory,
@@ -168,6 +168,14 @@ async fn executes_groups_in_supplied_order() {
 
     assert!(outcome.is_success());
     assert_eq!(outcome.completed_packages, 2);
+    assert_eq!(outcome.scope, PackageScope::Unknown);
+    assert_eq!(outcome.manager_outcomes.len(), 2);
+    assert!(
+        outcome
+            .manager_outcomes
+            .iter()
+            .all(|manager| manager.status == ManagerOperationStatus::Succeeded)
+    );
     assert_eq!(*order.lock().unwrap(), vec![second, first]);
 }
 
@@ -203,6 +211,8 @@ async fn preserves_manager_owned_target_identity() {
     .await;
 
     assert!(outcome.is_success());
+    assert_eq!(outcome.scope, PackageScope::User);
+    assert_eq!(outcome.manager_outcomes[0].scope, PackageScope::User);
     assert_eq!(*received_targets.lock().unwrap(), vec![package]);
 }
 
@@ -282,6 +292,11 @@ async fn failure_reports_partial_progress_and_skips_later_groups() {
     assert_eq!(outcome.completed_packages, 1);
     assert_eq!(outcome.completed_managers, 0);
     assert_eq!(outcome.failed_manager, Some(failing.clone()));
+    assert_eq!(outcome.manager_outcomes.len(), 2);
+    assert_eq!(
+        outcome.manager_outcomes[1].status,
+        ManagerOperationStatus::NotStarted
+    );
     assert_eq!(*order.lock().unwrap(), vec![failing]);
 }
 
@@ -328,6 +343,11 @@ async fn cancellation_is_observed_between_manager_groups() {
         outcome.error.as_deref(),
         Some("Stopped before starting another manager")
     );
+    assert_eq!(outcome.manager_outcomes.len(), 2);
+    assert_eq!(
+        outcome.manager_outcomes[1].status,
+        ManagerOperationStatus::NotStarted
+    );
     assert_eq!(*order.lock().unwrap(), vec![first]);
 }
 
@@ -363,4 +383,9 @@ async fn active_manager_cancellation_is_not_reported_as_failure() {
     assert!(!outcome.is_success());
     assert_eq!(outcome.failed_manager, None);
     assert_eq!(outcome.completed_packages, 0);
+    assert_eq!(outcome.manager_outcomes.len(), 1);
+    assert_eq!(
+        outcome.manager_outcomes[0].status,
+        ManagerOperationStatus::Cancelled
+    );
 }
