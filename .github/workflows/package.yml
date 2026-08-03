@@ -148,6 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: quay.io/archlinux/archlinux:base-devel
+    # Keep build output outside makepkg's srcdir, which --cleanbuild removes.
     env:
       CARGO_HOME: /home/builder/.cargo
       CARGO_TARGET_DIR: /home/builder/.cache/updater-target
