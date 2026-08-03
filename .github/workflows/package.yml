@@ -297,7 +297,7 @@ jobs:
           if ($binaryVersion -ne $version) {
             throw "binary ProductVersion '$binaryVersion' does not match '$version'"
           }
-          $installerVersion = (Get-Item $installer).VersionInfo.ProductVersion
+          $installerVersion = (Get-Item $installer).VersionInfo.ProductVersion.Trim()
           if ($installerVersion -ne $numericVersion) {
             throw "installer ProductVersion '$installerVersion' does not match '$numericVersion'"
           }

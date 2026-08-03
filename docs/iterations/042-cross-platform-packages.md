@@ -46,6 +46,7 @@
 - 本地`cargo fmt`、workspace check/test/clippy/build和Windows GNU workspace check均通过；全workspace确定性测试为49+5+6+74项单元测试及各manager/core契约测试通过，预期opt-in smoke保持ignored。
 - `actionlint v1.7.12`、`shellcheck packaging/macos/package.sh`、release metadata验证与`git diff --check`通过；锁文件只加入Windows resource所需依赖，没有顺带升级既有`windows-sys`解析。
 - 首轮Package run `30780508822`确认Windows release binary与资源可原生编译，但Inno拒绝把SemVer prerelease字符串写入数字`VersionInfoProductVersion`；installer PE版本改用`0.3.0.0`形式并增加对应断言，应用自身ProductVersion仍保留完整Cargo版本。
+- 第二轮Package run `30780981060`成功生成portable ZIP与installer；Windows `FileVersionInfo`读取Inno ProductVersion时保留固定宽度尾部空格，比较前显式`Trim()`，不改变已正确写入的`0.3.0.0`资源值。
 
 ## 遗留项 / 下一轮
 
