@@ -29,7 +29,8 @@
 
 - Health stale generation、取消 token、运行时 degraded 和诊断脱敏均有单元测试；Sidebar badge 优先级有单元测试。
 - `cargo check -p updater --all-targets --all-features --locked --jobs 1`、定向 Health/Sidebar tests、完整 workspace tests、clippy、build 和 release metadata 已验证。
-- [CI run 30808354940](https://github.com/Yiki21/PackageGet/actions/runs/30808354940)已通过Linux fmt/check/test/clippy/build、Windows离线契约矩阵和macOS arm64 workspace check。
+- [CI run 30808354940](https://github.com/Yiki21/PackageGet/actions/runs/30808354940)已通过初始 Health 实现的Linux fmt/check/test/clippy/build、Windows离线契约矩阵和macOS arm64 workspace check。
+- [CI run 30812204429](https://github.com/Yiki21/PackageGet/actions/runs/30812204429)已通过本轮 Package Managers 管理页收敛后的同一质量矩阵。
 - [Package run 30808354332](https://github.com/Yiki21/PackageGet/actions/runs/30808354332)已通过17项跨平台产物构建、Health 图标 notice 校验和统一 checksums bundle。
 - 本地 GUI 仍遵守既定约束：不把 headless Wayland compositor 的黑帧或 wgpu surface failure 记作视觉验收；需要视觉证据时使用隔离 X11 路径并明确记录限制。
 
