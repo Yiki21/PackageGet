@@ -16,6 +16,8 @@ const MAX_LINE_BYTES: usize = 2_048;
 const TAIL_LINE_COUNT: usize = 20;
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
+const EXECUTABLE_BUSY_RETRIES: usize = 3;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// Bounded command progress emitted by a built-in manager.
 #[derive(Debug, Clone, PartialEq)]
@@ -151,9 +153,20 @@ async fn run_command_with_parser(
     if is_cancelled() {
         return Err(cancelled_error());
     }
-    let mut child = piped_command(spec)
-        .spawn()
-        .map_err(|error| io_error("failed to start package manager command", error))?;
+    let mut attempt = 0;
+    let mut child = loop {
+        let result = piped_command(spec).spawn();
+        match result {
+            Ok(process) => break process,
+            Err(error) if is_executable_busy(&error) && attempt < EXECUTABLE_BUSY_RETRIES => {
+                attempt += 1;
+                tokio::time::sleep(EXECUTABLE_BUSY_RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(io_error("failed to start package manager command", error));
+            }
+        }
+    };
     let stdout = child.stdout.take().ok_or_else(|| {
         ManagerError::new(
             ManagerErrorKind::Other,
@@ -264,6 +277,18 @@ async fn run_command_with_parser(
 
     on_progress(CommandProgress::new(1.0, None));
     Ok(())
+}
+
+fn is_executable_busy(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ETXTBSY)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 fn cancelled_error() -> ManagerError {
