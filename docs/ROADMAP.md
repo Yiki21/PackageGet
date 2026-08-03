@@ -15,8 +15,7 @@
   Homebrew。Chocolatey、Scoop 与 macOS MAS 后续通过同一接口添加；softwareupdate 待 manager-level transaction、pending state 与 reboot-required 模型落地后接入。
 - PackageManager 首轮采用编译时扩展：第三方 crate 依赖公共 API、实现 trait 并显式注册；不直接加载 Rust 动态库，也不在本轮承诺免重编译的运行时插件。
 - 依赖按风险分组升级到实施时最新稳定版：Iced/窗口后端单独迁移，其他依赖分组更新；继续提交 Cargo.lock 保证发布可复现。
-- 首轮提供未签名发布物：Linux .deb/.rpm/Arch `.pkg.tar.zst`、Windows 便携包与安装包、macOS .app/.dmg；清楚标注未签名限制。Windows 签名和 Apple signing/notarization 在证书与 CI
-  secrets 就绪后补齐。
+- 1.0采用明确的未签名发布政策：Linux .deb/.rpm/Arch `.pkg.tar.zst`、Windows 便携包与安装包、macOS .app/.dmg均允许unsigned；签名、Apple signing/notarization及证书secrets不作为1.0门禁。所有发布页面必须标注限制，并要求用同一release的`SHA256SUMS`校验下载；严格资产清单与公开CI记录提供构建provenance。
 - 所有 PackageManager 写操作仍按 manager group 串行执行，不并发执行安装、更新或卸载。
 
 ## 推荐实施方案
@@ -63,7 +62,7 @@
 2.  trait 全部使用实例方法；异步动态分发继续使用 async-trait。核心方法覆盖 descriptor、availability、installed/count、updates、search 和统一 execute(action,
     packages, progress)。不在 public trait 中保留静态必需方法、泛型回调或关联异步类型，以确保可存入 Arc<dyn PackageManager>。
 3.  PackageManager 每次收到一个 manager 的完整 package group，由实现决定单命令批处理还是内部逐包串行；updater_core 仍严格按 manager group 顺序执行，并保留
-    stop-on-first-failure、partial success 和“只在下一组之前响应协作取消”的现有语义。
+    stop-on-first-failure与partial success。Iteration 044起，公共progress契约提供向后兼容的取消查询；内置manager在运行命令期间响应取消并等待底层进程树退出，第三方manager未接入时仍在下一组前响应。
 4.  在 updater_core 实现确定性 ManagerRegistry：显式注册 Arc<dyn PackageManager>、拒绝重复/非法 ID、按 descriptor 稳定排序、按 capability
     在调用前拒绝不支持的操作。
 5.  updater-managers::builtin_managers 提供对象安全的内置实现catalog，updater_core::register_builtin_managers负责注册与duplicate检查；后续使用
