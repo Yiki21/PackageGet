@@ -15,8 +15,8 @@
 - AppImage分别覆盖x86_64与aarch64，从同一glibc release binary构建并验证AppDir入口、desktop metadata、图标和ELF架构。
 - portable tar与AppImage不安装固定路径Polkit helper。用户级manager和全部只读流程可直接使用；APT、DNF、Pacman和Zypper的特权写操作需要另行安装原生DEB/RPM/Arch包所提供的helper与policy。
 - musl只作为Alpine/musl runtime归档发布，不声称能在任意glibc发行版运行；只有Alpine x86_64/aarch64原生CI构建和动态依赖验证均通过后才进入release bundle。
-- Flatpak作为分发格式与项目内的Flatpak manager是两个概念。当前应用依赖宿主package-manager CLI，直接放入沙箱会使大多数manager不可用；本轮只冻结后续要求，不生成残缺的`.flatpak`。
-- Flatpak后续实现必须先提供显式、可测试的宿主命令桥接或受限capability profile，并准确展示沙箱内可用manager；不能仅通过宽泛filesystem权限假装具备宿主执行能力。
+- Flatpak作为分发格式与项目内的Flatpak manager是两个概念。当前应用依赖宿主package-manager CLI，直接放入沙箱会使大多数manager不可用；Flatpak分发不进入1.0范围，也不生成残缺的`.flatpak`。
+- 若1.0后重新评估Flatpak分发，仍必须先提供显式、可测试的宿主命令桥接或受限capability profile，并准确展示沙箱内可用manager；不能仅通过宽泛filesystem权限假装具备宿主执行能力。
 
 ## 实施计划
 
@@ -52,5 +52,5 @@
 
 ## 遗留项 / 下一轮
 
-- Flatpak宿主执行设计需要单独安全评审，覆盖命令白名单、参数透传、环境清理、取消和错误分类；通过前不发布Flatpak bundle。
+- Flatpak分发已从1.0 roadmap移除；现有Flatpak manager继续由原生包、portable tar和AppImage提供，不引入sandbox host-spawn权限。
 - musl首次缓存命中和真实Alpine桌面启动仍留给下一次Package run及发布候选手工smoke；本轮已经验证缓存成功保存、ELF/loader依赖和归档结构。

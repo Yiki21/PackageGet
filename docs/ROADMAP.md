@@ -199,7 +199,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
     预留清晰输入，但在没有证书/secrets 时不伪装成已签名发布。
 5.  更新 README 和 manager-authoring 文档，按平台列出实际支持的 manager、提权模型、安装方式和限制。
 6.  后续独立增量通过同一 registry 接入 Chocolatey、Scoop 与 macOS MAS；softwareupdate 在阶段 7 要求的 manager-level transaction、pending state 与 reboot-required 模型落地后接入。若将来需要免重编译插件，另建带版本协商、权限、超时和隔离的子进程 JSON/Wasm 协议，不直接加载不稳定 Rust ABI 动态库。
-7.  扩展Linux分发格式：提供x86_64/aarch64 glibc portable tar与AppImage；musl只作为经过Alpine原生验证的runtime-specific tar，不宣传为全静态通用GUI。Flatpak必须在宿主CLI桥接或受限capability profile完成后再发布，不能让沙箱静默移除核心manager能力。
+7.  扩展Linux分发格式：提供x86_64/aarch64 glibc portable tar与AppImage；musl只作为经过Alpine原生验证的runtime-specific tar，不宣传为全静态通用GUI。Flatpak分发不进入1.0范围；若未来重新立项，仍必须先解决宿主CLI桥接或受限capability profile，不能让沙箱静默移除核心manager能力。
 
 当前进度（Iteration 042已完成）：
 
@@ -215,7 +215,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - portable格式的能力边界已冻结并写入用户文档：tar/AppImage不携带已安装的Polkit系统集成，系统manager特权写操作仍推荐使用DEB/RPM/Arch原生包。
 - 已交付x86_64/aarch64 glibc tar、Alpine/musl runtime tar与AppImage共6项；所有musl产物均通过Alpine原生构建、loader和动态依赖验证。
 - bundle严格汇总既有11项与新增6项，为17个发布资产生成统一`SHA256SUMS`；Package run `30785115485`全部成功，两个musl Cargo cache也已成功保存。
-- Flatpak分发延后到显式宿主执行桥接或受限capability profile完成后，避免发布只能启动UI却无法管理宿主软件的产物。
+- Flatpak分发已明确移出1.0范围，避免为一种发布格式引入host-spawn权限、独立capability profile和新的安全架构；现有Flatpak manager本身不受影响。
 
 ### 阶段 7：扩展 Package Manager 生态
 

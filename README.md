@@ -119,7 +119,7 @@ chmod +x updater-*-linux-*.AppImage
 ./updater-*-linux-*.AppImage
 ```
 
-Portable archives and AppImages do not install the fixed-path Polkit helper or policy. Read-only workflows and user-scoped managers work directly; use a DEB, RPM, or Arch package when privileged APT, DNF, Pacman, or Zypper writes are required. A Flatpak distribution is intentionally not published yet because the sandbox cannot execute the current host package-manager CLI contract without a separately reviewed host bridge.
+Portable archives and AppImages do not install the fixed-path Polkit helper or policy. Read-only workflows and user-scoped managers work directly; use a DEB, RPM, or Arch package when privileged APT, DNF, Pacman, or Zypper writes are required. A Flatpak distribution is outside the 1.0 scope because preserving the host package-manager CLI contract would require host-spawn permissions and a separate sandbox capability profile.
 
 ### Option 2: Build from source
 
