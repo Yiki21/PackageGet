@@ -57,4 +57,3 @@
 | 041 | 已完成 | 阶段 6/7：Linux 0.3.0-beta.3 发布 | [041-linux-beta-3-release.md](041-linux-beta-3-release.md) |
 | 042 | 已完成 | 阶段 6：Windows/macOS 原生发布物 | [042-cross-platform-packages.md](042-cross-platform-packages.md) |
 | 043 | 已完成 | 阶段 6：Portable Linux 与 AppImage 发布物 | [043-portable-linux-formats.md](043-portable-linux-formats.md) |
-| 044 | 进行中 | 阶段 6：Flatpak 分发与宿主 Flatpak 桥接 | [044-flatpak-distribution.md](044-flatpak-distribution.md) |
