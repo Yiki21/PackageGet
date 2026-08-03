@@ -45,6 +45,7 @@
 - 紧凑侧边栏改为固定28×28图标层承载16px SVG，badge叠加到右上角而不参与横向布局；`cargo test -p updater --bin updater --locked --jobs 1 -- --test-threads=1`的49项测试通过。当前会话未暴露Agent Workspace MCP调用接口，因此尚未取得隔离桌面截图证据。
 - 本地`cargo fmt`、workspace check/test/clippy/build和Windows GNU workspace check均通过；全workspace确定性测试为49+5+6+74项单元测试及各manager/core契约测试通过，预期opt-in smoke保持ignored。
 - `actionlint v1.7.12`、`shellcheck packaging/macos/package.sh`、release metadata验证与`git diff --check`通过；锁文件只加入Windows resource所需依赖，没有顺带升级既有`windows-sys`解析。
+- 首轮Package run `30780508822`确认Windows release binary与资源可原生编译，但Inno拒绝把SemVer prerelease字符串写入数字`VersionInfoProductVersion`；installer PE版本改用`0.3.0.0`形式并增加对应断言，应用自身ProductVersion仍保留完整Cargo版本。
 
 ## 遗留项 / 下一轮
 

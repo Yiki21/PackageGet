@@ -283,6 +283,7 @@ jobs:
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
             Where-Object name -eq 'updater' |
             Select-Object -ExpandProperty version
+          $numericVersion = (($version -split '[-+]')[0]) + '.0'
           $archive = "release-artifacts/updater-$version-windows-x86_64.zip"
           $installer = "release-artifacts/updater-$version-windows-x86_64-setup.exe"
           $expanded = Join-Path $env:RUNNER_TEMP 'updater-portable'
@@ -295,6 +296,10 @@ jobs:
           $binaryVersion = (Get-Item (Join-Path $expanded 'updater.exe')).VersionInfo.ProductVersion
           if ($binaryVersion -ne $version) {
             throw "binary ProductVersion '$binaryVersion' does not match '$version'"
+          }
+          $installerVersion = (Get-Item $installer).VersionInfo.ProductVersion
+          if ($installerVersion -ne $numericVersion) {
+            throw "installer ProductVersion '$installerVersion' does not match '$numericVersion'"
           }
           if ((Get-AuthenticodeSignature $installer).Status -ne 'NotSigned') {
             throw 'unsigned preview installer has an unexpected signature state'

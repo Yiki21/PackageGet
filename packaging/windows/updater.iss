@@ -38,7 +38,7 @@ VersionInfoVersion={#NumericVersion}
 VersionInfoCompany=Yiki21
 VersionInfoDescription=Updater installer
 VersionInfoProductName=Updater
-VersionInfoProductVersion={#AppVersion}
+VersionInfoProductVersion={#NumericVersion}
 
 [Files]
 Source: "{#BinaryPath}"; DestDir: "{app}"; Flags: ignoreversion
