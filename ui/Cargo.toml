@@ -126,5 +126,8 @@ iced = { workspace = true, features = ["linux-theme-detection", "wayland", "x11"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 iced.workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+winresource.workspace = true
+
 [dev-dependencies]
 roxmltree.workspace = true

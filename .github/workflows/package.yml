@@ -2,8 +2,19 @@ name: Package
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "Build-v*"
+    paths:
+      - ".github/workflows/package.yml"
+      - "assets/icons/**"
+      - "packaging/**"
+      - "scripts/validate-release-metadata.sh"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "ui/Cargo.toml"
+      - "ui/build.rs"
   workflow_dispatch:
 
 permissions:
@@ -221,11 +232,164 @@ jobs:
           path: packaging/arch/*.pkg.tar.zst
           if-no-files-found: error
 
+  build-windows:
+    needs: validate-metadata
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Windows release binary
+        run: cargo build --release --locked -p updater
+
+      - name: Build portable archive and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'updater' |
+            Select-Object -ExpandProperty version
+          $numericVersion = (($version -split '[-+]')[0]) + '.0'
+          $output = Join-Path $PWD 'release-artifacts'
+          $portable = Join-Path $output "updater-$version-windows-x86_64"
+          $binary = (Resolve-Path 'target/release/updater.exe').Path
+          $icon = (Resolve-Path 'assets/icons/updater.ico').Path
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+          Copy-Item $binary, 'LICENSE', 'README.md' -Destination $portable
+          Compress-Archive -Path "$portable/*" -DestinationPath "$portable.zip"
+
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found at $iscc"
+          }
+          & $iscc "/DAppVersion=$version" "/DNumericVersion=$numericVersion" "/DBinaryPath=$binary" "/DIconPath=$icon" "/DOutputDir=$output" packaging/windows/updater.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'updater' |
+            Select-Object -ExpandProperty version
+          $archive = "release-artifacts/updater-$version-windows-x86_64.zip"
+          $installer = "release-artifacts/updater-$version-windows-x86_64-setup.exe"
+          $expanded = Join-Path $env:RUNNER_TEMP 'updater-portable'
+          Expand-Archive -Path $archive -DestinationPath $expanded
+          @('updater.exe', 'LICENSE', 'README.md') | ForEach-Object {
+            if (-not (Test-Path (Join-Path $expanded $_))) {
+              throw "portable archive is missing $_"
+            }
+          }
+          $binaryVersion = (Get-Item (Join-Path $expanded 'updater.exe')).VersionInfo.ProductVersion
+          if ($binaryVersion -ne $version) {
+            throw "binary ProductVersion '$binaryVersion' does not match '$version'"
+          }
+          if ((Get-AuthenticodeSignature $installer).Status -ne 'NotSigned') {
+            throw 'unsigned preview installer has an unexpected signature state'
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64-${{ github.ref_name }}
+          path: |
+            release-artifacts/*.zip
+            release-artifacts/*.exe
+          if-no-files-found: error
+
+  build-macos:
+    needs: validate-metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS release binary
+        run: cargo build --release --locked -p updater
+
+      - name: Build app bundle and disk image
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          packaging/macos/package.sh \
+            "$version" \
+            "${{ matrix.arch }}" \
+            target/release/updater \
+            release-artifacts
+
+      - name: Verify macOS artifacts
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
+          archive="release-artifacts/updater-$version-macos-${{ matrix.arch }}.app.zip"
+          dmg="release-artifacts/updater-$version-macos-${{ matrix.arch }}.dmg"
+          test -f "$archive"
+          test -f "$dmg"
+          hdiutil verify "$dmg"
+          mount="$RUNNER_TEMP/updater-dmg"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          test -d "$mount/Updater.app"
+          test -L "$mount/Applications"
+          hdiutil detach "$mount"
+          trap - EXIT
+          extract="$RUNNER_TEMP/updater-app"
+          ditto -x -k "$archive" "$extract"
+          plist="$extract/Updater.app/Contents/Info.plist"
+          test "$(plutil -extract CFBundleIdentifier raw "$plist")" = com.ayi.updater
+          test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "$version"
+          file "$extract/Updater.app/Contents/MacOS/updater" | grep -Fq '${{ matrix.arch }}'
+          signature="$(codesign -dvvv "$extract/Updater.app" 2>&1 || true)"
+          if grep -Fq 'Authority=Developer ID Application' <<< "$signature"; then
+            echo 'unsigned preview app unexpectedly has a Developer ID signature' >&2
+            exit 1
+          fi
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}-${{ github.ref_name }}
+          path: |
+            release-artifacts/*.app.zip
+            release-artifacts/*.dmg
+          if-no-files-found: error
+
   bundle:
     needs:
       - build-arch
       - build-deb
+      - build-macos
       - build-rpm
+      - build-windows
     runs-on: ubuntu-latest
 
     steps:
@@ -245,13 +409,37 @@ jobs:
             find release-artifacts -maxdepth 1 -type f -name '*~*' -print0
           )
 
-          mapfile -t packages < <(
+          mapfile -t linux_packages < <(
             find release-artifacts -maxdepth 1 -type f \
               \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
               -printf '%f\n' \
               | sort
           )
-          test "${#packages[@]}" -eq 5
+          test "${#linux_packages[@]}" -eq 5
+
+          mapfile -t windows_packages < <(
+            find release-artifacts -maxdepth 1 -type f \
+              \( -name '*-windows-x86_64.zip' -o -name '*-windows-x86_64-setup.exe' \) \
+              -printf '%f\n' \
+              | sort
+          )
+          test "${#windows_packages[@]}" -eq 2
+
+          mapfile -t macos_packages < <(
+            find release-artifacts -maxdepth 1 -type f \
+              \( -name '*-macos-arm64.app.zip' -o -name '*-macos-arm64.dmg' \
+                 -o -name '*-macos-x86_64.app.zip' -o -name '*-macos-x86_64.dmg' \) \
+              -printf '%f\n' \
+              | sort
+          )
+          test "${#macos_packages[@]}" -eq 4
+
+          packages=(
+            "${linux_packages[@]}"
+            "${windows_packages[@]}"
+            "${macos_packages[@]}"
+          )
+          test "${#packages[@]}" -eq 11
 
           cd release-artifacts
           sha256sum "${packages[@]}" > SHA256SUMS
@@ -260,7 +448,7 @@ jobs:
       - name: Upload release bundle
         uses: actions/upload-artifact@v7
         with:
-          name: linux-packages-${{ github.ref_name }}
+          name: release-packages-${{ github.ref_name }}
           path: release-artifacts/*
           if-no-files-found: error
 
@@ -289,7 +477,7 @@ jobs:
       - name: Download release bundle
         uses: actions/download-artifact@v8
         with:
-          name: linux-packages-${{ github.ref_name }}
+          name: release-packages-${{ github.ref_name }}
           path: release-artifacts
 
       - name: Create GitHub release
@@ -302,6 +490,10 @@ jobs:
           prerelease: ${{ steps.release.outputs.prerelease }}
           files: |
             release-artifacts/*.deb
+            release-artifacts/*.dmg
+            release-artifacts/*.exe
+            release-artifacts/*.app.zip
             release-artifacts/*.rpm
             release-artifacts/*.pkg.tar.zst
+            release-artifacts/*-windows-x86_64.zip
             release-artifacts/SHA256SUMS

@@ -1,6 +1,6 @@
 # updater
 
-A Linux desktop GUI built with Rust and `iced` for viewing, searching, installing, and updating packages across multiple package managers.
+A cross-platform desktop GUI built with Rust and `iced` for viewing, searching, installing, and updating packages across multiple package managers.
 
 ## Overview
 
@@ -26,7 +26,7 @@ Currently supported package managers:
 - Applications: `flatpak`, `snap`, and `homebrew`
 - Development tools: `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
 
-The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget` plus the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners, but packaged installers for those platforms are not published yet.
+The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget` plus the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners. The packaging pipeline also builds unsigned Windows x86_64 and macOS arm64/x86_64 artifacts; the latest public `0.3.0-beta.3` release predates that pipeline and remains Linux-only.
 
 Nix is deliberately not auto-enabled: choose one user profile from Settings first. Its initial contract supports installed packages and explicit install/update/uninstall operations while preserving flake identity. It does not advertise update inventory or package search, because `nix profile` has no read-only list-updates command or profile-scoped catalog.
 
@@ -45,7 +45,8 @@ Nix is deliberately not auto-enabled: choose one user profile from Settings firs
 
 ## Build requirements
 
-- Rust toolchain: the project uses [`stable`](./rust-toolchain.toml) with the `rustfmt`, `clippy`, and `rust-analyzer` components
+All platforms require the stable Rust toolchain and a native C/C++ build toolchain. The following additional packages are Linux build requirements:
+
 - `cargo`
 - `mold`, which is used by default for Linux builds
 - A C/C++ build toolchain, such as `gcc` or `clang`
@@ -84,9 +85,13 @@ cargo run -p updater
 
 ### Option 1: Install a release package
 
-If the repository has published a release, download the Linux `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst` package for your distribution.
+If the repository has published a release for your platform, download one of these artifacts:
 
-GitHub Actions builds these packages automatically. They are intended for users who want to install and run the application directly.
+- Linux: `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst`
+- Windows x86_64: portable `.zip` or per-user setup `.exe`
+- macOS arm64/x86_64: `.app.zip` or `.dmg`
+
+GitHub Actions builds these packages automatically. Windows and macOS artifacts are currently unsigned: SmartScreen or Gatekeeper may block or warn on first launch. Verify the downloaded file against `SHA256SUMS`; do not treat the absence of a warning as signature verification.
 
 Install an Arch Linux release package with:
 
@@ -157,4 +162,4 @@ Running the unpackaged GUI directly supports all read-only workflows. To exercis
 
 ## Linux preview status
 
-`0.3.0-beta.3` is an unsigned Linux preview. Release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included yet. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.
+`0.3.0-beta.3` is an unsigned Linux preview. Its release artifacts target Debian/Ubuntu amd64 and arm64, RPM x86_64 and aarch64, and Arch Linux x86_64. Windows and macOS packages are not included in that existing tag; they are produced by the newer packaging pipeline for the next release candidate. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for schema compatibility notes and remaining limitations.

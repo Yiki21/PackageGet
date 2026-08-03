@@ -200,6 +200,14 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 5.  更新 README 和 manager-authoring 文档，按平台列出实际支持的 manager、提权模型、安装方式和限制。
 6.  后续独立增量通过同一 registry 接入 Chocolatey、Scoop 与 macOS MAS；softwareupdate 在阶段 7 要求的 manager-level transaction、pending state 与 reboot-required 模型落地后接入。若将来需要免重编译插件，另建带版本协商、权限、超时和隔离的子进程 JSON/Wasm 协议，不直接加载不稳定 Rust ABI 动态库。
 
+当前进度（Iteration 042实施中）：
+
+- 保留Linux amd64/arm64 DEB/RPM与Arch x86_64五包产线，新增Windows x86_64 portable ZIP和per-user Inno Setup installer。
+- 新增macOS arm64与Intel原生runner产线；每个架构从同一bundle ID、版本、Mach-O与ICNS验证后的`.app`生成`.app.zip`和DMG。
+- Windows嵌入ICO与VERSIONINFO；macOS bundle包含`Info.plist`、`com.ayi.updater` identity、最低系统版本和应用资源。
+- bundle job将严格汇总5个Linux、2个Windows、4个macOS产物，为全部11项生成同一`SHA256SUMS`并在tag Release上传。
+- 当前公开`0.3.0-beta.3`仍是Linux-only prerelease；Iteration 042只有在原生Package jobs与产物结构验证通过后才完成，也不会把unsigned产物描述为已签名或已notarize。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
