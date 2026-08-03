@@ -469,6 +469,15 @@ jobs:
               fi
             '
 
+      - name: Normalize musl cache ownership
+        if: always()
+        run: |
+          for path in .cargo-musl target-musl; do
+            if [[ -e "$path" ]]; then
+              sudo chown -R "$(id -u):$(id -g)" "$path"
+            fi
+          done
+
       - name: Upload musl portable artifact
         uses: actions/upload-artifact@v7
         with:
