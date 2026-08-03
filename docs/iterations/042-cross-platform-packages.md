@@ -1,7 +1,7 @@
 # Iteration 042：Windows/macOS 原生发布物
 
 - 日期：2026-08-03
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段6跨平台发布物
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -27,7 +27,7 @@
 - [x] 扩展Package workflow的Windows/macOS矩阵、结构校验、bundle checksum和Release上传。
 - [x] 更新README、ROADMAP发布检查点和迭代索引。
 - [x] 通过本地脚本检查与串行Rust质量门禁。
-- [ ] 推送并通过原生Windows/macOS Package jobs后完成本迭代。
+- [x] 推送并通过原生Windows/macOS Package jobs后完成本迭代。
 
 ## 验收标准
 
@@ -47,8 +47,11 @@
 - `actionlint v1.7.12`、`shellcheck packaging/macos/package.sh`、release metadata验证与`git diff --check`通过；锁文件只加入Windows resource所需依赖，没有顺带升级既有`windows-sys`解析。
 - 首轮Package run `30780508822`确认Windows release binary与资源可原生编译，但Inno拒绝把SemVer prerelease字符串写入数字`VersionInfoProductVersion`；installer PE版本改用`0.3.0.0`形式并增加对应断言，应用自身ProductVersion仍保留完整Cargo版本。
 - 第二轮Package run `30780981060`成功生成portable ZIP与installer；Windows `FileVersionInfo`读取Inno ProductVersion时保留固定宽度尾部空格，比较前显式`Trim()`，不改变已正确写入的`0.3.0.0`资源值。
+- Package run `30781426339`首次完整通过Linux五包、Windows ZIP/installer、macOS双架构app ZIP/DMG和bundle job；下载聚合artifact后在本机复核正好11个发布物，`sha256sum -c SHA256SUMS`全部通过。
+- Arch job将Cargo registry/git与位于`makepkg --cleanbuild`清理边界之外的target纳入缓存；run `30781790140`完成约1.19 GB冷缓存写入，run `30782732075`命中同一exact key，Arch从20分30秒降到8分50秒，约缩短57%。
+- 最终CI run `30782732072`的Linux完整质量门禁、Windows x86_64 workspace和macOS arm64 workspace全部通过；对应Package run `30782732075`的全部平台构建与11项bundle校验通过。
 
 ## 遗留项 / 下一轮
 
-- 等待本轮原生Package CI结果后记录run、产物结构与公开checksum证据。
+- 下一版本先发布跨平台beta或RC并执行Windows/macOS/Linux人工安装、启动、升级与卸载矩阵；当前公开`0.3.0-beta.3`仍是Linux-only，不回写旧Release资产。
 - 1.0前继续完成阶段5 Activity/失败恢复与真实process lifecycle取消，并确定签名/notarization的发布政策与凭据。
