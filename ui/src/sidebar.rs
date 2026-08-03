@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Length,
-    widget::{Container, Space, Svg, Text, button, column, container, row, svg},
+    widget::{Container, Space, Svg, Text, button, column, container, row, stack, svg},
 };
 
 use crate::{
@@ -275,35 +275,65 @@ fn sidebar_button(
             }
         });
 
-    let mut row_content = row![icon].spacing(10).align_y(Alignment::Center);
-    if !compact {
-        row_content = row_content.push(text).width(Length::Fill);
-    }
-    if let Some(badge) = badge {
-        if !compact {
-            row_content = row_content.push(Space::new().width(Length::Fill));
-        }
-        row_content = row_content.push(
-            container(
-                Text::new(badge.label())
-                    .size(11)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(move |iced_theme| iced::widget::text::Style {
-                        color: Some(match badge {
-                            Badge::Warning => theme::semantic_colors(iced_theme).error,
-                            _ => accent,
+    let content: iced::Element<'static, Message> = if compact {
+        let icon_layer = container(icon)
+            .width(28)
+            .height(28)
+            .center_x(28)
+            .center_y(28);
+        let mut compact_icon = stack![icon_layer].width(28).height(28);
+        if let Some(badge) = badge {
+            compact_icon = compact_icon.push(
+                container(
+                    Text::new(badge.label())
+                        .size(9)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(move |iced_theme| iced::widget::text::Style {
+                            color: Some(match badge {
+                                Badge::Warning => theme::semantic_colors(iced_theme).error,
+                                _ => accent,
+                            }),
                         }),
-                    }),
-            )
-            .padding([0, 2]),
-        );
-    }
-
-    let content = Container::new(row_content)
-        .padding([8, 10])
-        .width(Length::Fill)
-        .align_y(Alignment::Center)
-        .align_x(Alignment::Start);
+                )
+                .width(28)
+                .height(28)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start),
+            );
+        }
+        Container::new(compact_icon)
+            .padding([8, 0])
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .into()
+    } else {
+        let mut row_content = row![icon, text]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
+        if let Some(badge) = badge {
+            row_content = row_content.push(Space::new().width(Length::Fill)).push(
+                container(
+                    Text::new(badge.label())
+                        .size(11)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(move |iced_theme| iced::widget::text::Style {
+                            color: Some(match badge {
+                                Badge::Warning => theme::semantic_colors(iced_theme).error,
+                                _ => accent,
+                            }),
+                        }),
+                )
+                .padding([0, 2]),
+            );
+        }
+        Container::new(row_content)
+            .padding([8, 10])
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .align_x(Alignment::Start)
+            .into()
+    };
 
     button(content)
         .on_press(Message::Select(tab))
