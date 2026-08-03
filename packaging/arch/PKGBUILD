@@ -44,21 +44,22 @@ prepare() {
 
 build() {
   cd "PackageGet-Build-v$_upstream_version"
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
   cargo build --frozen --release -p updater
 }
 
 check() {
   cd "PackageGet-Build-v$_upstream_version"
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
   cargo test --frozen --release --workspace --all-targets -- --test-threads=1
 }
 
 package() {
   cd "PackageGet-Build-v$_upstream_version"
+  local cargo_target_dir="${CARGO_TARGET_DIR:-target}"
 
-  install -Dm0755 target/release/updater "$pkgdir/usr/bin/updater"
-  install -Dm0755 target/release/updater-system-helper \
+  install -Dm0755 "$cargo_target_dir/release/updater" "$pkgdir/usr/bin/updater"
+  install -Dm0755 "$cargo_target_dir/release/updater-system-helper" \
     "$pkgdir/usr/lib/updater/updater-system-helper"
   install -Dm0644 assets/linux/com.ayi.updater.policy \
     "$pkgdir/usr/share/polkit-1/actions/com.ayi.updater.policy"
