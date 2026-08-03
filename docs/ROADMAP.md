@@ -217,6 +217,12 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - bundle严格汇总既有11项与新增6项，为17个发布资产生成统一`SHA256SUMS`；Package run `30785115485`全部成功，两个musl Cargo cache也已成功保存。
 - Flatpak分发延后到显式宿主执行桥接或受限capability profile完成后，避免发布只能启动UI却无法管理宿主软件的产物。
 
+当前进度（Iteration 044实施中）：
+
+- Flatpak bundle使用GNOME 50 runtime覆盖x86_64与aarch64；sandbox capability profile只注册Flatpak manager，不展示无法访问宿主CLI的其他manager。
+- 宿主Flatpak操作通过`flatpak-spawn --host`执行固定`/usr/bin/flatpak`，禁用custom executable并清理环境；manifest不授予host filesystem权限。
+- `org.freedesktop.Flatpak`D-Bus权限本身允许host spawn，必须在用户文档中作为敏感能力公开；不能将应用层固定命令误称为不可绕过的沙箱安全边界。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
