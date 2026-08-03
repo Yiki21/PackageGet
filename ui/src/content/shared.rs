@@ -1,17 +1,18 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     ffi::{OsStr, OsString},
     path::PathBuf,
 };
 
-use iced::widget::{button, column, container, row, text, text_input};
-use iced::{Border, Element};
+use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::{Alignment, Border, Element, Length};
 use updater_core::Config;
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerId, PackageInfo, PackageTarget, Platform,
+    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerId, PackageInfo, PackageTarget,
+    Platform,
 };
 
-use crate::{manager_catalog::ManagerCatalog, theme};
+use crate::{icon, manager_catalog::ManagerCatalog, theme};
 
 fn validate_http_url(value: &str) -> Result<url::Url, String> {
     let url = url::Url::parse(value).map_err(|error| format!("Invalid URL: {error}"))?;
@@ -330,6 +331,322 @@ pub fn configured_managers_with_capability(
                 .is_some_and(|descriptor| descriptor.capabilities().contains(capability))
         })
         .collect()
+}
+
+/// Returns whether manager metadata matches a case-insensitive UI filter.
+pub fn manager_matches_query(manager: &ManagerId, catalog: &ManagerCatalog, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+
+    let display_name = catalog.display_name(manager);
+    let description = catalog
+        .descriptor(manager)
+        .map_or("", |descriptor| descriptor.description());
+    display_name.to_lowercase().contains(&query)
+        || description.to_lowercase().contains(&query)
+        || manager.as_str().to_lowercase().contains(&query)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerSourceStatus {
+    Ready,
+    Loading,
+    Initializing,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagerSourceEntry {
+    pub manager: ManagerId,
+    pub count: Option<usize>,
+    pub status: ManagerSourceStatus,
+}
+
+pub struct ManagerSourcePickerState<'a> {
+    pub selected_managers: &'a HashSet<ManagerId>,
+    pub expanded: bool,
+    pub query: &'a str,
+    pub count_label: &'static str,
+    pub disabled: bool,
+}
+
+pub struct ManagerSourcePickerMessages<Message> {
+    pub toggle_picker: Message,
+    pub query_changed: fn(String) -> Message,
+    pub set_visible_selection: fn(Vec<ManagerId>, bool) -> Message,
+    pub toggle_manager: fn(ManagerId, bool) -> Message,
+}
+
+pub fn manager_source_picker<'a, Message>(
+    entries: Vec<ManagerSourceEntry>,
+    catalog: &'a ManagerCatalog,
+    state: ManagerSourcePickerState<'a>,
+    messages: ManagerSourcePickerMessages<Message>,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    let total_count = entries.len();
+    let selected_count = entries
+        .iter()
+        .filter(|entry| state.selected_managers.contains(&entry.manager))
+        .count();
+    let preview = row(entries
+        .iter()
+        .filter(|entry| state.selected_managers.contains(&entry.manager))
+        .take(4)
+        .map(|entry| {
+            icon::manager_logo(&entry.manager, catalog.display_name(&entry.manager), 24.0)
+        }))
+    .spacing(4)
+    .align_y(Alignment::Center);
+
+    let summary = if selected_count == 0 {
+        "No sources selected".to_owned()
+    } else {
+        format!("{selected_count} of {total_count} sources")
+    };
+    let trigger = button(
+        row![
+            preview,
+            text(summary)
+                .size(13)
+                .font(theme::FONT_SEMIBOLD)
+                .width(Length::Fill),
+            text(if state.expanded { "^" } else { "v" })
+                .size(14)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface_muted),
+        ]
+        .spacing(theme::spacing::SM)
+        .align_y(Alignment::Center),
+    )
+    .padding([7, 10])
+    .width(Length::Fill)
+    .style(theme::source_picker_button(state.expanded))
+    .on_press(messages.toggle_picker);
+
+    if !state.expanded {
+        return trigger.into();
+    }
+
+    let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut visible_selectable = Vec::new();
+    for entry in entries {
+        if !manager_matches_query(&entry.manager, catalog, state.query) {
+            continue;
+        }
+        if matches!(
+            entry.status,
+            ManagerSourceStatus::Ready | ManagerSourceStatus::Failed
+        ) {
+            visible_selectable.push(entry.manager.clone());
+        }
+        let category = catalog
+            .descriptor(&entry.manager)
+            .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
+        groups[manager_category_rank(category)].push(entry);
+    }
+    let visible_count = groups.iter().map(Vec::len).sum::<usize>();
+    let visible_selected_count = visible_selectable
+        .iter()
+        .filter(|manager| state.selected_managers.contains(*manager))
+        .count();
+
+    let search = text_input("Filter sources...", state.query)
+        .on_input(messages.query_changed)
+        .padding([8, 10])
+        .size(13)
+        .style(theme::text_input_style);
+    let select_all_button = picker_action_button(
+        "Select shown",
+        (!state.disabled && visible_selected_count < visible_selectable.len())
+            .then(|| (messages.set_visible_selection)(visible_selectable.clone(), true)),
+    );
+    let clear_button = picker_action_button(
+        "Clear shown",
+        (!state.disabled && visible_selected_count > 0)
+            .then(|| (messages.set_visible_selection)(visible_selectable, false)),
+    );
+    let controls = row![
+        select_all_button,
+        clear_button,
+        text(format!("{visible_count} shown"))
+            .size(12)
+            .style(theme::text_on_surface_muted)
+            .width(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right),
+    ]
+    .spacing(theme::spacing::SM)
+    .align_y(Alignment::Center);
+
+    let mut group_elements = Vec::new();
+    for (index, group) in groups.into_iter().enumerate() {
+        if group.is_empty() {
+            continue;
+        }
+        let category = match index {
+            0 => ManagerCategory::System,
+            1 => ManagerCategory::Application,
+            2 => ManagerCategory::Development,
+            _ => ManagerCategory::Other,
+        };
+        let rows = column(group.into_iter().map(|entry| {
+            manager_source_row(
+                entry,
+                state.selected_managers,
+                catalog,
+                state.count_label,
+                state.disabled,
+                messages.toggle_manager,
+            )
+        }))
+        .spacing(2);
+        group_elements.push(
+            column![
+                text(manager_category_label(category))
+                    .size(11)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface_muted),
+                rows,
+            ]
+            .spacing(4)
+            .into(),
+        );
+    }
+    if group_elements.is_empty() {
+        group_elements.push(
+            container(
+                text("No package managers match this filter")
+                    .size(13)
+                    .style(theme::text_on_surface_muted),
+            )
+            .padding([16, 10])
+            .width(Length::Fill)
+            .into(),
+        );
+    }
+
+    let list = scrollable(column(group_elements).spacing(theme::spacing::MD))
+        .height(Length::Fixed(280.0))
+        .style(theme::scrollable_style);
+    let panel = container(column![search, controls, list].spacing(theme::spacing::SM))
+        .padding(theme::spacing::SM)
+        .width(Length::Fill)
+        .style(theme::source_picker_panel);
+
+    column![trigger, panel]
+        .spacing(theme::spacing::XS)
+        .width(Length::Fill)
+        .into()
+}
+
+fn manager_source_row<'a, Message>(
+    entry: ManagerSourceEntry,
+    selected_managers: &'a HashSet<ManagerId>,
+    catalog: &'a ManagerCatalog,
+    count_label: &'static str,
+    globally_disabled: bool,
+    on_toggle: fn(ManagerId, bool) -> Message,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+{
+    let manager = entry.manager;
+    let display_name = catalog.display_name(&manager).to_owned();
+    let selected = selected_managers.contains(&manager);
+    let row_disabled = globally_disabled
+        || matches!(
+            entry.status,
+            ManagerSourceStatus::Loading | ManagerSourceStatus::Initializing
+        );
+    let (detail, detail_style): (String, fn(&iced::Theme) -> iced::widget::text::Style) =
+        match entry.status {
+            ManagerSourceStatus::Ready => (
+                entry.count.map_or_else(
+                    || "Ready".to_owned(),
+                    |count| format!("{count} {count_label}"),
+                ),
+                theme::text_on_surface_muted,
+            ),
+            ManagerSourceStatus::Loading => ("Loading...".to_owned(), theme::text_accent),
+            ManagerSourceStatus::Initializing => {
+                ("Initializing...".to_owned(), theme::text_on_surface_alt)
+            }
+            ManagerSourceStatus::Failed => ("Failed".to_owned(), theme::text_error),
+        };
+    let checkbox = iced::widget::checkbox(selected)
+        .size(18)
+        .style(checkbox_style(row_disabled));
+    let checkbox: Element<'_, Message> = if row_disabled {
+        checkbox.into()
+    } else {
+        let toggle_manager = manager.clone();
+        checkbox
+            .on_toggle(move |selected| on_toggle(toggle_manager.clone(), selected))
+            .into()
+    };
+
+    container(
+        row![
+            icon::manager_logo(&manager, &display_name, 28.0),
+            column![
+                text(display_name)
+                    .size(13)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+                text(detail).size(12).style(detail_style),
+            ]
+            .spacing(1)
+            .width(Length::Fill),
+            checkbox,
+        ]
+        .spacing(theme::spacing::SM)
+        .align_y(Alignment::Center),
+    )
+    .padding([6, 8])
+    .width(Length::Fill)
+    .into()
+}
+
+fn picker_action_button<'a, Message>(
+    label: &'static str,
+    message: Option<Message>,
+) -> iced::widget::Button<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    let enabled = message.is_some();
+    let action = button(text(label).size(12))
+        .padding([5, 8])
+        .style(theme::secondary_button(enabled));
+    if let Some(message) = message {
+        action.on_press(message)
+    } else {
+        action
+    }
+}
+
+pub const fn manager_category_label(category: ManagerCategory) -> &'static str {
+    match category {
+        ManagerCategory::System => "System",
+        ManagerCategory::Application => "Applications",
+        ManagerCategory::Development => "Development",
+        ManagerCategory::Other => "Other",
+        _ => "Other",
+    }
+}
+
+const fn manager_category_rank(category: ManagerCategory) -> usize {
+    match category {
+        ManagerCategory::System => 0,
+        ManagerCategory::Application => 1,
+        ManagerCategory::Development => 2,
+        ManagerCategory::Other => 3,
+        _ => 3,
+    }
 }
 
 pub fn section_title(text: &'static str) -> iced::widget::Text<'static> {
@@ -822,54 +1139,6 @@ where
     column![header, styled_container(body)].spacing(12).into()
 }
 
-pub fn loading_manager_filter_view<'a, Message>(
-    pm_config: &Config,
-    catalog: &'a ManagerCatalog,
-    capability: ManagerCapability,
-    loading_text: &'static str,
-) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    let all_managers = configured_managers_with_capability(pm_config, catalog, capability);
-
-    if all_managers.is_empty() {
-        return empty_filter_view("No package managers detected");
-    }
-
-    let mut col_items: Vec<iced::Element<'a, Message>> = vec![
-        text(loading_text)
-            .size(13)
-            .style(theme::text_on_surface_muted)
-            .into(),
-    ];
-
-    let checkboxes = all_managers.iter().map(|manager| {
-        iced::widget::checkbox(false)
-            .label(catalog.display_name(manager).to_owned())
-            .spacing(10)
-            .text_size(13)
-            .style(move |iced_theme, _status| {
-                use iced::widget::checkbox::Style;
-                let semantic = theme::semantic_colors(iced_theme);
-                Style {
-                    background: semantic.surface.into(),
-                    icon_color: semantic.on_surface_muted,
-                    border: Border {
-                        color: semantic.divider,
-                        width: 2.0,
-                        radius: 4.0.into(),
-                    },
-                    text_color: Some(semantic.on_surface_muted),
-                }
-            })
-            .into()
-    });
-
-    col_items.extend(checkboxes);
-    column(col_items).spacing(8).into()
-}
-
 pub fn empty_filter_view<'a, Message>(message: &'static str) -> Element<'a, Message>
 where
     Message: 'a,
@@ -877,54 +1146,6 @@ where
     column![text(message).size(14).style(theme::text_on_surface_muted)]
         .spacing(8)
         .into()
-}
-
-pub fn active_manager_filter_view<'a, Message>(
-    entries: Vec<(ManagerId, usize)>,
-    selected_managers: &'a HashSet<ManagerId>,
-    loading_managers: &'a HashMap<ManagerId, u64>,
-    catalog: &'a ManagerCatalog,
-    disabled: bool,
-    is_initializing: impl Fn(&ManagerId) -> bool + Copy + 'a,
-    on_toggle: impl Fn(ManagerId, bool) -> Message + Copy + 'a,
-) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    row(entries.into_iter().map(move |(manager, count)| {
-        let is_selected = selected_managers.contains(&manager);
-        let is_loading = loading_managers.contains_key(&manager);
-        let is_initializing = is_initializing(&manager);
-        let is_disabled = disabled || is_loading || is_initializing;
-        let manager_name = catalog.display_name(&manager);
-
-        let label = if is_loading {
-            format!("{manager_name} (Loading...)")
-        } else if is_initializing {
-            format!("{manager_name} (Initializing...)")
-        } else {
-            format!("{manager_name} ({count})")
-        };
-
-        let checkbox = iced::widget::checkbox(is_selected)
-            .label(label)
-            .spacing(8)
-            .text_size(13)
-            .style(checkbox_style(is_disabled));
-
-        if is_disabled {
-            checkbox.into()
-        } else {
-            checkbox
-                .on_toggle(move |selected| on_toggle(manager.clone(), selected))
-                .into()
-        }
-    }))
-    .spacing(18)
-    .width(iced::Length::Fill)
-    .wrap()
-    .vertical_spacing(10)
-    .into()
 }
 
 pub fn refresh_button_with_label<'a, Message>(
@@ -1057,6 +1278,21 @@ mod tests {
             ),
             [manager_id("builtin:cargo"), manager_id("builtin:uv")]
         );
+    }
+
+    #[test]
+    fn manager_query_matches_name_description_and_stable_id() {
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let cargo = manager_id("builtin:cargo");
+
+        assert!(super::manager_matches_query(&cargo, &catalog, "cargo"));
+        assert!(super::manager_matches_query(&cargo, &catalog, "rust"));
+        assert!(super::manager_matches_query(
+            &cargo,
+            &catalog,
+            "BUILTIN:CARGO"
+        ));
+        assert!(!super::manager_matches_query(&cargo, &catalog, "python"));
     }
 
     #[test]

@@ -30,6 +30,8 @@ mkdir -p "$contents/MacOS" "$resources" "$iconset" "$dmg_root"
 install -m 0755 "$binary" "$contents/MacOS/updater"
 install -m 0644 "$repo_root/LICENSE" "$resources/LICENSE"
 install -m 0644 "$repo_root/README.md" "$resources/README.md"
+install -m 0644 "$repo_root/THIRD_PARTY_NOTICES.md" \
+  "$resources/THIRD_PARTY_NOTICES.md"
 
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" "$repo_root/assets/icons/updater.png" \

@@ -496,6 +496,50 @@ pub fn toolbar_container(theme: &Theme) -> container::Style {
     }
 }
 
+pub fn source_picker_panel(theme: &Theme) -> container::Style {
+    let semantic = semantic_colors(theme);
+    container::Style {
+        background: Some(semantic.surface_muted.into()),
+        text_color: Some(semantic.on_surface),
+        border: Border {
+            color: semantic.divider_light,
+            width: 1.0,
+            radius: radius::CONTROL.into(),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn source_picker_button(expanded: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let semantic = semantic_colors(theme);
+        let hovered = matches!(status, button::Status::Hovered);
+        button::Style {
+            background: Some(
+                if matches!(status, button::Status::Pressed) {
+                    semantic.surface_pressed
+                } else if hovered {
+                    semantic.surface_hover
+                } else {
+                    semantic.surface
+                }
+                .into(),
+            ),
+            text_color: semantic.on_surface,
+            border: Border {
+                color: if expanded || hovered {
+                    semantic.accent
+                } else {
+                    semantic.divider
+                },
+                width: if expanded || hovered { 2.0 } else { 1.0 },
+                radius: radius::CONTROL.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
 pub fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
     let semantic = semantic_colors(theme);
     let focused = matches!(status, text_input::Status::Focused { .. });

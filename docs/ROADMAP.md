@@ -232,6 +232,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 用户已完成发布资产的真实安装验证，确认可以进入1.0发布；签名和notarization按既定政策不作为门禁。
 - workspace、DEB/RPM、Arch、README、release notes和metadata preflight统一升为`1.0.0`；tag Release将公开17个资产及同一`SHA256SUMS`。
 
+当前进度（Iteration 047进行中）：
+
+- Finding、Updates和Installed已改用共享的可折叠source picker；已选Logo预览、分类、搜索、availability、加载状态和包数量在三页保持一致。
+- Settings以同一Logo和分类呈现已配置及可添加的manager，统一搜索名称、ID和描述；未知第三方manager使用稳定initials fallback。
+- 筛选后的`Select shown`和`Clear shown`只修改当前可见manager，隐藏manager的选择、结果和inspector状态保持不变。
+- Simple Icons来源、CC0许可和商标边界进入第三方notice；DEB、RPM、Arch、portable tar、AppImage、Windows和macOS包均携带该文件。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

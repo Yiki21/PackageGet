@@ -61,6 +61,12 @@ mode = "644"
 doc = true
 
 [[package.metadata.generate-rpm.assets]]
+source = "../THIRD_PARTY_NOTICES.md"
+dest = "/usr/share/licenses/updater/THIRD_PARTY_NOTICES.md"
+mode = "644"
+doc = true
+
+[[package.metadata.generate-rpm.assets]]
 source = "assets/fonts/OFL.txt"
 dest = "/usr/share/licenses/updater/Geist-OFL.txt"
 mode = "644"
@@ -90,6 +96,7 @@ assets = [
   ["../assets/icons/updater.png", "usr/share/icons/hicolor/512x512/apps/updater.png", "644"],
   ["../README.md", "usr/share/doc/updater/README.md", "644"],
   ["../LICENSE", "usr/share/doc/updater/copyright", "644"],
+  ["../THIRD_PARTY_NOTICES.md", "usr/share/doc/updater/THIRD_PARTY_NOTICES.md", "644"],
   ["assets/fonts/OFL.txt", "usr/share/doc/updater/Geist-OFL.txt", "644"],
 ]
 
@@ -116,6 +123,7 @@ notify-rust.workspace = true
 rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+simple-icons-pack.workspace = true
 tokio.workspace = true
 updater_core.workspace = true
 updater_manager_api.workspace = true

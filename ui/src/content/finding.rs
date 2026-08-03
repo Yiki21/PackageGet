@@ -22,6 +22,10 @@ use crate::{
 pub struct Finding {
     /// Search query being edited by user.
     search_query: String,
+    /// Whether the package-manager source picker is expanded.
+    sources_expanded: bool,
+    /// Search text inside the package-manager source picker.
+    source_query: String,
     /// Last executed query used for post-install refresh.
     last_search_query: String,
     /// Package currently shown in the details inspector.
@@ -34,6 +38,12 @@ pub struct Finding {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Expand or collapse the package-manager source picker.
+    ToggleSourcePicker,
+    /// Filter package managers inside the source picker.
+    SourceQueryChanged(String),
+    /// Select or clear the visible package-manager sources.
+    SetSourceSelection(Vec<ManagerId>, bool),
     /// Package-manager selection message.
     SelectPackageManager(ManagerId, bool),
     /// Search-query change message.
@@ -158,6 +168,35 @@ impl Finding {
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
         match message {
+            Message::ToggleSourcePicker => {
+                self.sources_expanded = !self.sources_expanded;
+                if !self.sources_expanded {
+                    self.source_query.clear();
+                }
+                Action::None
+            }
+            Message::SourceQueryChanged(query) => {
+                self.source_query = query;
+                Action::None
+            }
+            Message::SetSourceSelection(managers, selected) => {
+                if self.pending_install.is_some() {
+                    return Action::None;
+                }
+                if selected {
+                    info.selected_managers.extend(managers);
+                } else {
+                    for manager in managers {
+                        info.selected_managers.remove(&manager);
+                        info.searching_managers.remove(&manager);
+                        info.search_errors.remove(&manager);
+                        info.selected_packages
+                            .retain(|(selected_manager, _)| selected_manager != &manager);
+                        info.search_results.remove(&manager);
+                    }
+                }
+                Action::None
+            }
             Message::SelectPackageManager(pm_type, selected) => {
                 if self.pending_install.is_some() {
                     return Action::None;
@@ -615,42 +654,37 @@ impl Finding {
                     .style(theme::text_on_surface_muted)
                     .into()
             } else {
-                row(all_managers.iter().map(|manager| {
-                    let manager = manager.clone();
-                    let display_name = catalog.display_name(&manager);
-                    let is_selected = info.selected_managers.contains(&manager);
-                    let is_searching = info.searching_managers.contains_key(&manager);
-                    let is_frozen = self.pending_install.is_some();
-                    let label = if is_searching {
-                        format!("{display_name} (Searching...)")
-                    } else if info.search_errors.contains_key(&manager) {
-                        format!("{display_name} (Failed)")
-                    } else if let Some(results) = info.search_results.get(&manager) {
-                        format!("{display_name} ({} results)", results.len())
-                    } else {
-                        display_name.to_owned()
-                    };
-                    let checkbox = iced::widget::checkbox(is_selected)
-                        .label(label)
-                        .spacing(8)
-                        .text_size(13)
-                        .style(shared::checkbox_style(is_searching || is_frozen));
-
-                    if is_searching || is_frozen {
-                        checkbox.into()
-                    } else {
-                        checkbox
-                            .on_toggle(move |selected| {
-                                Message::SelectPackageManager(manager.clone(), selected)
-                            })
-                            .into()
-                    }
-                }))
-                .spacing(18)
-                .width(iced::Length::Fill)
-                .wrap()
-                .vertical_spacing(10)
-                .into()
+                let entries = all_managers
+                    .into_iter()
+                    .map(|manager| shared::ManagerSourceEntry {
+                        count: info.search_results.get(&manager).map(Vec::len),
+                        status: if info.searching_managers.contains_key(&manager) {
+                            shared::ManagerSourceStatus::Loading
+                        } else if info.search_errors.contains_key(&manager) {
+                            shared::ManagerSourceStatus::Failed
+                        } else {
+                            shared::ManagerSourceStatus::Ready
+                        },
+                        manager,
+                    })
+                    .collect();
+                shared::manager_source_picker(
+                    entries,
+                    catalog,
+                    shared::ManagerSourcePickerState {
+                        selected_managers: &info.selected_managers,
+                        expanded: self.sources_expanded,
+                        query: &self.source_query,
+                        count_label: "results",
+                        disabled: self.pending_install.is_some(),
+                    },
+                    shared::ManagerSourcePickerMessages {
+                        toggle_picker: Message::ToggleSourcePicker,
+                        query_changed: Message::SourceQueryChanged,
+                        set_visible_selection: Message::SetSourceSelection,
+                        toggle_manager: Message::SelectPackageManager,
+                    },
+                )
             };
 
             column![shared::section_title("Sources"), filters]
@@ -1208,6 +1242,37 @@ mod tests {
 
     fn package(manager: &ManagerId, name: &str) -> PackageInfo {
         PackageInfo::new(manager.clone(), name, "Not Installed")
+    }
+
+    #[test]
+    fn clearing_visible_sources_preserves_hidden_source_state() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let flatpak = manager_id("builtin:flatpak");
+        info.selected_managers = HashSet::from([cargo.clone(), flatpak.clone()]);
+        info.search_results
+            .insert(cargo.clone(), vec![package(&cargo, "cargo-edit")]);
+        info.search_results
+            .insert(flatpak.clone(), vec![package(&flatpak, "org.example.App")]);
+        info.selected_packages
+            .insert(shared::selection_key(&flatpak, "org.example.App"));
+
+        let action = finding.update(
+            Message::SetSourceSelection(vec![cargo.clone()], false),
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(info.selected_managers, HashSet::from([flatpak.clone()]));
+        assert!(!info.search_results.contains_key(&cargo));
+        assert!(info.search_results.contains_key(&flatpak));
+        assert!(
+            info.selected_packages
+                .contains(&shared::selection_key(&flatpak, "org.example.App"))
+        );
     }
 
     #[test]

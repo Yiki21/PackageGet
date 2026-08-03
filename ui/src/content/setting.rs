@@ -7,7 +7,7 @@ use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerCatego
 
 use crate::{
     content::shared,
-    icon::{ADD_ICON, REFRESH_ICON, SAVE_ICON},
+    icon::{self, ADD_ICON, REFRESH_ICON, SAVE_ICON},
     manager_catalog::ManagerCatalog,
     theme,
 };
@@ -18,6 +18,8 @@ pub struct Settings {
     draft: updater_core::Config,
     /// Last configuration synchronized from or saved to persistent storage.
     baseline: updater_core::Config,
+    /// Search text for filtering configured and available managers.
+    manager_query: String,
     /// Whether the draft has been initialized from application state.
     is_initialized: bool,
     /// Whether config save is in progress.
@@ -44,6 +46,8 @@ pub enum SaveStatus {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Filter package managers throughout Settings.
+    ManagerQueryChanged(String),
     /// Package-manager detection message.
     DetectPackageManagers,
     /// Detection result message.
@@ -190,6 +194,10 @@ impl Settings {
         self.sync_from_config(active_config);
 
         match message {
+            Message::ManagerQueryChanged(query) => {
+                self.manager_query = query;
+                Action::None
+            }
             Message::DetectPackageManagers => {
                 self.is_detecting = true;
                 let config = self.draft.clone();
@@ -479,9 +487,8 @@ impl Settings {
                 format!("{} package managers configured", pm_config.managers.len()),
                 theme::colors::SETTINGS,
             ),
-            self.view_system_manager_section(pm_config, catalog),
             self.view_appearance_section(pm_config),
-            self.view_app_manager_section(pm_config, catalog),
+            self.view_configured_managers_section(pm_config, catalog),
             self.view_selection_list(pm_config, catalog),
             self.view_buttons(),
             self.view_status(),
@@ -515,53 +522,102 @@ impl Settings {
             .into()
     }
 
-    fn view_system_manager_section(
+    fn view_configured_managers_section(
         &self,
         pm_config: &updater_core::Config,
         catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
-        use iced::widget::{column, text};
+        use iced::Alignment;
+        use iced::widget::{column, container, row, text, text_input};
 
-        let system_managers = pm_config
-            .managers
-            .iter()
-            .filter(|manager| {
-                catalog
-                    .descriptor(&manager.id)
-                    .is_some_and(|descriptor| descriptor.category() == ManagerCategory::System)
-            })
-            .collect::<Vec<_>>();
+        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for manager in pm_config.managers.iter().filter(|manager| {
+            shared::manager_matches_query(&manager.id, catalog, &self.manager_query)
+        }) {
+            let category = catalog
+                .descriptor(&manager.id)
+                .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
+            groups[manager_category_rank(category)].push(manager);
+        }
 
-        let content = if system_managers.is_empty() {
-            column![
-                text("Not detected")
-                    .size(16)
-                    .style(theme::text_on_surface_muted)
-            ]
-            .spacing(8)
+        let mut grouped_lists = Vec::new();
+        for (index, managers) in groups.into_iter().enumerate() {
+            if managers.is_empty() {
+                continue;
+            }
+            let category = category_from_rank(index);
+            let count = managers.len();
+            let rows = column(managers.into_iter().map(|manager| {
+                let item = container(self.view_manager_item(
+                    &manager.id,
+                    Some(manager),
+                    false,
+                    pm_config,
+                    catalog,
+                ))
+                .width(iced::Length::Fill);
+                let mut manager_row = row![item]
+                    .spacing(theme::spacing::MD)
+                    .align_y(Alignment::Center)
+                    .width(iced::Length::Fill);
+                if category != ManagerCategory::System {
+                    manager_row = manager_row.push(Self::secondary_button(
+                        "Unload",
+                        14.0,
+                        Some(Message::UnloadManager(manager.id.clone())),
+                    ));
+                }
+                manager_row.into()
+            }))
+            .spacing(theme::spacing::SM);
+            grouped_lists.push(
+                column![
+                    row![
+                        text(shared::manager_category_label(category))
+                            .size(13)
+                            .font(theme::FONT_SEMIBOLD)
+                            .style(theme::text_on_surface),
+                        text(format!("{count}"))
+                            .size(12)
+                            .style(theme::text_on_surface_muted),
+                    ]
+                    .spacing(theme::spacing::SM)
+                    .align_y(Alignment::Center),
+                    rows,
+                ]
+                .spacing(theme::spacing::SM)
+                .into(),
+            );
+        }
+
+        let content: iced::Element<'_, Message> = if grouped_lists.is_empty() {
+            let message = if pm_config.managers.is_empty() {
+                "No package managers configured"
+            } else {
+                "No configured package managers match this filter"
+            };
+            text(message)
+                .size(14)
+                .style(theme::text_on_surface_muted)
+                .into()
         } else {
-            column(
-                system_managers
-                    .into_iter()
-                    .map(|manager| {
-                        self.view_manager_item(
-                            &manager.id,
-                            Some(manager),
-                            false,
-                            pm_config,
-                            catalog,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .spacing(12)
+            column(grouped_lists).spacing(theme::spacing::LG).into()
         };
 
         column![
-            Self::section_title("System Package Manager"),
-            shared::styled_container(content)
+            Self::section_title("Package Managers"),
+            text("Configured sources are grouped by the kind of software they manage.")
+                .size(13)
+                .style(theme::text_on_surface_muted),
+            text_input("Filter package managers...", &self.manager_query)
+                .on_input(Message::ManagerQueryChanged)
+                .padding([8, 10])
+                .size(13)
+                .style(theme::text_input_style),
+            content,
         ]
-        .spacing(12)
+        .spacing(theme::spacing::SM)
+        .width(iced::Length::Fill)
         .into()
     }
 
@@ -601,72 +657,6 @@ impl Settings {
         .into()
     }
 
-    /// Application and development package manager section.
-    fn view_app_manager_section(
-        &self,
-        pm_config: &updater_core::Config,
-        catalog: &ManagerCatalog,
-    ) -> iced::Element<'static, Message> {
-        use iced::Alignment;
-        use iced::widget::{column, container, row, text};
-
-        let configured_managers = pm_config
-            .managers
-            .iter()
-            .filter(|manager| {
-                catalog
-                    .descriptor(&manager.id)
-                    .is_none_or(|descriptor| descriptor.category() != ManagerCategory::System)
-            })
-            .collect::<Vec<_>>();
-
-        let managers_list = if configured_managers.is_empty() {
-            column![
-                text("No application or development package managers configured")
-                    .size(16)
-                    .style(theme::text_on_surface_muted)
-            ]
-        } else {
-            column(
-                configured_managers
-                    .into_iter()
-                    .map(|manager| {
-                        let unload_btn = Self::secondary_button(
-                            "Unload",
-                            14.0,
-                            Some(Message::UnloadManager(manager.id.clone())),
-                        );
-
-                        row![
-                            container(self.view_manager_item(
-                                &manager.id,
-                                Some(manager),
-                                false,
-                                pm_config,
-                                catalog,
-                            ))
-                            .width(iced::Length::Fill),
-                            unload_btn
-                        ]
-                        .spacing(12)
-                        .align_y(Alignment::Center)
-                        .width(iced::Length::Fill)
-                        .into()
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .spacing(12)
-        };
-
-        column![
-            Self::section_title("Application & Development Package Managers"),
-            managers_list
-        ]
-        .spacing(12)
-        .width(iced::Length::Fill)
-        .into()
-    }
-
     fn view_selection_list(
         &self,
         pm_config: &updater_core::Config,
@@ -675,7 +665,7 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
 
-        let selection_list: Vec<ManagerId> = catalog
+        let available_managers: Vec<ManagerId> = catalog
             .registry()
             .managers()
             .into_iter()
@@ -688,7 +678,7 @@ impl Settings {
             .filter(|manager| pm_config.manager(manager).is_none())
             .collect();
 
-        let detected_count = selection_list
+        let detected_count = available_managers
             .iter()
             .filter(|manager| self.detected_in_path.contains(manager))
             .count();
@@ -704,68 +694,106 @@ impl Settings {
             )
         };
 
-        let managers_list: iced::Element<'_, Message> = if selection_list.is_empty() {
+        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for manager in &available_managers {
+            let descriptor = catalog.descriptor(manager);
+            if !shared::manager_matches_query(manager, catalog, &self.manager_query) {
+                continue;
+            }
+            let category =
+                descriptor.map_or(ManagerCategory::Other, |descriptor| descriptor.category());
+            groups[manager_category_rank(category)].push(manager.clone());
+        }
+
+        let mut grouped_lists = Vec::new();
+        for (index, managers) in groups.into_iter().enumerate() {
+            if managers.is_empty() {
+                continue;
+            }
+            let category = category_from_rank(index);
+            if category == ManagerCategory::System {
+                continue;
+            }
+            let count = managers.len();
+            let rows = column(managers.into_iter().map(|manager| {
+                let detected_in_path = self.detected_in_path.contains(&manager);
+                let is_nix_profile = manager.as_str() == "builtin:nix-profile";
+                let action_message = if is_nix_profile {
+                    Message::OpenNixProfileDialog
+                } else if detected_in_path {
+                    Message::AddDetectedManager(manager.clone())
+                } else {
+                    Message::OpenDialog(manager.clone())
+                };
+                let action_label = if is_nix_profile {
+                    "Choose Profile"
+                } else if detected_in_path {
+                    "Add"
+                } else {
+                    "Select Path"
+                };
+                let add_btn = Self::icon_button(
+                    svg::Svg::new(ADD_ICON.clone()).width(16).height(16),
+                    action_label,
+                    14.0,
+                    Some(action_message),
+                );
+
+                row![
+                    container(self.view_manager_item(
+                        &manager,
+                        None,
+                        detected_in_path,
+                        pm_config,
+                        catalog,
+                    ))
+                    .width(iced::Length::Fill),
+                    add_btn,
+                ]
+                .spacing(theme::spacing::MD)
+                .align_y(Alignment::Center)
+                .width(iced::Length::Fill)
+                .into()
+            }))
+            .spacing(theme::spacing::SM);
+            grouped_lists.push(
+                column![
+                    row![
+                        text(shared::manager_category_label(category))
+                            .size(13)
+                            .font(theme::FONT_SEMIBOLD)
+                            .style(theme::text_on_surface),
+                        text(format!("{count}"))
+                            .size(12)
+                            .style(theme::text_on_surface_muted),
+                    ]
+                    .spacing(theme::spacing::SM)
+                    .align_y(Alignment::Center),
+                    rows,
+                ]
+                .spacing(theme::spacing::SM)
+                .into(),
+            );
+        }
+
+        let managers_list: iced::Element<'_, Message> = if available_managers.is_empty() {
             column![
                 text("All available package managers have been added")
                     .size(16)
                     .style(theme::text_on_surface_muted)
             ]
             .into()
+        } else if grouped_lists.is_empty() {
+            text("No package managers match this filter")
+                .size(14)
+                .style(theme::text_on_surface_muted)
+                .into()
         } else {
-            column(
-                selection_list
-                    .iter()
-                    .map(|manager| {
-                        let detected_in_path = self.detected_in_path.contains(manager);
-
-                        let is_nix_profile = manager.as_str() == "builtin:nix-profile";
-                        let action_message = if is_nix_profile {
-                            Message::OpenNixProfileDialog
-                        } else if detected_in_path {
-                            Message::AddDetectedManager(manager.clone())
-                        } else {
-                            Message::OpenDialog(manager.clone())
-                        };
-
-                        let action_label = if is_nix_profile {
-                            "Choose Profile"
-                        } else if detected_in_path {
-                            "Add"
-                        } else {
-                            "Select Path"
-                        };
-
-                        let add_btn = Self::icon_button(
-                            svg::Svg::new(ADD_ICON.clone()).width(16).height(16),
-                            action_label,
-                            16.0,
-                            Some(action_message),
-                        );
-
-                        row![
-                            container(self.view_manager_item(
-                                manager,
-                                None,
-                                detected_in_path,
-                                pm_config,
-                                catalog,
-                            ))
-                            .width(iced::Length::Fill),
-                            add_btn
-                        ]
-                        .spacing(12)
-                        .align_y(Alignment::Center)
-                        .width(iced::Length::Fill)
-                        .into()
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .spacing(12)
-            .into()
+            column(grouped_lists).spacing(theme::spacing::LG).into()
         };
 
         column![
-            Self::section_title("Add Other Package Manager"),
+            Self::section_title("Add Package Managers"),
             text(detect_tip)
                 .size(14)
                 .style(theme::text_on_surface_muted),
@@ -784,18 +812,37 @@ impl Settings {
         pm_config: &updater_core::Config,
         catalog: &ManagerCatalog,
     ) -> iced::Element<'static, Message> {
+        use iced::Alignment;
         use iced::widget::{column, row, text};
 
         let is_configured = config.is_some();
         let display_name = catalog.display_name(manager).to_owned();
+        let category = catalog
+            .descriptor(manager)
+            .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
         let name_row = if is_configured {
             row![
-                text(display_name).size(16),
-                text("✓").size(16).style(theme::text_success)
+                text(display_name.clone())
+                    .size(15)
+                    .font(theme::FONT_SEMIBOLD),
+                text(shared::manager_category_label(category))
+                    .size(11)
+                    .style(theme::text_on_surface_muted),
+                text("✓").size(14).style(theme::text_success)
             ]
-            .spacing(10)
+            .spacing(theme::spacing::SM)
+            .align_y(Alignment::Center)
         } else {
-            row![text(display_name).size(16)].spacing(10)
+            row![
+                text(display_name.clone())
+                    .size(15)
+                    .font(theme::FONT_SEMIBOLD),
+                text(shared::manager_category_label(category))
+                    .size(11)
+                    .style(theme::text_on_surface_muted),
+            ]
+            .spacing(theme::spacing::SM)
+            .align_y(Alignment::Center)
         };
 
         let info_text = if let Some(config) = config {
@@ -924,7 +971,17 @@ impl Settings {
             content_items.extend(self.view_nix_profile_config(pm_config));
         }
 
-        shared::styled_container(column(content_items).spacing(8)).into()
+        shared::styled_container(
+            row![
+                icon::manager_logo(manager, &display_name, 36.0),
+                column(content_items)
+                    .spacing(theme::spacing::SM)
+                    .width(iced::Length::Fill),
+            ]
+            .spacing(theme::spacing::MD)
+            .align_y(Alignment::Start),
+        )
+        .into()
     }
 
     /// Go binary configuration rows.
@@ -1102,6 +1159,25 @@ impl Settings {
         } else {
             container(text("")).into()
         }
+    }
+}
+
+const fn manager_category_rank(category: ManagerCategory) -> usize {
+    match category {
+        ManagerCategory::System => 0,
+        ManagerCategory::Application => 1,
+        ManagerCategory::Development => 2,
+        ManagerCategory::Other => 3,
+        _ => 3,
+    }
+}
+
+const fn category_from_rank(rank: usize) -> ManagerCategory {
+    match rank {
+        0 => ManagerCategory::System,
+        1 => ManagerCategory::Application,
+        2 => ManagerCategory::Development,
+        _ => ManagerCategory::Other,
     }
 }
 

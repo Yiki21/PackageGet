@@ -11,6 +11,7 @@ on:
       - "assets/icons/**"
       - "packaging/**"
       - "scripts/validate-release-metadata.sh"
+      - "THIRD_PARTY_NOTICES.md"
       - "Cargo.lock"
       - "Cargo.toml"
       - "ui/Cargo.toml"
@@ -75,6 +76,7 @@ jobs:
           package="$(find target/debian -maxdepth 1 -name '*.deb' -print -quit)"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
           test "$(dpkg-deb -f "$package" Version)" = "${version/-/\~}-1"
+          dpkg-deb --contents "$package" | grep -Fq './usr/share/doc/updater/THIRD_PARTY_NOTICES.md'
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v7
@@ -135,6 +137,7 @@ jobs:
           package="$(find target/generate-rpm -maxdepth 1 -name '*.rpm' -print -quit)"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "updater") | .version')"
           test "$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$package")" = "${version/-/\~}-1"
+          rpm -qlp "$package" | grep -Fxq '/usr/share/licenses/updater/THIRD_PARTY_NOTICES.md'
 
       - name: Upload rpm artifact
         uses: actions/upload-artifact@v7
@@ -240,6 +243,7 @@ jobs:
             usr/share/applications/com.ayi.updater.desktop \
             usr/share/icons/hicolor/scalable/apps/updater.svg \
             usr/share/licenses/updater/LICENSE \
+            usr/share/licenses/updater/THIRD_PARTY_NOTICES.md \
             usr/share/polkit-1/actions/com.ayi.updater.policy
           do
             grep -Fxq "$path" package-files.txt
@@ -517,7 +521,7 @@ jobs:
           $binary = (Resolve-Path 'target/release/updater.exe').Path
           $icon = (Resolve-Path 'assets/icons/updater.ico').Path
           New-Item -ItemType Directory -Force -Path $portable | Out-Null
-          Copy-Item $binary, 'LICENSE', 'README.md' -Destination $portable
+          Copy-Item $binary, 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md' -Destination $portable
           Compress-Archive -Path "$portable/*" -DestinationPath "$portable.zip"
 
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
@@ -541,7 +545,7 @@ jobs:
           $installer = "release-artifacts/updater-$version-windows-x86_64-setup.exe"
           $expanded = Join-Path $env:RUNNER_TEMP 'updater-portable'
           Expand-Archive -Path $archive -DestinationPath $expanded
-          @('updater.exe', 'LICENSE', 'README.md') | ForEach-Object {
+          @('updater.exe', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md') | ForEach-Object {
             if (-not (Test-Path (Join-Path $expanded $_))) {
               throw "portable archive is missing $_"
             }
@@ -625,6 +629,7 @@ jobs:
           plist="$extract/Updater.app/Contents/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$plist")" = com.ayi.updater
           test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "$version"
+          test -f "$extract/Updater.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
           file "$extract/Updater.app/Contents/MacOS/updater" | grep -Fq '${{ matrix.arch }}'
           signature="$(codesign -dvvv "$extract/Updater.app" 2>&1 || true)"
           if grep -Fq 'Authority=Developer ID Application' <<< "$signature"; then

@@ -31,6 +31,7 @@ esac
 test -x "$binary"
 test -f LICENSE
 test -f README.md
+test -f THIRD_PARTY_NOTICES.md
 test -f packaging/linux/PORTABLE.md
 
 package_name="updater-$version-linux-$arch-$libc"
@@ -42,6 +43,7 @@ mkdir -p "$output_dir" "$staging/$package_name"
 install -m 0755 "$binary" "$staging/$package_name/updater"
 install -m 0644 LICENSE "$staging/$package_name/LICENSE"
 install -m 0644 README.md "$staging/$package_name/README.md"
+install -m 0644 THIRD_PARTY_NOTICES.md "$staging/$package_name/THIRD_PARTY_NOTICES.md"
 install -m 0644 packaging/linux/PORTABLE.md "$staging/$package_name/PORTABLE.md"
 
 tar \
@@ -60,6 +62,7 @@ expected_files=(
   "$package_name/LICENSE"
   "$package_name/PORTABLE.md"
   "$package_name/README.md"
+  "$package_name/THIRD_PARTY_NOTICES.md"
   "$package_name/updater"
 )
 mapfile -t expected_files < <(printf '%s\n' "${expected_files[@]}" | sort)

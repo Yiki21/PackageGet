@@ -23,6 +23,10 @@ use crate::{
 pub struct Updates {
     /// Search text for filtering updates in UI.
     search_query: String,
+    /// Whether the package-manager source picker is expanded.
+    sources_expanded: bool,
+    /// Search text inside the package-manager source picker.
+    source_query: String,
     /// Update currently shown in the details inspector.
     inspected_package: Option<PackageSelectionKey>,
     /// Last inspector action error shown in UI.
@@ -60,6 +64,12 @@ impl UpdatePlan {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Expand or collapse the package-manager source picker.
+    ToggleSourcePicker,
+    /// Filter package managers inside the source picker.
+    SourceQueryChanged(String),
+    /// Select or clear the visible package-manager sources.
+    SetSourceSelection(Vec<ManagerId>, bool),
     /// Package-manager selection message.
     SelectPackageManager(ManagerId, bool),
     /// Updates-load result message.
@@ -201,41 +211,48 @@ impl Updates {
         catalog: &ManagerCatalog,
     ) -> Action {
         match message {
+            Message::ToggleSourcePicker => {
+                self.sources_expanded = !self.sources_expanded;
+                if !self.sources_expanded {
+                    self.source_query.clear();
+                }
+                Action::None
+            }
+            Message::SourceQueryChanged(query) => {
+                self.source_query = query;
+                Action::None
+            }
+            Message::SetSourceSelection(managers, selected) => {
+                if self.pending_update.is_some() {
+                    return Action::None;
+                }
+                if !selected {
+                    for manager in managers {
+                        Self::set_source_selection(false, manager, pm_config, info, catalog);
+                    }
+                    return Action::None;
+                }
+
+                let tasks = managers
+                    .into_iter()
+                    .filter_map(|manager| {
+                        match Self::set_source_selection(true, manager, pm_config, info, catalog) {
+                            Action::Run(task) => Some(task),
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if tasks.is_empty() {
+                    Action::None
+                } else {
+                    Action::Run(Task::batch(tasks))
+                }
+            }
             Message::SelectPackageManager(pm_type, selected) => {
                 if self.pending_update.is_some() {
                     return Action::None;
                 }
-                if selected {
-                    // Managers still in init phase are not selectable yet.
-                    if info.is_loading_count && !info.updates_by_manager.contains_key(&pm_type) {
-                        return Action::None;
-                    }
-
-                    info.selected_managers.insert(pm_type.clone());
-
-                    if info.init_errors.contains_key(&pm_type)
-                        || info.load_errors.contains_key(&pm_type)
-                    {
-                        info.init_errors.remove(&pm_type);
-                        info.load_errors.remove(&pm_type);
-                        Action::Run(Self::start_load(pm_config, info, pm_type, catalog, true))
-                    } else if info.loading_updates.contains_key(&pm_type) {
-                        Action::None
-                    } else if let Some((count, packages)) = info.updates_by_manager.get(&pm_type) {
-                        if *count == packages.len() {
-                            Action::None
-                        } else {
-                            Action::Run(Self::start_load(pm_config, info, pm_type, catalog, false))
-                        }
-                    } else {
-                        Action::Run(Self::start_load(pm_config, info, pm_type, catalog, false))
-                    }
-                } else {
-                    info.selected_managers.remove(&pm_type);
-                    info.selected_packages
-                        .retain(|(manager, _)| manager != &pm_type);
-                    Action::None
-                }
+                Self::set_source_selection(selected, pm_type, pm_config, info, catalog)
             }
             Message::LoadUpdatesResult {
                 request_id,
@@ -538,6 +555,44 @@ impl Updates {
         }
     }
 
+    fn set_source_selection(
+        selected: bool,
+        manager: ManagerId,
+        pm_config: &updater_core::Config,
+        info: &mut UpdatesInfo,
+        catalog: &ManagerCatalog,
+    ) -> Action {
+        if !selected {
+            info.selected_managers.remove(&manager);
+            info.selected_packages
+                .retain(|(selected_manager, _)| selected_manager != &manager);
+            return Action::None;
+        }
+
+        if !info.has_loading_count
+            || (info.is_loading_count && !info.updates_by_manager.contains_key(&manager))
+        {
+            return Action::None;
+        }
+        info.selected_managers.insert(manager.clone());
+
+        if info.init_errors.contains_key(&manager) || info.load_errors.contains_key(&manager) {
+            info.init_errors.remove(&manager);
+            info.load_errors.remove(&manager);
+            Action::Run(Self::start_load(pm_config, info, manager, catalog, true))
+        } else if info.loading_updates.contains_key(&manager) {
+            Action::None
+        } else if let Some((count, packages)) = info.updates_by_manager.get(&manager) {
+            if *count == packages.len() {
+                Action::None
+            } else {
+                Action::Run(Self::start_load(pm_config, info, manager, catalog, false))
+            }
+        } else {
+            Action::Run(Self::start_load(pm_config, info, manager, catalog, false))
+        }
+    }
+
     pub(crate) fn reset_pending_updates(&mut self) {
         self.pending_update = None;
         self.update_all_scope.clear();
@@ -744,62 +799,64 @@ impl Updates {
     // View components.
 
     fn manager_filter_view<'a>(
-        &self,
+        &'a self,
         info: &'a UpdatesInfo,
         pm_config: &updater_core::Config,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
-        let filters_content = if !info.has_loading_count {
-            shared::loading_manager_filter_view(
-                pm_config,
-                catalog,
-                ManagerCapability::Updates,
-                if info.is_loading_count {
-                    "Loading update information..."
+        let managers = shared::configured_managers_with_capability(
+            pm_config,
+            catalog,
+            ManagerCapability::Updates,
+        );
+        if managers.is_empty() {
+            return iced::widget::column![
+                shared::section_title("Sources"),
+                shared::empty_filter_view("No package managers detected")
+            ]
+            .spacing(theme::spacing::SM)
+            .into();
+        }
+        let entries = managers
+            .into_iter()
+            .map(|manager| shared::ManagerSourceEntry {
+                count: info
+                    .updates_by_manager
+                    .get(&manager)
+                    .map(|(count, _)| *count),
+                status: if info.loading_updates.contains_key(&manager) {
+                    shared::ManagerSourceStatus::Loading
+                } else if info.init_errors.contains_key(&manager)
+                    || info.load_errors.contains_key(&manager)
+                {
+                    shared::ManagerSourceStatus::Failed
+                } else if !info.has_loading_count
+                    || (info.is_loading_count && !info.updates_by_manager.contains_key(&manager))
+                {
+                    shared::ManagerSourceStatus::Initializing
                 } else {
-                    "Waiting to load update information"
+                    shared::ManagerSourceStatus::Ready
                 },
-            )
-        } else {
-            let managers = shared::configured_managers_with_capability(
-                pm_config,
-                catalog,
-                ManagerCapability::Updates,
-            );
-
-            if managers.is_empty() {
-                return iced::widget::column![
-                    shared::section_title("Sources"),
-                    shared::empty_filter_view("No package managers detected")
-                ]
-                .spacing(theme::spacing::SM)
-                .into();
-            }
-
-            let entries = managers
-                .iter()
-                .map(|manager| {
-                    let count = info
-                        .updates_by_manager
-                        .get(manager)
-                        .map_or(0, |(count, _)| *count);
-                    (manager.clone(), count)
-                })
-                .collect();
-
-            let pending_update = self.pending_update.is_some();
-            shared::active_manager_filter_view(
-                entries,
-                &info.selected_managers,
-                &info.loading_updates,
-                catalog,
-                pending_update,
-                move |manager| {
-                    info.is_loading_count && !info.updates_by_manager.contains_key(manager)
-                },
-                Message::SelectPackageManager,
-            )
-        };
+                manager,
+            })
+            .collect();
+        let filters_content = shared::manager_source_picker(
+            entries,
+            catalog,
+            shared::ManagerSourcePickerState {
+                selected_managers: &info.selected_managers,
+                expanded: self.sources_expanded,
+                query: &self.source_query,
+                count_label: "updates",
+                disabled: self.pending_update.is_some() || !info.has_loading_count,
+            },
+            shared::ManagerSourcePickerMessages {
+                toggle_picker: Message::ToggleSourcePicker,
+                query_changed: Message::SourceQueryChanged,
+                set_visible_selection: Message::SetSourceSelection,
+                toggle_manager: Message::SelectPackageManager,
+            },
+        );
 
         let mut content = iced::widget::column![shared::section_title("Sources")];
         if !info.init_errors.is_empty() {
@@ -1514,6 +1571,38 @@ mod tests {
 
     fn update(manager: &ManagerId, name: &str) -> PackageUpdate {
         PackageUpdate::new(PackageTarget::new(manager.clone(), name), "1.0", "2.0")
+    }
+
+    #[test]
+    fn clearing_visible_sources_preserves_hidden_selection() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let flatpak = manager_id("builtin:flatpak");
+        info.selected_managers = HashSet::from([cargo.clone(), flatpak.clone()]);
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "cargo-edit"));
+        info.selected_packages
+            .insert(shared::selection_key(&flatpak, "org.example.App"));
+
+        let action = updates.update(
+            Message::SetSourceSelection(vec![cargo.clone()], false),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(info.selected_managers, HashSet::from([flatpak.clone()]));
+        assert!(
+            !info
+                .selected_packages
+                .contains(&shared::selection_key(&cargo, "cargo-edit"))
+        );
+        assert!(
+            info.selected_packages
+                .contains(&shared::selection_key(&flatpak, "org.example.App"))
+        );
     }
 
     #[test]

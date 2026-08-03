@@ -32,12 +32,22 @@ use crate::{
 pub struct Installed {
     /// Search text for filtering installed packages in UI.
     search_query: String,
+    /// Whether the package-manager source picker is expanded.
+    sources_expanded: bool,
+    /// Search text inside the package-manager source picker.
+    source_query: String,
     /// Package currently shown in the details inspector.
     inspected_package: Option<PackageSelectionKey>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Expand or collapse the package-manager source picker.
+    ToggleSourcePicker,
+    /// Filter package managers inside the source picker.
+    SourceQueryChanged(String),
+    /// Select or clear the visible package-manager sources.
+    SetSourceSelection(Vec<ManagerId>, bool),
     /// Package-manager selection message.
     SelectPackageManager(ManagerId, bool),
     /// Installed-load result message.
@@ -180,46 +190,41 @@ impl Installed {
         catalog: &ManagerCatalog,
     ) -> Action {
         match message {
-            Message::SelectPackageManager(manager, selected) => {
-                if selected {
-                    // Managers still in init phase are not selectable yet.
-                    if info.is_loading_count && !info.installed_packages.contains_key(&manager) {
-                        return Action::None;
-                    }
-
-                    info.selected_managers.insert(manager.clone());
-                    let should_load = if info.init_errors.contains_key(&manager)
-                        || info.load_errors.contains_key(&manager)
-                    {
-                        info.init_errors.remove(&manager);
-                        info.load_errors.remove(&manager);
-                        true
-                    } else if info.loading_installed.contains_key(&manager) {
-                        false
-                    } else if let Some((count, packages)) = info.installed_packages.get(&manager) {
-                        *count != packages.len()
-                    } else {
-                        true
-                    };
-                    if should_load {
-                        Action::Run(Self::start_load(pm_config, info, manager, catalog))
-                    } else {
-                        Action::None
-                    }
-                } else {
-                    info.selected_managers.remove(&manager);
-                    info.selected_packages
-                        .retain(|(selected_manager, _)| selected_manager != &manager);
-                    if self
-                        .inspected_package
-                        .as_ref()
-                        .is_some_and(|(inspected_manager, _)| inspected_manager == &manager)
-                    {
-                        self.inspected_package = None;
-                    }
-                    info.confirming_remove = false;
-                    Action::None
+            Message::ToggleSourcePicker => {
+                self.sources_expanded = !self.sources_expanded;
+                if !self.sources_expanded {
+                    self.source_query.clear();
                 }
+                Action::None
+            }
+            Message::SourceQueryChanged(query) => {
+                self.source_query = query;
+                Action::None
+            }
+            Message::SetSourceSelection(managers, selected) => {
+                if !selected {
+                    for manager in managers {
+                        self.set_source_selection(false, manager, pm_config, info, catalog);
+                    }
+                    return Action::None;
+                }
+
+                let mut tasks = Vec::new();
+                for manager in managers {
+                    if let Action::Run(task) =
+                        self.set_source_selection(true, manager, pm_config, info, catalog)
+                    {
+                        tasks.push(task);
+                    }
+                }
+                if tasks.is_empty() {
+                    Action::None
+                } else {
+                    Action::Run(Task::batch(tasks))
+                }
+            }
+            Message::SelectPackageManager(manager, selected) => {
+                self.set_source_selection(selected, manager, pm_config, info, catalog)
             }
             Message::LoadInstalledResult {
                 request_id,
@@ -463,6 +468,54 @@ impl Installed {
         }
     }
 
+    fn set_source_selection(
+        &mut self,
+        selected: bool,
+        manager: ManagerId,
+        pm_config: &updater_core::Config,
+        info: &mut InstalledInfo,
+        catalog: &ManagerCatalog,
+    ) -> Action {
+        if !selected {
+            info.selected_managers.remove(&manager);
+            info.selected_packages
+                .retain(|(selected_manager, _)| selected_manager != &manager);
+            if self
+                .inspected_package
+                .as_ref()
+                .is_some_and(|(inspected_manager, _)| inspected_manager == &manager)
+            {
+                self.inspected_package = None;
+            }
+            info.confirming_remove = false;
+            return Action::None;
+        }
+
+        if !info.has_loading_count
+            || (info.is_loading_count && !info.installed_packages.contains_key(&manager))
+        {
+            return Action::None;
+        }
+        info.selected_managers.insert(manager.clone());
+        let should_load =
+            if info.init_errors.contains_key(&manager) || info.load_errors.contains_key(&manager) {
+                info.init_errors.remove(&manager);
+                info.load_errors.remove(&manager);
+                true
+            } else if info.loading_installed.contains_key(&manager) {
+                false
+            } else if let Some((count, packages)) = info.installed_packages.get(&manager) {
+                *count != packages.len()
+            } else {
+                true
+            };
+        if should_load {
+            Action::Run(Self::start_load(pm_config, info, manager, catalog))
+        } else {
+            Action::None
+        }
+    }
+
     pub fn has_inspector_selection(&self) -> bool {
         self.inspected_package.is_some()
     }
@@ -549,7 +602,7 @@ impl Installed {
     }
 
     pub fn view<'a>(
-        &self,
+        &'a self,
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
         catalog: &'a ManagerCatalog,
@@ -626,58 +679,66 @@ impl Installed {
     // View components.
 
     fn manager_filter_view<'a>(
-        &self,
+        &'a self,
         info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::column;
 
-        let filters_content = if !info.has_loading_count {
-            shared::loading_manager_filter_view(
-                pm_config,
-                catalog,
-                ManagerCapability::Installed,
-                if info.is_loading_count {
-                    "Loading package information..."
+        let managers = shared::configured_managers_with_capability(
+            pm_config,
+            catalog,
+            ManagerCapability::Installed,
+        );
+        if managers.is_empty() {
+            return column![
+                shared::section_title("Sources"),
+                shared::empty_filter_view("No package managers detected")
+            ]
+            .spacing(theme::spacing::SM)
+            .into();
+        }
+        let entries = managers
+            .into_iter()
+            .map(|manager| shared::ManagerSourceEntry {
+                count: info
+                    .installed_packages
+                    .get(&manager)
+                    .map(|(count, _)| *count),
+                status: if info.loading_installed.contains_key(&manager) {
+                    shared::ManagerSourceStatus::Loading
+                } else if info.init_errors.contains_key(&manager)
+                    || info.load_errors.contains_key(&manager)
+                {
+                    shared::ManagerSourceStatus::Failed
+                } else if !info.has_loading_count
+                    || (info.is_loading_count && !info.installed_packages.contains_key(&manager))
+                {
+                    shared::ManagerSourceStatus::Initializing
                 } else {
-                    "Waiting to load package information"
+                    shared::ManagerSourceStatus::Ready
                 },
-            )
-        } else {
-            let managers = shared::configured_managers(pm_config);
-            if managers.is_empty() {
-                return column![
-                    shared::section_title("Sources"),
-                    shared::empty_filter_view("No package managers detected")
-                ]
-                .spacing(theme::spacing::SM)
-                .into();
-            }
-
-            let entries = managers
-                .iter()
-                .map(|manager| {
-                    let count = info
-                        .installed_packages
-                        .get(manager)
-                        .map_or(0, |(count, _)| *count);
-                    (manager.clone(), count)
-                })
-                .collect();
-
-            shared::active_manager_filter_view(
-                entries,
-                &info.selected_managers,
-                &info.loading_installed,
-                catalog,
-                false,
-                move |manager| {
-                    info.is_loading_count && !info.installed_packages.contains_key(manager)
-                },
-                Message::SelectPackageManager,
-            )
-        };
+                manager,
+            })
+            .collect();
+        let filters_content = shared::manager_source_picker(
+            entries,
+            catalog,
+            shared::ManagerSourcePickerState {
+                selected_managers: &info.selected_managers,
+                expanded: self.sources_expanded,
+                query: &self.source_query,
+                count_label: "installed",
+                disabled: info.is_removing || !info.has_loading_count,
+            },
+            shared::ManagerSourcePickerMessages {
+                toggle_picker: Message::ToggleSourcePicker,
+                query_changed: Message::SourceQueryChanged,
+                set_visible_selection: Message::SetSourceSelection,
+                toggle_manager: Message::SelectPackageManager,
+            },
+        );
 
         let mut content = column![shared::section_title("Sources")];
         if !info.init_errors.is_empty() {
@@ -1163,6 +1224,43 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_visible_sources_preserves_hidden_selection_and_inspector() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo::default();
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+        let flatpak = ManagerId::parse("builtin:flatpak").unwrap();
+        info.selected_managers = HashSet::from([cargo.clone(), flatpak.clone()]);
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "cargo-edit"));
+        info.selected_packages
+            .insert(shared::selection_key(&flatpak, "org.example.App"));
+        installed.inspected_package = Some(shared::selection_key(&flatpak, "org.example.App"));
+
+        let action = installed.update(
+            Message::SetSourceSelection(vec![cargo.clone()], false),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(info.selected_managers, HashSet::from([flatpak.clone()]));
+        assert!(
+            !info
+                .selected_packages
+                .contains(&shared::selection_key(&cargo, "cargo-edit"))
+        );
+        assert!(
+            info.selected_packages
+                .contains(&shared::selection_key(&flatpak, "org.example.App"))
+        );
+        assert_eq!(
+            installed.inspected_package,
+            Some(shared::selection_key(&flatpak, "org.example.App"))
+        );
+    }
 
     #[test]
     fn installed_result_only_applies_to_the_active_request() {

@@ -45,6 +45,8 @@ mkdir -p \
   "$staging/AppDir/usr/share/metainfo"
 install -m 0644 LICENSE "$staging/AppDir/usr/share/doc/updater/LICENSE"
 install -m 0644 README.md "$staging/AppDir/usr/share/doc/updater/README.md"
+install -m 0644 THIRD_PARTY_NOTICES.md \
+  "$staging/AppDir/usr/share/doc/updater/THIRD_PARTY_NOTICES.md"
 install -m 0644 packaging/linux/PORTABLE.md \
   "$staging/AppDir/usr/share/doc/updater/PORTABLE.md"
 install -m 0644 packaging/linux/com.ayi.updater.metainfo.xml \

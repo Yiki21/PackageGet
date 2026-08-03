@@ -3716,6 +3716,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
+name = "simple-icons-pack"
+version = "16.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e814b48369acd6b771659a0658ab671fcbcdeb7e1925900c390c53335bcd48ce"
+
+[[package]]
 name = "simplecss"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4467,6 +4473,7 @@ dependencies = [
  "roxmltree",
  "serde",
  "serde_json",
+ "simple-icons-pack",
  "tokio",
  "updater-manager-api",
  "updater_core",
