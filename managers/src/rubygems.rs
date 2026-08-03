@@ -20,7 +20,7 @@ use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
     },
-    progress::run_command_with_progress,
+    progress::run_cancellable_command_with_progress,
 };
 
 const RUBYGEMS_ID: &str = "builtin:rubygems";
@@ -363,7 +363,7 @@ impl PackageManager for RubyGemsManager {
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
             timeout(
                 COMMAND_TIMEOUT,
-                run_command_with_progress(command, |event| {
+                run_cancellable_command_with_progress(command, progress, |event| {
                     let (fraction, message) = event.into_parts();
                     if let Some(message) = message {
                         progress.emit(ProgressEvent::Message { message });

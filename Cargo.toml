@@ -26,6 +26,7 @@ iced = { version = "0.14", default-features = false, features = [
   "wgpu",
 ] }
 log = "0.4"
+libc = "0.2"
 mimalloc = "0.1"
 notify-rust = "4"
 regex = "1"

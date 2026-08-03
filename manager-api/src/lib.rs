@@ -734,6 +734,15 @@ pub enum ProgressEvent {
 pub trait ProgressSink: Send + Sync {
     /// Emits a progress event.
     fn emit(&self, event: ProgressEvent);
+
+    /// Returns whether the caller requested cancellation.
+    ///
+    /// The default preserves source compatibility for managers that only emit
+    /// progress. Implementations that support active cancellation should check
+    /// this value before starting work and while waiting for external commands.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
 }
 
 impl<F> ProgressSink for F

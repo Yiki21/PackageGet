@@ -1107,9 +1107,7 @@ impl App {
                             .as_ref()
                             .is_some_and(content::CancellationToken::is_cancelled)
                         {
-                            "Stop Requested"
-                        } else if self.active_operation_cancellation.is_some() {
-                            "Stop After Current Manager"
+                            "Stopping..."
                         } else {
                             "Stop Operation"
                         },

@@ -20,7 +20,7 @@ use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
     },
-    progress::{CommandProgress, run_command_with_progress},
+    progress::{CommandProgress, run_cancellable_command_with_progress, run_command_with_progress},
 };
 
 const PNPM_ID: &str = "builtin:pnpm";
@@ -326,7 +326,7 @@ impl PackageManager for PnpmManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
-            run_pnpm_command_with_progress(command, |event| {
+            run_cancellable_pnpm_command_with_progress(command, progress, |event| {
                 let (fraction, message) = event.into_parts();
                 if let Some(message) = message {
                     progress.emit(ProgressEvent::Message { message });
@@ -757,6 +757,22 @@ async fn run_pnpm_command_with_progress(
     timeout(
         COMMAND_TIMEOUT,
         run_command_with_progress(command, on_progress),
+    )
+    .await
+    .map_err(|_| {
+        ManagerError::new(ManagerErrorKind::Timeout, "pnpm package command timed out")
+            .with_detail(command.program().to_string_lossy())
+    })?
+}
+
+async fn run_cancellable_pnpm_command_with_progress(
+    command: &CommandSpec,
+    cancellation: &dyn ProgressSink,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    timeout(
+        COMMAND_TIMEOUT,
+        run_cancellable_command_with_progress(command, cancellation, on_progress),
     )
     .await
     .map_err(|_| {

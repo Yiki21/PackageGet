@@ -3,16 +3,18 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use updater_manager_api::{ManagerId, PackageAction, PackageTarget, ProgressEvent, ProgressSink};
+use updater_manager_api::{
+    ManagerErrorKind, ManagerId, PackageAction, PackageTarget, ProgressEvent, ProgressSink,
+};
 
 use crate::{Config, ManagerRegistry};
 
-/// Cooperative cancellation checked between manager groups.
+/// Cooperative cancellation shared with the active manager command.
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken(Arc<AtomicBool>);
 
 impl CancellationToken {
-    /// Requests cancellation before the next manager group starts.
+    /// Requests cancellation of the active manager command.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
@@ -56,13 +58,21 @@ pub struct OperationOutcome {
     pub failed_manager: Option<ManagerId>,
     /// Failure or cancellation detail.
     pub error: Option<String>,
+    /// Whether execution stopped in response to a confirmed cancellation.
+    pub cancelled: bool,
 }
 
 impl OperationOutcome {
     /// Returns whether every requested package completed successfully.
     #[must_use]
     pub fn is_success(&self) -> bool {
-        self.error.is_none() && self.completed_packages == self.total_packages
+        !self.cancelled && self.error.is_none() && self.completed_packages == self.total_packages
+    }
+
+    /// Returns whether the active command exited after cancellation was requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     /// Returns a compact user-facing operation summary.
@@ -86,6 +96,13 @@ impl OperationOutcome {
             );
         }
 
+        if self.is_cancelled() {
+            return format!(
+                "Operation cancelled after {} of {} packages",
+                self.completed_packages, self.total_packages,
+            );
+        }
+
         format!(
             "{} of {} packages {} before the operation stopped",
             self.completed_packages, self.total_packages, completed_verb,
@@ -93,11 +110,26 @@ impl OperationOutcome {
     }
 }
 
+struct CancellableProgressSink<'a> {
+    cancellation: &'a CancellationToken,
+    emit: &'a (dyn Fn(ProgressEvent) + Send + Sync),
+}
+
+impl ProgressSink for CancellableProgressSink<'_> {
+    fn emit(&self, event: ProgressEvent) {
+        (self.emit)(event);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
 /// Executes package groups sequentially in their supplied manager order.
 ///
-/// Cancellation is observed before each manager group. A manager command that
-/// has already started is allowed to finish so core never claims to interrupt
-/// an external process that may still be changing the system.
+/// Cancellation is observed before each manager group and exposed to the active
+/// manager through its progress sink. Core only reports cancellation after the
+/// manager confirms that its command has exited.
 pub async fn execute_package_groups(
     registry: &ManagerRegistry,
     config: &Config,
@@ -130,6 +162,7 @@ pub async fn execute_package_groups(
                 total_managers,
                 failed_manager: None,
                 error: Some("Stopped before starting another manager".to_owned()),
+                cancelled: true,
             };
         }
 
@@ -144,6 +177,7 @@ pub async fn execute_package_groups(
                     total_managers,
                     failed_manager: Some(manager_id.clone()),
                     error: Some(error.to_string()),
+                    cancelled: false,
                 };
             }
         };
@@ -156,6 +190,7 @@ pub async fn execute_package_groups(
                 total_managers,
                 failed_manager: Some(manager_id.clone()),
                 error: Some(format!("manager is not configured: {manager_id}")),
+                cancelled: false,
             };
         };
         if targets
@@ -172,10 +207,11 @@ pub async fn execute_package_groups(
                 error: Some(format!(
                     "package target belongs to a different manager group: {manager_id}"
                 )),
+                cancelled: false,
             };
         }
         let manager_completed = AtomicUsize::new(0);
-        let progress = |event| match event {
+        let progress_events = |event| match event {
             ProgressEvent::Advanced {
                 completed,
                 current_package,
@@ -212,14 +248,13 @@ pub async fn execute_package_groups(
             ProgressEvent::Started { .. } => {}
             _ => {}
         };
+        let progress = CancellableProgressSink {
+            cancellation,
+            emit: &progress_events,
+        };
 
         if let Err(error) = manager
-            .execute(
-                manager_config,
-                action,
-                targets,
-                &progress as &dyn ProgressSink,
-            )
+            .execute(manager_config, action, targets, &progress)
             .await
         {
             let detail = error.detail().map_or_else(
@@ -232,6 +267,7 @@ pub async fn execute_package_groups(
                 PackageAction::Uninstall => "remove",
                 _ => "process",
             };
+            let cancelled = error.kind() == ManagerErrorKind::Cancelled;
             return OperationOutcome {
                 action,
                 completed_packages: completed_packages
@@ -239,10 +275,13 @@ pub async fn execute_package_groups(
                 total_packages,
                 completed_managers,
                 total_managers,
-                failed_manager: Some(manager_id.clone()),
-                error: Some(format!(
-                    "Failed to {action_name} packages from {manager_id}: {detail}"
-                )),
+                failed_manager: (!cancelled).then(|| manager_id.clone()),
+                error: Some(if cancelled {
+                    detail
+                } else {
+                    format!("Failed to {action_name} packages from {manager_id}: {detail}")
+                }),
+                cancelled,
             };
         }
 
@@ -258,5 +297,6 @@ pub async fn execute_package_groups(
         total_managers,
         failed_manager: None,
         error: None,
+        cancelled: false,
     }
 }

@@ -198,6 +198,12 @@ pub(crate) fn decode_stdout(output: Output, message: &str) -> ManagerResult<Stri
 pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
     command.kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.as_std_mut().process_group(0);
+    }
     command.args(spec.arguments());
     for key in spec.removed_environment() {
         command.env_remove(key);

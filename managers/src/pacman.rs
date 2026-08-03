@@ -17,7 +17,7 @@ use crate::{
         CommandSpec, command_status_error, decode_stdout, manager_availability_with_version,
         require_success, resolve_executable, run_output, system_helper_command,
     },
-    progress::{CommandProgress, run_command_with_progress},
+    progress::{CommandProgress, run_cancellable_command_with_progress, run_command_with_progress},
 };
 
 const PACMAN_ID: &str = "builtin:pacman";
@@ -336,7 +336,15 @@ impl PackageManager for PacmanManager {
 
         let total = package_names.len();
         progress.emit(ProgressEvent::Started { action, total });
-        self.execute_packages_with_progress(config, action, &package_names, |event| {
+        if package_names.is_empty() {
+            progress.emit(ProgressEvent::Finished {
+                completed: 0,
+                total: 0,
+            });
+            return Ok(());
+        }
+        let command = self.write_command(config, action, &package_names)?;
+        run_cancellable_command_with_progress(&command, progress, |event| {
             let (fraction, message) = event.into_parts();
             if let Some(message) = message {
                 progress.emit(ProgressEvent::Message { message });

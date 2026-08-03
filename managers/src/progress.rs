@@ -1,17 +1,21 @@
-use std::{collections::VecDeque, process::ExitStatus, sync::OnceLock};
+use std::{collections::VecDeque, io, process::ExitStatus, sync::OnceLock, time::Duration};
 
 use regex::Regex;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
+    process::Child,
     sync::mpsc,
+    time::{Instant, MissedTickBehavior, interval},
 };
-use updater_manager_api::{ManagerError, ManagerErrorKind, ManagerResult};
+use updater_manager_api::{ManagerError, ManagerErrorKind, ManagerResult, ProgressSink};
 
 use crate::command::{CommandSpec, command_status_error, io_error, piped_command};
 
 const LINE_CHANNEL_CAPACITY: usize = 64;
 const MAX_LINE_BYTES: usize = 2_048;
 const TAIL_LINE_COUNT: usize = 20;
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
 /// Bounded command progress emitted by a built-in manager.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +60,22 @@ pub(crate) async fn run_command_with_progress(
         spec,
         ProgressParser::Percent,
         command_status_error,
+        || false,
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn run_cancellable_command_with_progress(
+    spec: &CommandSpec,
+    cancellation: &dyn ProgressSink,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(
+        spec,
+        ProgressParser::Percent,
+        command_status_error,
+        || cancellation.is_cancelled(),
         on_progress,
     )
     .await
@@ -66,7 +86,30 @@ pub(crate) async fn run_command_with_progress_and_status(
     status_error: fn(&CommandSpec, ExitStatus, &str) -> ManagerError,
     on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
-    run_command_with_parser(spec, ProgressParser::Percent, status_error, on_progress).await
+    run_command_with_parser(
+        spec,
+        ProgressParser::Percent,
+        status_error,
+        || false,
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn run_cancellable_command_with_progress_and_status(
+    spec: &CommandSpec,
+    cancellation: &dyn ProgressSink,
+    status_error: fn(&CommandSpec, ExitStatus, &str) -> ManagerError,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(
+        spec,
+        ProgressParser::Percent,
+        status_error,
+        || cancellation.is_cancelled(),
+        on_progress,
+    )
+    .await
 }
 
 pub(crate) async fn run_dnf_command_with_progress(
@@ -77,6 +120,22 @@ pub(crate) async fn run_dnf_command_with_progress(
         spec,
         ProgressParser::Dnf(DnfProgressState::default()),
         command_status_error,
+        || false,
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn run_cancellable_dnf_command_with_progress(
+    spec: &CommandSpec,
+    cancellation: &dyn ProgressSink,
+    on_progress: impl FnMut(CommandProgress),
+) -> ManagerResult<()> {
+    run_command_with_parser(
+        spec,
+        ProgressParser::Dnf(DnfProgressState::default()),
+        command_status_error,
+        || cancellation.is_cancelled(),
         on_progress,
     )
     .await
@@ -86,8 +145,12 @@ async fn run_command_with_parser(
     spec: &CommandSpec,
     mut parser: ProgressParser,
     status_error: fn(&CommandSpec, ExitStatus, &str) -> ManagerError,
+    is_cancelled: impl Fn() -> bool,
     mut on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
+    if is_cancelled() {
+        return Err(cancelled_error());
+    }
     let mut child = piped_command(spec)
         .spawn()
         .map_err(|error| io_error("failed to start package manager command", error))?;
@@ -111,30 +174,89 @@ async fn run_command_with_parser(
 
     let mut max_progress = 0.0_f32;
     let mut tail_logs = VecDeque::with_capacity(TAIL_LINE_COUNT);
+    let mut status = None;
+    let mut output_open = true;
+    let mut cancellation_requested = false;
+    let mut termination_error = None;
+    let mut force_at = None;
+    let mut forced = false;
+    let mut poll = interval(CANCELLATION_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     on_progress(CommandProgress::new(0.0, None));
 
-    while let Some(line) = receiver.recv().await {
-        if tail_logs.len() == TAIL_LINE_COUNT {
-            tail_logs.pop_front();
-        }
-        tail_logs.push_back(line.clone());
+    while status.is_none() || output_open {
+        tokio::select! {
+            line = receiver.recv(), if output_open => {
+                let Some(line) = line else {
+                    output_open = false;
+                    continue;
+                };
+                if tail_logs.len() == TAIL_LINE_COUNT {
+                    tail_logs.pop_front();
+                }
+                tail_logs.push_back(line.clone());
 
-        on_progress(CommandProgress::new(max_progress, Some(line.clone())));
-        if let Some(progress) = parser.parse(&line)
-            && progress > max_progress
-        {
-            max_progress = progress.min(0.99);
-            on_progress(CommandProgress::new(max_progress, None));
+                on_progress(CommandProgress::new(max_progress, Some(line.clone())));
+                if let Some(progress) = parser.parse(&line)
+                    && progress > max_progress
+                {
+                    max_progress = progress.min(0.99);
+                    on_progress(CommandProgress::new(max_progress, None));
+                }
+            }
+            _ = poll.tick(), if status.is_none() => {
+                status = child.try_wait().map_err(|error| {
+                    io_error("failed to query package manager command", error)
+                })?;
+                if status.is_some() {
+                    continue;
+                }
+
+                if !cancellation_requested && is_cancelled() {
+                    cancellation_requested = true;
+                    force_at = Some(Instant::now() + TERMINATION_GRACE_PERIOD);
+                    if let Err(error) = terminate_process_tree(&mut child, false).await {
+                        termination_error = Some(error);
+                    }
+                } else if cancellation_requested
+                    && !forced
+                    && force_at.is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    forced = true;
+                    if let Err(error) = terminate_process_tree(&mut child, true).await {
+                        termination_error.get_or_insert(error);
+                    }
+                }
+            }
         }
     }
 
-    join_reader(stdout_task.await)?;
-    join_reader(stderr_task.await)?;
+    let stdout_result = stdout_task.await;
+    let stderr_result = stderr_task.await;
+    if !cancellation_requested {
+        join_reader(stdout_result)?;
+        join_reader(stderr_result)?;
+    }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| io_error("failed to wait for package manager command", error))?;
+    let status = match status {
+        Some(status) => status,
+        None => child
+            .wait()
+            .await
+            .map_err(|error| io_error("failed to wait for package manager command", error))?,
+    };
+    if cancellation_requested {
+        return termination_error.map_or_else(
+            || Err(cancelled_error()),
+            |error| {
+                Err(ManagerError::new(
+                    ManagerErrorKind::Other,
+                    "package manager command exited after cancellation could not be delivered",
+                )
+                .with_detail(error.to_string()))
+            },
+        );
+    }
     if !status.success() {
         let tail = tail_logs.into_iter().collect::<Vec<_>>().join("\n");
         return Err(status_error(spec, status, &tail));
@@ -142,6 +264,53 @@ async fn run_command_with_parser(
 
     on_progress(CommandProgress::new(1.0, None));
     Ok(())
+}
+
+fn cancelled_error() -> ManagerError {
+    ManagerError::new(
+        ManagerErrorKind::Cancelled,
+        "package manager command was cancelled after its process exited",
+    )
+}
+
+#[cfg(unix)]
+async fn terminate_process_tree(child: &mut Child, force: bool) -> io::Result<()> {
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("child PID is unavailable"))?;
+    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+    let result = unsafe { libc::kill(-(pid as i32), signal) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(windows)]
+async fn terminate_process_tree(child: &mut Child, _force: bool) -> io::Result<()> {
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("child PID is unavailable"))?;
+    let status = tokio::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("taskkill exited with {status}")))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn terminate_process_tree(child: &mut Child, _force: bool) -> io::Result<()> {
+    child.start_kill()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -287,7 +456,13 @@ fn join_reader(result: Result<(), tokio::task::JoinError>) -> ManagerResult<()> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
     use tokio::io::{AsyncWriteExt, duplex};
+    use updater_manager_api::{ProgressEvent, ProgressSink};
 
     use super::*;
 
@@ -358,5 +533,38 @@ mod tests {
         let line = receiver.recv().await.expect("receive bounded line");
         assert_eq!(line.len(), MAX_LINE_BYTES);
         task.await.expect("line forwarding task");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_terminates_a_silent_command_and_waits_for_exit() {
+        struct Cancellation(Arc<AtomicBool>);
+
+        impl ProgressSink for Cancellation {
+            fn emit(&self, _event: ProgressEvent) {}
+
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            request.store(true, Ordering::Release);
+        });
+
+        let started = std::time::Instant::now();
+        let result = run_cancellable_command_with_progress(
+            &CommandSpec::new("sh").args(["-c", "sleep 30 & wait"]),
+            &Cancellation(cancelled),
+            |_| {},
+        )
+        .await;
+
+        let error = result.expect_err("command should be cancelled");
+        assert_eq!(error.kind(), ManagerErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

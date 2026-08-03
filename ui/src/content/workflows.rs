@@ -97,6 +97,7 @@ where
             total_managers: 0,
             failed_manager: None,
             error: None,
+            cancelled: false,
         }));
     }
 
@@ -182,6 +183,7 @@ mod tests {
             total_managers: 3,
             failed_manager: None,
             error: None,
+            cancelled: false,
         };
 
         assert_eq!(outcome.summary(), "12 packages updated across 3 sources");
@@ -197,6 +199,7 @@ mod tests {
             total_managers: 3,
             failed_manager: Some(manager_id("builtin:cargo")),
             error: Some("failed".to_owned()),
+            cancelled: false,
         };
 
         assert_eq!(

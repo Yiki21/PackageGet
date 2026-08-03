@@ -173,8 +173,7 @@ impl StatusPanel {
 
         if should_refresh_snapshot {
             self.status_label = if self.cancellation_requested && is_active {
-                "Stop requested: the current manager will finish; later managers will not start."
-                    .to_owned()
+                "Stopping current manager...".to_owned()
             } else {
                 status_label(installed_info, updates_info, finding_info, catalog)
             };
@@ -203,7 +202,7 @@ impl StatusPanel {
         self.cancellation_requested = false;
     }
 
-    /// Marks the active operation to stop before its next manager group.
+    /// Marks the active operation as terminating its current manager command.
     pub fn request_cancellation(&mut self) {
         self.cancellation_requested = true;
     }
@@ -679,10 +678,7 @@ mod tests {
             &ManagerCatalog::builtin(),
         );
 
-        assert_eq!(
-            panel.status_label,
-            "Stop requested: the current manager will finish; later managers will not start."
-        );
+        assert_eq!(panel.status_label, "Stopping current manager...");
         assert!(panel.cancellation_requested);
     }
 }

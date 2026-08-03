@@ -17,6 +17,7 @@ struct FakeManager {
     execution_order: Arc<Mutex<Vec<ManagerId>>>,
     received_targets: Option<Arc<Mutex<Vec<PackageTarget>>>>,
     fail_after: Option<usize>,
+    cancel_token: Option<CancellationToken>,
 }
 
 impl FakeManager {
@@ -38,11 +39,17 @@ impl FakeManager {
             execution_order,
             received_targets: None,
             fail_after,
+            cancel_token: None,
         }
     }
 
     fn with_target_log(mut self, received_targets: Arc<Mutex<Vec<PackageTarget>>>) -> Self {
         self.received_targets = Some(received_targets);
+        self
+    }
+
+    fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancel_token = Some(cancellation);
         self
     }
 }
@@ -78,6 +85,15 @@ impl PackageManager for FakeManager {
             action,
             total: packages.len(),
         });
+
+        if let Some(cancellation) = &self.cancel_token {
+            cancellation.cancel();
+            assert!(progress.is_cancelled());
+            return Err(ManagerError::new(
+                ManagerErrorKind::Cancelled,
+                "fake manager cancelled",
+            ));
+        }
 
         if let Some(completed) = self.fail_after {
             progress.emit(ProgressEvent::Advanced {
@@ -313,4 +329,38 @@ async fn cancellation_is_observed_between_manager_groups() {
         Some("Stopped before starting another manager")
     );
     assert_eq!(*order.lock().unwrap(), vec![first]);
+}
+
+#[tokio::test]
+async fn active_manager_cancellation_is_not_reported_as_failure() {
+    let id = manager_id("org.example:cancelled");
+    let cancellation = CancellationToken::default();
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(
+            FakeManager::new(
+                id.as_str(),
+                [ManagerCapability::Uninstall],
+                Arc::clone(&order),
+                None,
+            )
+            .with_cancellation(cancellation.clone()),
+        ))
+        .unwrap();
+
+    let outcome = execute_package_groups(
+        &registry,
+        &config(std::slice::from_ref(&id)),
+        PackageAction::Uninstall,
+        &[(id.clone(), vec![target(&id, "alpha")])],
+        &cancellation,
+        &|_| {},
+    )
+    .await;
+
+    assert!(outcome.is_cancelled());
+    assert!(!outcome.is_success());
+    assert_eq!(outcome.failed_manager, None);
+    assert_eq!(outcome.completed_packages, 0);
 }

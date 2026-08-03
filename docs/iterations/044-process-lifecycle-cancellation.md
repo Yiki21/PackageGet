@@ -22,7 +22,7 @@
 
 ## 实施计划
 
-- [ ] 冻结unsigned 1.0发布政策与取消生命周期契约。
+- [x] 冻结unsigned 1.0发布政策与取消生命周期契约。
 - [ ] 扩展公共取消查询并保持第三方`ProgressSink`源码兼容。
 - [ ] 为内置runner增加Unix process group、Windows process tree终止和退出确认。
 - [ ] 将全部内置manager写命令接入取消查询。

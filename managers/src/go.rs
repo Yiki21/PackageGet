@@ -20,7 +20,7 @@ use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
     },
-    progress::{CommandProgress, run_command_with_progress},
+    progress::{CommandProgress, run_cancellable_command_with_progress, run_command_with_progress},
 };
 
 const GO_ID: &str = "builtin:go";
@@ -470,7 +470,7 @@ impl PackageManager for GoManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, target) in packages.iter().enumerate() {
-            self.execute_target_with_progress(config, action, target, |event| {
+            let on_progress = |event: CommandProgress| {
                 let (fraction, message) = event.into_parts();
                 if let Some(message) = message {
                     progress.emit(ProgressEvent::Message { message });
@@ -480,8 +480,36 @@ impl PackageManager for GoManager {
                     total,
                     current_package: Some(target.name.clone()),
                 });
-            })
-            .await?;
+            };
+            match action {
+                PackageAction::Install | PackageAction::Update => {
+                    let command = self.install_command(config, target).await?;
+                    run_cancellable_command_with_progress(&command, progress, on_progress).await?;
+                }
+                PackageAction::Uninstall => {
+                    if progress.is_cancelled() {
+                        return Err(ManagerError::new(
+                            ManagerErrorKind::Cancelled,
+                            "Go package operation was cancelled before removal",
+                        ));
+                    }
+                    on_progress(CommandProgress::new(
+                        0.0,
+                        Some(format!("Removing Go binary {}", target.name)),
+                    ));
+                    self.remove_binary(config, target).await?;
+                    on_progress(CommandProgress::new(
+                        1.0,
+                        Some(format!("Removed {}", target.name)),
+                    ));
+                }
+                _ => {
+                    return Err(ManagerError::new(
+                        ManagerErrorKind::Unsupported,
+                        "Go package action is unsupported",
+                    ));
+                }
+            }
         }
         progress.emit(ProgressEvent::Finished {
             completed: total,

@@ -29,3 +29,9 @@
 - Arch Linux artifacts target x86_64. Debian and RPM workflows also build native arm64/aarch64 packages.
 - Cancellation stops before the next manager group; it does not terminate an active package-manager transaction.
 - The desktop Polkit authentication agent owns password controls, dialog styling, and the top-level authorization window title.
+
+## 1.0 Release Policy
+
+The 1.0 release is intentionally unsigned on Linux, Windows, and macOS. Code signing, Apple notarization, and signing credentials are not 1.0 release gates. Every published asset must be listed in the release bundle and checked against the matching `SHA256SUMS` file; the public CI run and asset manifest are the release provenance. Windows and macOS downloads will continue to show an explicit unsigned warning.
+
+The beta3 notes above describe the historical Linux-only public preview. Cross-platform portable assets and active-command cancellation are being completed in the 1.0 roadmap and are not retroactively claimed as part of that tag.

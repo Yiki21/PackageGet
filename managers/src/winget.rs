@@ -19,7 +19,7 @@ use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
     },
-    progress::{CommandProgress, run_command_with_progress_and_status},
+    progress::{CommandProgress, run_cancellable_command_with_progress_and_status},
 };
 
 const WINGET_ID: &str = "builtin:winget";
@@ -306,9 +306,12 @@ impl PackageManager for WingetManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(commands.iter()).enumerate() {
-            run_command_with_progress_and_status(command, winget_status_error, |event| {
-                emit_command_progress(progress, index, total, &target.name, event);
-            })
+            run_cancellable_command_with_progress_and_status(
+                command,
+                progress,
+                winget_status_error,
+                |event| emit_command_progress(progress, index, total, &target.name, event),
+            )
             .await?;
         }
         progress.emit(ProgressEvent::Finished {
