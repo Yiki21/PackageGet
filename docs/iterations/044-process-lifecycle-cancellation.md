@@ -1,7 +1,7 @@
 # Iteration 044：进程生命周期取消与 1.0 发布政策
 
 - 日期：2026-08-03
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段5操作透明度与阶段6发布收口
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -23,12 +23,12 @@
 ## 实施计划
 
 - [x] 冻结unsigned 1.0发布政策与取消生命周期契约。
-- [ ] 扩展公共取消查询并保持第三方`ProgressSink`源码兼容。
-- [ ] 为内置runner增加Unix process group、Windows process tree终止和退出确认。
-- [ ] 将全部内置manager写命令接入取消查询。
-- [ ] 区分core取消结果与普通失败，并更新UI状态文案。
-- [ ] 增加API、core、runner与UI回归测试。
-- [ ] 通过本地串行门禁、远端原生平台CI与Package workflow。
+- [x] 扩展公共取消查询并保持第三方`ProgressSink`源码兼容。
+- [x] 为内置runner增加Unix process group、Windows process tree终止和退出确认。
+- [x] 将全部内置manager写命令接入取消查询。
+- [x] 区分core取消结果与普通失败，并更新UI状态文案。
+- [x] 增加API、core、runner与UI回归测试。
+- [x] 通过本地串行门禁、远端原生平台CI与Package workflow。
 
 ## 验收标准
 
