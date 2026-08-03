@@ -210,10 +210,11 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - Arch Cargo cache已绕开`makepkg --cleanbuild`的源码目录清理边界，exact-key命中后job由20分30秒降到8分50秒；release build与完整release tests仍保留。
 - 当前公开`0.3.0-beta.3`仍是Linux-only prerelease；跨平台产物将在下一beta或RC tag首次公开。Windows/macOS产物仍是unsigned preview，不描述为已签名或已notarize。
 
-当前进度（Iteration 043实施中）：
+当前进度（Iteration 043已完成）：
 
-- 已冻结portable格式的能力边界：tar/AppImage不携带已安装的Polkit系统集成，系统manager特权写操作仍推荐使用DEB/RPM/Arch原生包。
-- glibc tar与AppImage进入双架构实现；musl必须通过Alpine原生构建与运行时依赖检查后才进入bundle。
+- portable格式的能力边界已冻结并写入用户文档：tar/AppImage不携带已安装的Polkit系统集成，系统manager特权写操作仍推荐使用DEB/RPM/Arch原生包。
+- 已交付x86_64/aarch64 glibc tar、Alpine/musl runtime tar与AppImage共6项；所有musl产物均通过Alpine原生构建、loader和动态依赖验证。
+- bundle严格汇总既有11项与新增6项，为17个发布资产生成统一`SHA256SUMS`；Package run `30785115485`全部成功，两个musl Cargo cache也已成功保存。
 - Flatpak分发延后到显式宿主执行桥接或受限capability profile完成后，避免发布只能启动UI却无法管理宿主软件的产物。
 
 ### 阶段 7：扩展 Package Manager 生态

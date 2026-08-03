@@ -1,7 +1,7 @@
 # Iteration 043：Portable Linux 与 AppImage 发布物
 
 - 日期：2026-08-03
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段6跨平台发布物
 - 开发方式：直接在`main`上形成小步、线性的Git提交
 
@@ -21,12 +21,12 @@
 ## 实施计划
 
 - [x] 审计glibc/musl、AppImage、Flatpak与当前运行时及Polkit契约的兼容边界。
-- [ ] 增加可复现的portable tar与AppImage构建脚本。
-- [ ] 扩展Linux x86_64/aarch64 glibc原生构建矩阵。
-- [ ] 完成Alpine/musl原生编译探针，并根据结果接入或门控musl tar。
-- [ ] 扩展bundle计数、checksum和tag Release资产清单。
-- [ ] 更新README与ROADMAP，说明各格式能力和运行时限制。
-- [ ] 通过本地脚本门禁、远端CI、原生Package jobs和下载后checksum复核。
+- [x] 增加可复现的portable tar与AppImage构建脚本。
+- [x] 扩展Linux x86_64/aarch64 glibc原生构建矩阵。
+- [x] 完成Alpine/musl原生编译探针，并根据结果接入或门控musl tar。
+- [x] 扩展bundle计数、checksum和tag Release资产清单。
+- [x] 更新README与ROADMAP，说明各格式能力和运行时限制。
+- [x] 通过本地脚本门禁、远端CI、原生Package jobs和下载后checksum复核。
 
 ## 验收标准
 
@@ -44,7 +44,13 @@
 - linuxdeploy `continuous`在当前验证点同时提供x86_64和aarch64工具；x86_64临时AppDir探针成功部署现有release binary，确认desktop文件的绝对`Exec=/usr/bin/updater`不能用于AppImage，需要独立portable desktop metadata。
 - 当前release binary的直接ELF依赖仅显示glibc、libm与libgcc；Wayland/X11及图形后端由运行时动态加载，因此AppImage仍需明确宿主桌面/驱动依赖，musl也不能被描述为全静态GUI。
 - Flatpak manifest本身不足以保持产品能力：沙箱内`/usr`来自runtime，当前manager executable discovery与固定宿主Polkit链均不可直接工作，必须先设计宿主桥接或受限产品profile。
+- 新增`package-portable.sh`和`package-appimage.sh`；glibc产物以Ubuntu 22.04为兼容基线，AppImage工具以固定SHA-256下载，tar归档统一owner、排序与mtime。
+- Alpine 3.22/Rust 1.97容器中的`cargo check --workspace --all-targets --locked`通过；Package矩阵随后在x86_64与aarch64原生Alpine容器中完成release构建、musl loader和共享库验证。
+- Package run `30784539268`首次完整生成6个portable产物，连同既有原生包共17项；bundle严格计数与`SHA256SUMS`均通过。下载完整artifact后，本地`sha256sum -c`对17项全部通过，两个tar顶层结构和x86_64 AppImage自解包结构也已复核。
+- 首轮musl构建成功，但Docker以root写入缓存目录导致`actions/cache` post步骤无法归档。后续将owner归一化限制在`.cargo-musl`与`target-musl`两个专用目录；Package run `30785115485`全绿，并分别保存aarch64与x86_64 musl cache key。
+- 本地门禁通过：`actionlint`、`bash -n`、ShellCheck、`desktop-file-validate`、AppStream metadata验证、release metadata验证与workflow diff检查。
 
 ## 遗留项 / 下一轮
 
 - Flatpak宿主执行设计需要单独安全评审，覆盖命令白名单、参数透传、环境清理、取消和错误分类；通过前不发布Flatpak bundle。
+- musl首次缓存命中和真实Alpine桌面启动仍留给下一次Package run及发布候选手工smoke；本轮已经验证缓存成功保存、ELF/loader依赖和归档结构。
