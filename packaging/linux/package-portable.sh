@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 5 ]]; then
-  echo "usage: $0 VERSION ARCH LIBC BINARY OUTPUT_DIR" >&2
+if [[ "$#" -ne 6 ]]; then
+  echo "usage: $0 VERSION ARCH LIBC BINARY HELPER OUTPUT_DIR" >&2
   exit 2
 fi
 
@@ -10,7 +10,8 @@ version="$1"
 arch="$2"
 libc="$3"
 binary="$4"
-output_dir="$5"
+helper="$5"
+output_dir="$6"
 
 case "$arch" in
   x86_64 | aarch64) ;;
@@ -29,22 +30,34 @@ case "$libc" in
 esac
 
 test -x "$binary"
+test -x "$helper"
 test -f LICENSE
 test -f README.md
 test -f THIRD_PARTY_NOTICES.md
+test -f assets/icons/updater.svg
+test -f assets/linux/com.ayi.updater.policy
 test -f packaging/linux/PORTABLE.md
+test -x packaging/linux/install-system-integration.sh
 
 package_name="updater-$version-linux-$arch-$libc"
 archive="$output_dir/$package_name.tar.gz"
 staging="$(mktemp -d)"
 trap 'rm -rf -- "$staging"' EXIT
 
-mkdir -p "$output_dir" "$staging/$package_name"
+mkdir -p "$output_dir" "$staging/$package_name/system-integration"
 install -m 0755 "$binary" "$staging/$package_name/updater"
 install -m 0644 LICENSE "$staging/$package_name/LICENSE"
 install -m 0644 README.md "$staging/$package_name/README.md"
 install -m 0644 THIRD_PARTY_NOTICES.md "$staging/$package_name/THIRD_PARTY_NOTICES.md"
 install -m 0644 packaging/linux/PORTABLE.md "$staging/$package_name/PORTABLE.md"
+install -m 0755 packaging/linux/install-system-integration.sh \
+  "$staging/$package_name/system-integration/install.sh"
+install -m 0755 "$helper" \
+  "$staging/$package_name/system-integration/updater-system-helper"
+install -m 0644 assets/linux/com.ayi.updater.policy \
+  "$staging/$package_name/system-integration/com.ayi.updater.policy"
+install -m 0644 assets/icons/updater.svg \
+  "$staging/$package_name/system-integration/updater.svg"
 
 tar \
   --sort=name \
@@ -63,6 +76,11 @@ expected_files=(
   "$package_name/PORTABLE.md"
   "$package_name/README.md"
   "$package_name/THIRD_PARTY_NOTICES.md"
+  "$package_name/system-integration/"
+  "$package_name/system-integration/com.ayi.updater.policy"
+  "$package_name/system-integration/install.sh"
+  "$package_name/system-integration/updater-system-helper"
+  "$package_name/system-integration/updater.svg"
   "$package_name/updater"
 )
 mapfile -t expected_files < <(printf '%s\n' "${expected_files[@]}" | sort)

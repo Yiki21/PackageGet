@@ -11,10 +11,10 @@ PackageGet uses selected SVG brand marks from Simple Icons through the
 
 The marks are used only to identify the corresponding package-manager
 ecosystems in the user interface. Debian, Fedora, Arch Linux, openSUSE,
-Flatpak, Snapcraft, Homebrew, Rust, Go, npm, pnpm, Bun, Python, uv, .NET,
-RubyGems, Composer, and NixOS names and logos may be trademarks of their
-respective owners. PackageGet is not affiliated with or endorsed by those
-projects.
+Gentoo, Void Linux, Flatpak, Snapcraft, Homebrew, Rust, Go, npm, pnpm, Bun,
+Python, uv, .NET, RubyGems, Composer, and NixOS names and logos may be
+trademarks of their respective owners. PackageGet is not affiliated with or
+endorsed by those projects.
 
 ## Lucide
 

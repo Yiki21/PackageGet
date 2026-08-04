@@ -6,9 +6,9 @@ use iced::{
     widget::{container, text},
 };
 use simple_icons_pack::{
-    Icon, SI_ARCHLINUX, SI_BUN, SI_COMPOSER, SI_DEBIAN, SI_DOTNET, SI_FEDORA, SI_FLATPAK, SI_GO,
-    SI_HOMEBREW, SI_NIXOS, SI_NPM, SI_OPENSUSE, SI_PNPM, SI_PYTHON, SI_RUBYGEMS, SI_RUST,
-    SI_SNAPCRAFT, SI_UV,
+    Icon, SI_ARCHLINUX, SI_BUN, SI_COMPOSER, SI_DEBIAN, SI_DOTNET, SI_FEDORA, SI_FLATPAK,
+    SI_GENTOO, SI_GO, SI_HOMEBREW, SI_NIXOS, SI_NPM, SI_OPENSUSE, SI_PNPM, SI_PYTHON, SI_RUBYGEMS,
+    SI_RUST, SI_SNAPCRAFT, SI_UV, SI_VOIDLINUX,
 };
 use updater_manager_api::ManagerId;
 
@@ -58,6 +58,8 @@ static MANAGER_LOGOS: LazyLock<HashMap<&'static str, ManagerLogo>> = LazyLock::n
         ("builtin:dnf", &SI_FEDORA),
         ("builtin:pacman", &SI_ARCHLINUX),
         ("builtin:zypper", &SI_OPENSUSE),
+        ("builtin:portage", &SI_GENTOO),
+        ("builtin:xbps", &SI_VOIDLINUX),
         ("builtin:flatpak", &SI_FLATPAK),
         ("builtin:snap", &SI_SNAPCRAFT),
         ("builtin:homebrew", &SI_HOMEBREW),

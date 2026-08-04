@@ -332,6 +332,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 最终候选commit `7dc2662`通过本地串行门禁、Linux/Windows/macOS CI run `30913317664`与main分支Package预构建run `30913316595`后，已创建并推送annotated `Build-v1.1.0` tag。
 - tag Package run `30913958640`全部通过并发布公开Release；远端tag解引用到`7dc2662`，17个包资产及`SHA256SUMS`全量回下载校验通过。
 
+当前进度（Iteration 061/062进行中）：
+
+- 新增Gentoo `Portage`与Void Linux `XBPS` direct system manager；两者均覆盖availability、installed、updates、search、install、update和uninstall，并只注册到Linux catalog。
+- Portage inventory保留`category/package:SLOT`及repository identity；update discovery只接纳`emerge --pretend`中的`U`/`D`版本迁移，不把rebuild、新依赖或新SLOT伪装成普通更新。
+- XBPS inventory使用`xbps-query --list-pkgs`，update discovery使用`xbps-install --update --dry-run`的六字段事务格式并只接纳`update`动作。
+- 两个manager的特权写操作均进入固定路径helper；Portage atom与XBPS package name在跨进程边界再次严格校验，自定义executable不会被提升为root。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
@@ -341,7 +348,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 3.  新增 Linux `Snap` application manager，覆盖 installed、updates、search、install、update 和 uninstall，并保留 channel、confinement 与自动刷新状态。所有需要授权的写操作必须通过 snapd 的明确授权路径或扩展后的固定 Polkit helper 执行，不能把用户配置的可执行路径直接提升为 root。
 4.  随后新增 RubyGems 与 Composer Global。RubyGems 必须区分 user/system `GEM_HOME` 与多版本安装；Composer 只管理 `$COMPOSER_HOME` 中的直接全局依赖并优先解析结构化输出，不能把项目依赖或传递依赖伪装成独立全局工具。
 5.  在上述 manager 稳定后评估 `Nix profile`。首批只支持明确配置的单一用户 profile，并保留 flake/source identity；多 profile 支持必须先引入独立 manager instance identity，不能通过重复 `ManagerId` 绕过现有 Config 唯一性约束。
-6.  较低优先级候选包括 Bun Global、Krew、LuaRocks，以及面向新增发行版构建目标的 APK、XBPS、Portage、eopkg 和 swupd。`paru`/`yay` 只能作为 Pacman/AUR 的显式替代后端评估，不能与 Pacman 默认同时展示重复包；安装流程必须保留 PKGBUILD 审阅和交互安全边界。
+6.  较低优先级候选中的 Bun Global、XBPS与Portage已经完成；后续包括Krew、LuaRocks，以及面向新增发行版构建目标的APK、eopkg和swupd。`paru`/`yay`只能作为Pacman/AUR的显式替代后端评估，不能与Pacman默认同时展示重复包；安装流程必须保留PKGBUILD审阅和交互安全边界。
 7.  以下工具在领域模型扩展前不作为普通 PackageManager 接入：Conda/Mamba/Micromamba 需要 environment identity 与多实例配置；asdf/mise/rustup 需要独立 runtime/toolchain manager 模型；rpm-ostree 与 macOS softwareupdate 需要 manager-level transaction、pending deployment 和 reboot-required 状态。AppImage 在没有统一可信的搜索、安装和更新协议前不列为 manager。
 
 验证方案

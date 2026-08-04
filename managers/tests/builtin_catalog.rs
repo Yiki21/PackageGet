@@ -3,11 +3,13 @@ use std::{collections::BTreeSet, sync::Arc};
 use updater_manager_api::{AuthorizationHint, ManagerCategory, PackageManager, Platform};
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 18] = [
+const EXPECTED_IDS: [&str; 20] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
     "builtin:zypper",
+    "builtin:portage",
+    "builtin:xbps",
     "builtin:flatpak",
     "builtin:snap",
     "builtin:homebrew",
@@ -82,6 +84,18 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
         ),
         (
             "Zypper",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "Portage",
+            ManagerCategory::System,
+            vec![Platform::Linux],
+            AuthorizationClass::RequiresElevation,
+        ),
+        (
+            "XBPS",
             ManagerCategory::System,
             vec![Platform::Linux],
             AuthorizationClass::RequiresElevation,

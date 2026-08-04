@@ -33,7 +33,7 @@ Updater使用单一配置schema。配置文件位于平台用户配置目录下�
 ```
 
 - `managers`按稳定`ManagerId`保存启用的manager；同一ID不能重复。
-- `executable`为可选自定义可执行文件路径；`null`表示使用默认命令发现规则。Settings可随时选择新路径或恢复为`null`。对于APT、DNF、Pacman和Zypper，该路径只用于availability与只读查询；特权写操作始终经由固定的`/usr/lib/updater/updater-system-helper`执行发行版标准系统命令，不能把自定义路径提升为root。
+- `executable`为可选自定义可执行文件路径；`null`表示使用默认命令发现规则。Settings可随时选择新路径或恢复为`null`。对于APT、DNF、Pacman、Zypper、Portage和XBPS，该路径只用于availability与只读查询；特权写操作始终经由固定的`/usr/lib/updater/updater-system-helper`执行发行版标准系统命令，不能把自定义路径提升为root。
 - `settings`必须是JSON object，由对应manager定义和校验。`builtin:nix-profile`是首个由Settings提供完整配置入口的必填manager setting：`profile`必须是用户明确选择的绝对路径，已知NixOS system/default profile会被拒绝；一个Config中仍只能出现一个`builtin:nix-profile`。core除这类持久化产品不变量外不解释manager-private字段，也不记录其中可能包含的敏感值。
 - `appearance`支持`system`、`light`、`dark`和`high_contrast`。
 - `notifications_enabled`控制原生完成/失败通知。

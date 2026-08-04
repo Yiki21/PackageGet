@@ -22,7 +22,8 @@ It is especially useful when:
 
 Currently supported package managers:
 
-- System packages: `apt`, `dnf`, `pacman`, `zypper`, and Windows `winget`
+- System packages: `apt`, `dnf`, `pacman`, `zypper`, Gentoo `portage`, Void
+  Linux `xbps`, and Windows `winget`
 - Windows applications: `scoop` and `chocolatey`
 - Applications: `flatpak`, `snap`, and `homebrew`
 - Development tools: `cargo`, `go`, `npm`, `pnpm`, Bun Global, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
@@ -32,6 +33,13 @@ The built-in catalog is filtered by platform. Linux adds the native system/appli
 Nix is deliberately not auto-enabled: choose one user profile from Settings first. Its initial contract supports installed packages and explicit install/update/uninstall operations while preserving flake identity. It does not advertise update inventory or package search, because `nix profile` has no read-only list-updates command or profile-scoped catalog.
 
 Bun Global uses `bun list --global` and `bun outdated --global` for current-user inventory and read-only update discovery. It supports explicit install, update, and uninstall targets, but does not advertise package search because Bun does not currently expose a registry-aware directory search contract.
+
+Portage preserves installed `category/package:SLOT` identity and repository
+origin. Its update view includes only version transitions from a read-only
+`emerge --pretend` world plan; rebuilds, new dependencies, and new SLOTs are
+not presented as ordinary updates. XBPS discovers updates through
+`xbps-install --update --dry-run` and only admits transaction rows marked as
+updates.
 
 ## Features
 
@@ -122,7 +130,7 @@ chmod +x updater-*-linux-*.AppImage
 ./updater-*-linux-*.AppImage
 ```
 
-Portable archives and AppImages do not install the fixed-path Polkit helper or policy. Read-only workflows and user-scoped managers work directly; use a DEB, RPM, or Arch package when privileged APT, DNF, Pacman, or Zypper writes are required. A Flatpak distribution is outside the 1.0 scope because preserving the host package-manager CLI contract would require host-spawn permissions and a separate sandbox capability profile.
+Portable archives and AppImages do not modify the host automatically. Read-only workflows and user-scoped managers work directly. Portable tar archives include a matching helper, policy, icon, and explicit `system-integration/install.sh`; install them as root when privileged APT, DNF, Pacman, Zypper, Portage, or XBPS writes are required. AppImages remain read-only for those system managers. A Flatpak distribution is outside the 1.0 scope because preserving the host package-manager CLI contract would require host-spawn permissions and a separate sandbox capability profile.
 
 ### Option 2: Build from source
 
@@ -177,9 +185,9 @@ Additional notes:
 
 ## System package authorization
 
-Native DEB, RPM, and Arch release packages install `/usr/lib/updater/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. Portable tar archives and AppImages do not install these system files. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
+Native DEB, RPM, and Arch release packages install `/usr/lib/updater/updater-system-helper` and four `com.ayi.updater.*` Polkit actions. Portable tar archives provide the same integration behind an explicit root-run installer; AppImages do not install these system files. The actions provide the Updater icon, vendor, operation-specific description, and localized authentication message. The active desktop Polkit agent still owns the dialog layout, colors, typography, password controls, and authentication itself.
 
-The helper accepts only `install`, `update`, `remove`, and metadata `refresh` requests for APT, DNF, Pacman, and Zypper. It validates package identifiers and directly executes fixed system binaries without a shell. Custom executable paths remain available for detection and read-only queries, but are deliberately not used by privileged system package operations.
+The helper accepts only `install`, `update`, `remove`, and metadata `refresh` requests for APT, DNF, Pacman, Zypper, Portage, and XBPS. It validates package identifiers and directly executes fixed system binaries without a shell. Portage writes preserve a validated SLOT and repository atom; XBPS writes accept only package names. Custom executable paths remain available for detection and read-only queries, but are deliberately not used by privileged system package operations.
 
 Running the unpackaged GUI directly supports all read-only workflows. To exercise privileged system package changes from a source build, install the release helper, policy, and icon as root first; installing a generated release package is the recommended way to keep these assets consistent.
 

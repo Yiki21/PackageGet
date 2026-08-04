@@ -346,6 +346,7 @@ jobs:
             "${{ matrix.arch }}" \
             glibc \
             target/release/updater \
+            target/release/updater-system-helper \
             release-artifacts
           packaging/linux/package-appimage.sh \
             "$version" \
@@ -364,9 +365,16 @@ jobs:
           extract="$RUNNER_TEMP/portable-tar"
           mkdir -p "$extract"
           tar -xzf "$archive" -C "$extract"
-          binary="$extract/updater-$version-linux-${{ matrix.arch }}-glibc/updater"
+          package_root="$extract/updater-$version-linux-${{ matrix.arch }}-glibc"
+          binary="$package_root/updater"
+          helper="$package_root/system-integration/updater-system-helper"
           file "$binary" | grep -Fq '${{ matrix.file-arch }}'
+          file "$helper" | grep -Fq '${{ matrix.file-arch }}'
+          test -x "$package_root/system-integration/install.sh"
+          test -f "$package_root/system-integration/com.ayi.updater.policy"
+          test -f "$package_root/system-integration/updater.svg"
           ldd "$binary" | tee glibc-needed.txt
+          ldd "$helper" | tee -a glibc-needed.txt
           if grep -Fq 'not found' glibc-needed.txt; then
             exit 1
           fi
@@ -465,9 +473,11 @@ jobs:
                 "${{ matrix.arch }}" \
                 musl \
                 target-musl/release/updater \
+                target-musl/release/updater-system-helper \
                 release-artifacts
               file target-musl/release/updater | grep -Fq "${{ matrix.file-arch }}"
               ldd target-musl/release/updater | tee musl-needed.txt
+              ldd target-musl/release/updater-system-helper | tee -a musl-needed.txt
               if grep -Fq "not found" musl-needed.txt; then
                 exit 1
               fi

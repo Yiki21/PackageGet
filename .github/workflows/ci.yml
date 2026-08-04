@@ -32,7 +32,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang mold
+          sudo apt-get install -y clang jq mold
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -45,6 +45,39 @@ jobs:
 
       - name: Run Snap offline contract tests
         run: cargo test -p updater-managers --test snap_contract --locked
+
+      - name: Run Portage and XBPS offline contract tests
+        run: |
+          cargo test -p updater-managers --test portage_contract --locked
+          cargo test -p updater-managers --test xbps_contract --locked
+
+      - name: Run Gentoo and Void Linux native read-only manager smokes
+        run: |
+          portage_test="$(
+            cargo test -p updater-managers --test portage_contract --no-run \
+              --locked --message-format=json \
+              | jq -r 'select(.reason == "compiler-artifact" and .target.name == "portage_contract") | .executable // empty' \
+              | tail -n 1
+          )"
+          xbps_test="$(
+            cargo test -p updater-managers --test xbps_contract --no-run \
+              --locked --message-format=json \
+              | jq -r 'select(.reason == "compiler-artifact" and .target.name == "xbps_contract") | .executable // empty' \
+              | tail -n 1
+          )"
+          test -x "$portage_test"
+          test -x "$xbps_test"
+
+          docker run --rm \
+            -v "$(realpath "$portage_test"):/portage-contract:ro" \
+            gentoo/stage3@sha256:08914e15d306bfdb251262ca3f7e3489b77ca32604ad1928cbb21dc94587261c \
+            /portage-contract gentoo_container_portage_read_only_smoke \
+            --ignored --exact --test-threads=1
+          docker run --rm \
+            -v "$(realpath "$xbps_test"):/xbps-contract:ro" \
+            ghcr.io/void-linux/void-glibc-full@sha256:c6aa72cab4f7c7b1c109cb5140fd6cb6ef254c5a34037df2940942a05662bbd6 \
+            /xbps-contract void_container_xbps_read_only_smoke \
+            --ignored --exact --test-threads=1
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
