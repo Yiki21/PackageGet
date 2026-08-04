@@ -93,8 +93,6 @@ pub enum Action {
         reload: bool,
         follow_up: iced::Task<Message>,
     },
-    /// Navigate to another content page.
-    Navigate(ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,11 +131,20 @@ impl Content {
                 match action {
                     setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
                     setting::Action::ApplySavedConfig(config) => {
+                        let manager_config_changed = pm_config.managers != config.managers;
                         *pm_config = config;
-                        Action::ReloadPackageData {
-                            reason: ReloadReason::ConfigurationChanged,
-                            follow_up: iced::Task::none(),
+                        if manager_config_changed {
+                            Action::ReloadPackageData {
+                                reason: ReloadReason::ConfigurationChanged,
+                                follow_up: iced::Task::none(),
+                            }
+                        } else {
+                            Action::None
                         }
+                    }
+                    setting::Action::ManagerConfigChanged => {
+                        health_info.invalidate();
+                        Action::None
                     }
                     setting::Action::None => Action::None,
                 }
@@ -202,9 +209,10 @@ impl Content {
                 }
             }
             Message::Health(health_msg) => {
+                let draft_config = self.settings.draft_config();
                 let action = self.health.update(
                     health_msg,
-                    pm_config_ref,
+                    draft_config,
                     health_info,
                     catalog,
                     installed_info,
@@ -212,10 +220,6 @@ impl Content {
                 );
                 match action {
                     health::Action::Run(task) => Action::Run(task.map(Message::Health)),
-                    health::Action::OpenSettings(manager) => {
-                        self.settings.filter_to_manager(&manager, catalog);
-                        Action::Navigate(ActiveContentPage::Settings)
-                    }
                     health::Action::None => Action::None,
                 }
             }
@@ -269,7 +273,10 @@ impl Content {
                 .installed
                 .primary_action(installed_info)
                 .map(Message::Installed),
-            ActiveContentPage::Health => None,
+            ActiveContentPage::Health => self
+                .settings
+                .is_dirty()
+                .then_some(Message::Settings(setting::Message::SaveConfig)),
             ActiveContentPage::Settings => self
                 .settings
                 .is_dirty()
@@ -407,32 +414,154 @@ impl Content {
                     inspector_drawer,
                 )
                 .map(Message::Installed),
-            ActiveContentPage::Health => self
-                .health
-                .view(
-                    pm_config,
-                    health_info,
-                    catalog,
-                    installed_info,
-                    updates_info,
-                )
-                .map(Message::Health),
-            ActiveContentPage::Settings => self
-                .settings
-                .view(pm_config, catalog, health_info)
-                .map(Message::Settings),
+            ActiveContentPage::Health => iced::widget::column![
+                self.health
+                    .view(
+                        self.settings.draft_config(),
+                        health_info,
+                        catalog,
+                        installed_info,
+                        updates_info,
+                    )
+                    .map(Message::Health),
+                self.settings
+                    .view_managers(catalog, health_info)
+                    .map(Message::Settings),
+            ]
+            .spacing(crate::theme::spacing::LG)
+            .height(iced::Length::Fill)
+            .into(),
+            ActiveContentPage::Settings => self.settings.view().map(Message::Settings),
         }
     }
 }
 
 #[cfg(test)]
 mod reload_reason_tests {
-    use super::ReloadReason;
+    use super::*;
+
+    fn manager_id(value: &str) -> updater_manager_api::ManagerId {
+        updater_manager_api::ManagerId::parse(value).unwrap()
+    }
 
     #[test]
     fn only_startup_resets_page_context() {
         assert!(!ReloadReason::Startup.preserves_page_context());
         assert!(ReloadReason::ConfigurationChanged.preserves_page_context());
         assert!(ReloadReason::PackageOperation.preserves_page_context());
+    }
+
+    #[test]
+    fn manager_draft_change_invalidates_an_active_health_scan() {
+        let mut content = Content::default();
+        let mut config = updater_core::Config::default();
+        let mut installed = InstalledInfo::default();
+        let mut updates = UpdatesInfo::default();
+        let mut finding = FindingInfo::default();
+        let mut health = ManagerHealthInfo::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        content.settings.sync_from_config(&config);
+
+        let _ = content.update(
+            Message::Health(health::Message::StartScan),
+            &mut config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+        assert!(health.is_checking());
+
+        let action = content.update(
+            Message::Settings(setting::Message::AddDetectedManager(manager_id(
+                "builtin:cargo",
+            ))),
+            &mut config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(!health.is_checking());
+        assert!(!health.has_results());
+    }
+
+    #[test]
+    fn application_preference_change_preserves_an_active_health_scan() {
+        let mut content = Content::default();
+        let mut config = updater_core::Config::default();
+        let mut installed = InstalledInfo::default();
+        let mut updates = UpdatesInfo::default();
+        let mut finding = FindingInfo::default();
+        let mut health = ManagerHealthInfo::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        content.settings.sync_from_config(&config);
+
+        let _ = content.update(
+            Message::Health(health::Message::StartScan),
+            &mut config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+        let action = content.update(
+            Message::Settings(setting::Message::NotificationsChanged(true)),
+            &mut config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(health.is_checking());
+    }
+
+    #[test]
+    fn saving_application_preferences_does_not_reload_package_data() {
+        let mut content = Content::default();
+        let mut active_config = updater_core::Config::default();
+        let mut installed = InstalledInfo::default();
+        let mut updates = UpdatesInfo::default();
+        let mut finding = FindingInfo::default();
+        let mut health = ManagerHealthInfo::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        content.settings.sync_from_config(&active_config);
+
+        let _ = content.update(
+            Message::Settings(setting::Message::NotificationsChanged(true)),
+            &mut active_config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+        let mut saved_config = active_config.clone();
+        saved_config.notifications_enabled = true;
+
+        let action = content.update(
+            Message::Settings(setting::Message::SaveConfigResult {
+                config: saved_config,
+                validation: Vec::new(),
+                result: Ok(()),
+            }),
+            &mut active_config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(active_config.notifications_enabled);
     }
 }

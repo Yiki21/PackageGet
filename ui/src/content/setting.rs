@@ -46,7 +46,7 @@ pub enum SaveStatus {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// Filter package managers throughout Settings.
+    /// Filter package managers on the Package Managers page.
     ManagerQueryChanged(String),
     /// Package-manager detection message.
     DetectPackageManagers,
@@ -101,6 +101,8 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Apply the successfully saved draft and reload package data.
     ApplySavedConfig(updater_core::Config),
+    /// A manager-owned setting changed, invalidating prior health results.
+    ManagerConfigChanged,
 }
 
 impl Settings {
@@ -116,8 +118,12 @@ impl Settings {
         self.is_initialized && self.draft != self.baseline
     }
 
-    pub fn filter_to_manager(&mut self, manager: &ManagerId, catalog: &ManagerCatalog) {
-        self.manager_query = catalog.display_name(manager).to_owned();
+    pub fn has_manager_changes(&self) -> bool {
+        self.is_initialized && self.draft.managers != self.baseline.managers
+    }
+
+    pub fn draft_config(&self) -> &updater_core::Config {
+        &self.draft
     }
 
     pub fn appearance_value(&self) -> String {
@@ -250,16 +256,22 @@ impl Settings {
 
                 if !exists {
                     self.draft.managers.push(ManagerConfig::new(manager));
+                    return Action::ManagerConfigChanged;
                 }
                 Action::None
             }
             Message::UnloadManager(manager) => {
+                let previous_len = self.draft.managers.len();
                 self.draft
                     .managers
                     .retain(|configured| configured.id != manager);
                 self.availability.remove(&manager);
                 self.save_status = None;
-                Action::None
+                if self.draft.managers.len() == previous_len {
+                    Action::None
+                } else {
+                    Action::ManagerConfigChanged
+                }
             }
             Message::SaveConfig => {
                 if !self.is_dirty() || self.is_saving {
@@ -359,31 +371,43 @@ impl Settings {
                 Action::Run(task)
             }
             Message::SelectedPath(file_handle) => {
+                let mut changed = false;
                 if let Some(manager) = self.selecting_manager.take() {
                     let path = file_handle.path().to_path_buf();
                     self.availability.remove(&manager);
                     self.save_status = None;
 
                     if let Some(existing) = self.draft.manager_mut(&manager) {
+                        changed = existing.executable() != Some(path.as_path());
                         existing.executable = Some(path);
                     } else {
                         self.draft
                             .managers
                             .push(ManagerConfig::new(manager).with_executable(path));
+                        changed = true;
                     }
                 } else {
                     log::error!("No package manager selected when handling SelectedPath");
                 }
 
-                Action::None
+                if changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
+                }
             }
             Message::ResetExecutable(manager) => {
+                let mut changed = false;
                 if let Some(configured) = self.draft.manager_mut(&manager) {
-                    configured.executable = None;
+                    changed = configured.executable.take().is_some();
                     self.availability.remove(&manager);
                     self.save_status = None;
                 }
-                Action::None
+                if changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
+                }
             }
             Message::CancelSelection => {
                 self.selecting_manager = None;
@@ -404,16 +428,30 @@ impl Settings {
             }
             Message::SelectedGoBinDir(file_handle) => {
                 let path = file_handle.path().to_string_lossy().to_string();
+                let changed = self.draft.go_bin_dir() != Some(path.as_str());
                 if let Err(error) = self.draft.set_go_bin_dir(Some(path)) {
                     self.save_status = Some(SaveStatus::Error(error.to_string()));
+                    return Action::None;
                 }
-                Action::None
+                self.save_status = None;
+                if changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
+                }
             }
             Message::ClearGoBinDir => {
+                let changed = self.draft.go_bin_dir().is_some();
                 if let Err(error) = self.draft.set_go_bin_dir(None) {
                     self.save_status = Some(SaveStatus::Error(error.to_string()));
+                    return Action::None;
                 }
-                Action::None
+                self.save_status = None;
+                if changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
+                }
             }
             Message::OpenNixProfileDialog => {
                 let task = Task::future(
@@ -430,21 +468,24 @@ impl Settings {
             Message::SelectedNixProfile(file_handle) => {
                 let id = ManagerId::parse("builtin:nix-profile")
                     .expect("built-in Nix profile manager ID must remain valid");
+                let previous_profile = self.draft.nix_profile().map(str::to_owned);
                 let added_manager = self.draft.manager(&id).is_none();
                 if added_manager {
                     self.draft.managers.push(ManagerConfig::new(id.clone()));
                 }
-                match file_handle.path().to_str() {
+                let changed = match file_handle.path().to_str() {
                     Some(path) => match self.draft.set_nix_profile(path.to_owned()) {
                         Ok(()) => {
                             self.availability.remove(&id);
                             self.save_status = None;
+                            added_manager || previous_profile.as_deref() != Some(path)
                         }
                         Err(error) => {
                             if added_manager {
                                 self.draft.managers.retain(|manager| manager.id != id);
                             }
                             self.save_status = Some(SaveStatus::Error(error.to_string()));
+                            false
                         }
                     },
                     None => {
@@ -454,13 +495,23 @@ impl Settings {
                         self.save_status = Some(SaveStatus::Error(
                             "Nix profile path must be valid UTF-8".to_owned(),
                         ));
+                        false
                     }
+                };
+                if changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
                 }
-                Action::None
             }
             Message::RevertChanges => {
+                let manager_config_changed = self.draft.managers != self.baseline.managers;
                 self.discard_changes();
-                Action::None
+                if manager_config_changed {
+                    Action::ManagerConfigChanged
+                } else {
+                    Action::None
+                }
             }
             Message::AppearanceChanged(appearance) => {
                 self.draft.appearance = appearance.config_value().to_owned();
@@ -475,12 +526,7 @@ impl Settings {
         }
     }
 
-    pub fn view(
-        &self,
-        _active_config: &updater_core::Config,
-        catalog: &ManagerCatalog,
-        health_info: &ManagerHealthInfo,
-    ) -> iced::Element<'static, Message> {
+    pub fn view(&self) -> iced::Element<'static, Message> {
         use iced::Length;
         use iced::widget::{column, container, scrollable};
 
@@ -489,13 +535,55 @@ impl Settings {
         let content = column![
             shared::page_header(
                 "Settings",
-                format!("{} package managers configured", pm_config.managers.len()),
+                "Appearance, notifications, and application preferences",
                 theme::colors::SETTINGS,
             ),
             self.view_appearance_section(pm_config),
+            self.view_preference_buttons(),
+            self.view_status(),
+        ]
+        .spacing(theme::spacing::LG)
+        .width(Length::Fill);
+
+        let scrollable_content = scrollable(
+            container(content)
+                .padding(iced::Padding {
+                    top: 0.0,
+                    right: theme::spacing::LG,
+                    bottom: theme::spacing::LG,
+                    left: 0.0,
+                })
+                .width(Length::Fill),
+        )
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(4)
+                .margin(2),
+        ))
+        .style(theme::scrollable_style)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        container(scrollable_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    pub fn view_managers(
+        &self,
+        catalog: &ManagerCatalog,
+        health_info: &ManagerHealthInfo,
+    ) -> iced::Element<'static, Message> {
+        use iced::Length;
+        use iced::widget::{column, container, scrollable};
+
+        let pm_config = &self.draft;
+        let content = column![
             self.view_configured_managers_section(pm_config, catalog, health_info),
             self.view_selection_list(pm_config, catalog, health_info),
-            self.view_buttons(),
+            self.view_manager_buttons(),
             self.view_status(),
         ]
         .spacing(theme::spacing::LG)
@@ -581,11 +669,11 @@ impl Settings {
                 column![
                     row![
                         text(shared::manager_category_label(category))
-                            .size(13)
+                            .size(14)
                             .font(theme::FONT_SEMIBOLD)
                             .style(theme::text_on_surface),
                         text(format!("{count}"))
-                            .size(12)
+                            .size(13)
                             .style(theme::text_on_surface_muted),
                     ]
                     .spacing(theme::spacing::SM)
@@ -614,12 +702,15 @@ impl Settings {
         column![
             Self::section_title("Package Managers"),
             text("Configured sources are grouped by the kind of software they manage.")
-                .size(13)
+                .size(14)
                 .style(theme::text_on_surface_muted),
             text_input("Filter package managers...", &self.manager_query)
+                .id(shared::search_input_id(
+                    crate::content::ActiveContentPage::Health,
+                ))
                 .on_input(Message::ManagerQueryChanged)
                 .padding([8, 10])
-                .size(13)
+                .size(14)
                 .style(theme::text_input_style),
             content,
         ]
@@ -769,11 +860,11 @@ impl Settings {
                 column![
                     row![
                         text(shared::manager_category_label(category))
-                            .size(13)
+                            .size(14)
                             .font(theme::FONT_SEMIBOLD)
                             .style(theme::text_on_surface),
                         text(format!("{count}"))
-                            .size(12)
+                            .size(13)
                             .style(theme::text_on_surface_muted),
                     ]
                     .spacing(theme::spacing::SM)
@@ -833,10 +924,10 @@ impl Settings {
         let name_row = if is_configured {
             row![
                 text(display_name.clone())
-                    .size(15)
+                    .size(17)
                     .font(theme::FONT_SEMIBOLD),
                 text(shared::manager_category_label(category))
-                    .size(11)
+                    .size(13)
                     .style(theme::text_on_surface_muted),
                 text("✓").size(14).style(theme::text_success)
             ]
@@ -845,10 +936,10 @@ impl Settings {
         } else {
             row![
                 text(display_name.clone())
-                    .size(15)
+                    .size(17)
                     .font(theme::FONT_SEMIBOLD),
                 text(shared::manager_category_label(category))
-                    .size(11)
+                    .size(13)
                     .style(theme::text_on_surface_muted),
             ]
             .spacing(theme::spacing::SM)
@@ -872,7 +963,7 @@ impl Settings {
         let mut content_items = vec![
             name_row.into(),
             text(info_text)
-                .size(13)
+                .size(14)
                 .font(if is_configured {
                     theme::FONT_MONO
                 } else {
@@ -885,14 +976,14 @@ impl Settings {
         if !catalog.is_registered(manager) {
             content_items.push(
                 text("Status: unregistered / unavailable")
-                    .size(13)
+                    .size(14)
                     .style(theme::text_warning)
                     .into(),
             );
         } else if !catalog.supports_current_platform(manager) {
             content_items.push(
                 text("Status: unsupported on this platform")
-                    .size(13)
+                    .size(14)
                     .style(theme::text_warning)
                     .into(),
             );
@@ -907,7 +998,7 @@ impl Settings {
                 .or_else(|| health_info.result(manager));
             let status = match availability {
                 None => text("Status: not scanned")
-                    .size(13)
+                    .size(14)
                     .style(theme::text_on_surface_alt)
                     .into(),
                 Some(availability) => {
@@ -942,7 +1033,7 @@ impl Settings {
                     };
 
                     text(format!("Status: {message}"))
-                        .size(13)
+                        .size(14)
                         .style(if is_available {
                             theme::text_success
                         } else {
@@ -991,7 +1082,7 @@ impl Settings {
 
         shared::styled_container(
             row![
-                icon::manager_logo(manager, &display_name, 36.0),
+                icon::manager_logo(manager, &display_name, 42.0),
                 column(content_items)
                     .spacing(theme::spacing::SM)
                     .width(iced::Length::Fill),
@@ -1018,7 +1109,7 @@ impl Settings {
             });
 
         let info_elem = text(go_bin_info)
-            .size(12)
+            .size(14)
             .font(theme::FONT_MONO)
             .style(theme::text_on_surface_alt)
             .into();
@@ -1051,7 +1142,7 @@ impl Settings {
             .map(|path| format!("Profile: {path}"))
             .unwrap_or_else(|| "Profile: not configured".to_owned());
         let info = text(profile)
-            .size(12)
+            .size(14)
             .font(theme::FONT_MONO)
             .style(theme::text_on_surface_alt)
             .into();
@@ -1065,9 +1156,8 @@ impl Settings {
         [info, actions].into_iter()
     }
 
-    /// Action buttons row.
-    fn view_buttons(&self) -> iced::Element<'static, Message> {
-        use iced::widget::{container, row, svg, text};
+    fn view_manager_buttons(&self) -> iced::Element<'static, Message> {
+        use iced::widget::{container, row, svg};
 
         let detect_msg = if self.is_detecting {
             None
@@ -1088,41 +1178,63 @@ impl Settings {
             detect_msg,
         );
 
+        let mut actions = vec![detect_btn.into()];
+        actions.extend(self.save_action_elements());
+
+        container(
+            row(actions)
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .wrap(),
+        )
+        .into()
+    }
+
+    fn view_preference_buttons(&self) -> iced::Element<'static, Message> {
+        use iced::widget::{container, row};
+
+        container(
+            row(self.save_action_elements())
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .wrap(),
+        )
+        .into()
+    }
+
+    fn save_action_elements(&self) -> Vec<iced::Element<'static, Message>> {
+        use iced::widget::{svg, text};
+
         let is_dirty = self.is_dirty();
+        let mut actions = Vec::with_capacity(3);
+        if is_dirty {
+            actions.push(
+                text("● Unsaved changes")
+                    .size(14)
+                    .font(theme::FONT_SEMIBOLD)
+                    .color(theme::colors::SETTINGS)
+                    .into(),
+            );
+            actions
+                .push(Self::secondary_button("Revert", 14.0, Some(Message::RevertChanges)).into());
+        }
+
         let save_msg = (is_dirty && !self.is_saving).then_some(Message::SaveConfig);
         let save_label = if self.is_saving {
             "Saving..."
         } else {
             "Save Configuration"
         };
-
-        let save_btn = Self::icon_button(
-            svg::Svg::new(SAVE_ICON.clone()).width(16).height(16),
-            save_label,
-            16.0,
-            save_msg,
+        actions.push(
+            Self::icon_button(
+                svg::Svg::new(SAVE_ICON.clone()).width(16).height(16),
+                save_label,
+                16.0,
+                save_msg,
+            )
+            .into(),
         );
-
-        let mut actions = row![detect_btn]
-            .spacing(12)
-            .align_y(iced::Alignment::Center);
-        if is_dirty {
-            actions = actions
-                .push(
-                    text("● Unsaved changes")
-                        .size(13)
-                        .font(theme::FONT_SEMIBOLD)
-                        .color(theme::colors::SETTINGS),
-                )
-                .push(Self::secondary_button(
-                    "Revert",
-                    14.0,
-                    Some(Message::RevertChanges),
-                ));
-        }
-        actions = actions.push(save_btn);
-
-        container(actions).into()
+        actions
     }
 
     /// Save status view.
@@ -1292,7 +1404,7 @@ mod tests {
 
         let action = settings.update(Message::ResetExecutable(manager.clone()), &active, &catalog);
 
-        assert!(matches!(action, Action::None));
+        assert!(matches!(action, Action::ManagerConfigChanged));
         assert_eq!(settings.draft.manager_executable(&manager), None);
         assert!(!settings.availability.contains_key(&manager));
         assert!(settings.is_dirty());

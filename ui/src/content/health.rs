@@ -4,14 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use iced::{Element, Length, Task};
+use iced::{Element, Task};
 use updater_core::{CancellationToken, ManagerRegistry};
 use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerId};
 
 use crate::{
     activity,
     content::{InstalledInfo, UpdatesInfo, shared},
-    icon,
     manager_catalog::ManagerCatalog,
     theme,
 };
@@ -166,40 +165,6 @@ impl ManagerHealthInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum HealthFilter {
-    #[default]
-    All,
-    Healthy,
-    Issues,
-    Unchecked,
-}
-
-impl HealthFilter {
-    const ALL: [Self; 4] = [Self::All, Self::Healthy, Self::Issues, Self::Unchecked];
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Healthy => "Healthy",
-            Self::Issues => "Issues",
-            Self::Unchecked => "Unchecked",
-        }
-    }
-
-    fn includes(self, status: HealthStatus) -> bool {
-        match self {
-            Self::All => true,
-            Self::Healthy => status == HealthStatus::Healthy,
-            Self::Issues => matches!(
-                status,
-                HealthStatus::Degraded | HealthStatus::Unavailable | HealthStatus::Error
-            ),
-            Self::Unchecked => status == HealthStatus::Unchecked,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HealthStatus {
     Healthy,
@@ -219,27 +184,13 @@ impl HealthStatus {
             Self::Unchecked => "Unchecked",
         }
     }
-
-    const fn color(self) -> iced::Color {
-        match self {
-            Self::Healthy => theme::colors::SUCCESS,
-            Self::Degraded | Self::Unavailable => theme::colors::WARNING,
-            Self::Error => theme::colors::ERROR,
-            Self::Unchecked => theme::colors::ON_SURFACE_ALT,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct HealthCenter {
-    query: String,
-    filter: HealthFilter,
-}
+pub struct HealthCenter;
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    QueryChanged(String),
-    FilterChanged(HealthFilter),
     StartScan,
     CancelScan,
     CheckStarted {
@@ -258,14 +209,12 @@ pub enum Message {
         cancelled: bool,
     },
     CopyDiagnostics,
-    OpenSettings(ManagerId),
 }
 
 #[derive(Debug)]
 pub enum Action {
     None,
     Run(Task<Message>),
-    OpenSettings(ManagerId),
 }
 
 impl HealthCenter {
@@ -279,14 +228,6 @@ impl HealthCenter {
         updates: &UpdatesInfo,
     ) -> Action {
         match message {
-            Message::QueryChanged(query) => {
-                self.query = query;
-                Action::None
-            }
-            Message::FilterChanged(filter) => {
-                self.filter = filter;
-                Action::None
-            }
             Message::StartScan => {
                 if info.is_checking {
                     return Action::None;
@@ -336,7 +277,6 @@ impl HealthCenter {
                     config, info, catalog, installed, updates,
                 )))
             }
-            Message::OpenSettings(manager) => Action::OpenSettings(manager),
         }
     }
 
@@ -348,41 +288,30 @@ impl HealthCenter {
         installed: &'a InstalledInfo,
         updates: &'a UpdatesInfo,
     ) -> Element<'a, Message> {
-        use iced::widget::{button, column, container, row, scrollable, text};
+        use iced::widget::{button, column, row, text};
 
         let summary = HealthSummary::new(config, info, installed, updates);
-        let search = shared::search_input_view(
-            shared::search_input_id(crate::content::ActiveContentPage::Health),
-            "Managers",
-            "Filter managers...",
-            &self.query,
-            Message::QueryChanged,
-        );
-        let filters = row(HealthFilter::ALL.into_iter().map(|filter| {
-            shared::segmented_button(
-                filter.label(),
-                self.filter == filter,
-                Message::FilterChanged(filter),
-            )
-            .into()
-        }))
-        .spacing(2)
-        .width(Length::Fill);
-
-        let check = shared::refresh_button_with_label(
-            if info.has_results() {
+        let check = button(
+            text(if info.has_results() {
                 "Recheck"
             } else {
                 "Check all"
-            },
-            !info.is_checking,
-            Message::StartScan,
-        );
-        let cancel = button(text(if info.cancellation_requested {
-            "Stopping..."
-        } else {
-            "Cancel"
-        }))
+            })
+            .size(14)
+            .font(theme::FONT_SEMIBOLD),
+        )
+        .padding([8, 12])
+        .style(theme::secondary_button(!info.is_checking))
+        .on_press_maybe((!info.is_checking).then_some(Message::StartScan));
+        let cancel = button(
+            text(if info.cancellation_requested {
+                "Stopping..."
+            } else {
+                "Cancel"
+            })
+            .size(14)
+            .font(theme::FONT_SEMIBOLD),
+        )
         .padding([8, 12])
         .style(theme::secondary_button(
             info.is_checking && !info.cancellation_requested,
@@ -390,30 +319,12 @@ impl HealthCenter {
         .on_press_maybe(
             (info.is_checking && !info.cancellation_requested).then_some(Message::CancelScan),
         );
-        let copy = button(text("Copy report"))
+        let copy = button(text("Copy report").size(14).font(theme::FONT_SEMIBOLD))
             .padding([8, 12])
             .style(theme::secondary_button(info.has_results()))
             .on_press_maybe(info.has_results().then_some(Message::CopyDiagnostics));
 
-        let toolbar = shared::toolbar(
-            column![
-                row![
-                    container(search).width(Length::FillPortion(2)),
-                    container(
-                        column![
-                            shared::section_title("Status"),
-                            shared::segmented_group(filters)
-                        ]
-                        .spacing(theme::spacing::SM)
-                    )
-                    .width(Length::FillPortion(2)),
-                ]
-                .spacing(theme::spacing::LG)
-                .align_y(iced::Alignment::End),
-                row![check, cancel, copy].spacing(theme::spacing::SM).wrap(),
-            ]
-            .spacing(theme::spacing::MD),
-        );
+        let toolbar = shared::toolbar(row![check, cancel, copy].spacing(theme::spacing::SM).wrap());
 
         let scan_state = if info.is_checking {
             let current = info
@@ -433,31 +344,6 @@ impl HealthCenter {
             }
         } else {
             "Not checked in this session".to_owned()
-        };
-
-        let manager_rows = config
-            .managers
-            .iter()
-            .filter(|manager| shared::manager_matches_query(&manager.id, catalog, &self.query))
-            .filter_map(|manager| {
-                let status = info.status_for(&manager.id, installed, updates);
-                self.filter
-                    .includes(status)
-                    .then(|| manager_health_row(manager, status, info, catalog, installed, updates))
-            })
-            .collect::<Vec<_>>();
-
-        let list: Element<'_, Message> = if manager_rows.is_empty() {
-            shared::centered_message(if config.managers.is_empty() {
-                "No package managers configured"
-            } else {
-                "No managers match this filter"
-            })
-        } else {
-            scrollable(column(manager_rows).spacing(theme::spacing::SM))
-                .height(Length::Fill)
-                .style(theme::scrollable_style)
-                .into()
         };
 
         column![
@@ -496,10 +382,8 @@ impl HealthCenter {
                 } else {
                     theme::text_on_surface_muted
                 }),
-            list,
         ]
         .spacing(theme::spacing::LG)
-        .height(Length::Fill)
         .into()
     }
 }
@@ -532,132 +416,6 @@ impl HealthSummary {
         }
         summary
     }
-}
-
-fn manager_health_row<'a>(
-    config: &'a ManagerConfig,
-    status: HealthStatus,
-    info: &'a ManagerHealthInfo,
-    catalog: &'a ManagerCatalog,
-    installed: &'a InstalledInfo,
-    updates: &'a UpdatesInfo,
-) -> Element<'a, Message> {
-    use iced::widget::{button, column, container, row, text};
-
-    let manager = &config.id;
-    let display_name = catalog.display_name(manager);
-    let record = info.records.get(manager);
-    let is_current = info.current_manager.as_ref() == Some(manager) && info.is_checking;
-    let (version, availability_detail) = health_record_detail(record);
-    let runtime_detail = runtime_issue_detail(manager, installed, updates);
-    let executable = config.executable().map_or_else(
-        || "Executable: System PATH".to_owned(),
-        |path| format!("Executable: {}", path.display()),
-    );
-    let checked_at = record.map_or("Never checked", |record| record.checked_at.as_str());
-
-    let badge_color = status.color();
-    let status_badge = container(
-        text(status.label())
-            .size(12)
-            .font(theme::FONT_SEMIBOLD)
-            .style(move |_theme| iced::widget::text::Style {
-                color: Some(badge_color),
-            }),
-    )
-    .padding([4, 8])
-    .style(move |_theme| iced::widget::container::Style {
-        background: Some(
-            iced::Color {
-                a: 0.12,
-                ..badge_color
-            }
-            .into(),
-        ),
-        border: iced::Border {
-            color: iced::Color {
-                a: 0.32,
-                ..badge_color
-            },
-            width: 1.0,
-            radius: theme::radius::CONTROL.into(),
-        },
-        ..Default::default()
-    });
-
-    let settings = button(text("Configure").size(13))
-        .padding([7, 12])
-        .style(theme::secondary_button(true))
-        .on_press(Message::OpenSettings(manager.clone()));
-    let state_detail = if is_current {
-        "Checking availability...".to_owned()
-    } else {
-        availability_detail
-    };
-
-    let mut details = column![
-        row![
-            icon::manager_logo(manager, display_name, 42.0),
-            column![
-                text(display_name)
-                    .size(17)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_surface),
-                text(manager.as_str())
-                    .size(12)
-                    .font(theme::FONT_MONO)
-                    .style(theme::text_on_surface_muted),
-            ]
-            .spacing(2)
-            .width(Length::Fill),
-            status_badge,
-            settings,
-        ]
-        .spacing(theme::spacing::SM)
-        .align_y(iced::Alignment::Center)
-        .wrap(),
-        text(state_detail)
-            .size(14)
-            .style(if matches!(status, HealthStatus::Error) {
-                theme::text_error
-            } else if matches!(status, HealthStatus::Degraded | HealthStatus::Unavailable) {
-                theme::text_warning
-            } else {
-                theme::text_on_surface_muted
-            })
-            .width(Length::Fill)
-            .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-        row![
-            text(executable)
-                .size(13)
-                .font(theme::FONT_MONO)
-                .style(theme::text_on_surface_muted),
-            text(format!("Version: {version}"))
-                .size(13)
-                .style(theme::text_on_surface_muted),
-        ]
-        .spacing(theme::spacing::LG)
-        .wrap(),
-        text(format!("Last checked: {checked_at}"))
-            .size(12)
-            .style(theme::text_on_surface_alt),
-    ]
-    .spacing(theme::spacing::SM);
-    if let Some(runtime_detail) = runtime_detail {
-        details = details.push(
-            text(runtime_detail)
-                .size(13)
-                .style(theme::text_warning)
-                .width(Length::Fill)
-                .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-        );
-    }
-
-    container(details)
-        .padding([12, 14])
-        .width(Length::Fill)
-        .style(theme::surface_container)
-        .into()
 }
 
 fn health_record_detail(record: Option<&ManagerHealthRecord>) -> (String, String) {

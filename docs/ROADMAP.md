@@ -248,6 +248,20 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 管理页只显示 manager identity、状态、版本、可执行摘要和最后检查时间，不重复 Settings 的 capability/authorization 详情；Settings 复用最近的 Health 结果，并明确区分自定义 executable 与 `System PATH`。
 - workspace 串行门禁、CI run `30808354940` 和 Package run `30808354332` 均已通过；17 项跨平台产物及统一 checksums bundle 完成。
 
+当前进度（Iteration 049已完成）：
+
+- Settings 收敛为外观、通知和未来应用级偏好；Package Manager 的发现、添加、移除、路径、manager-specific 配置、健康检查和保存入口统一迁入 Package Managers 页面。
+- Health 模块只保留健康摘要、availability scan、取消和诊断报告，删除与 manager 配置列表重复的搜索、筛选和卡片。
+- 两个配置页面共享唯一 draft；Managers 与 Settings 之间可直接切换，从任一页面离开配置工作区时都保留 Save/Discard/Cancel 保护。
+- manager-owned draft 发生变化或被丢弃时，旧 Health 结果会立即失效；纯外观/通知修改不会中断正在执行的健康检查。
+- workspace 全目标 check、完整 tests 和 `-D warnings` Clippy 串行门禁已通过。
+
+当前进度（Iteration 050已完成）：
+
+- 保存或丢弃纯 Appearance/Notifications 应用偏好不会触发 Package Manager 数据 reload，也不会清空正在进行或已完成的 Health 状态。
+- 只有 managers draft 的变化才会触发 manager data reload、Health generation 失效和旧结果清理；配置页面的职责边界现在同时体现在 UI 和状态生命周期上。
+- 新增回归测试覆盖应用偏好保存与丢弃路径；updater UI 定向测试共 69 项通过。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

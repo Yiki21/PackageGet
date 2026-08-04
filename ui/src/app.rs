@@ -295,8 +295,8 @@ impl App {
         match message {
             Message::SideBar(sidebar_msg) => match self.sidebar.update(sidebar_msg) {
                 sidebar::Action::ChangeContent(target) => {
-                    if self.content.active_content == content::ActiveContentPage::Settings
-                        && target != content::ActiveContentPage::Settings
+                    if Self::is_configuration_page(self.content.active_content)
+                        && !Self::is_configuration_page(target)
                         && self.content.settings.is_dirty()
                     {
                         self.sidebar.active_tab = self.content.active_content.into();
@@ -367,7 +367,6 @@ impl App {
                         };
                         Task::batch(vec![completion, notification])
                     }
-                    content::Action::Navigate(target) => self.activate_page(target),
                     content::Action::None => Task::none(),
                 };
             }
@@ -427,7 +426,7 @@ impl App {
             Message::CloseRequested(window_id) => {
                 if self.content.settings.is_dirty() {
                     self.pending_settings_exit = Some(PendingSettingsExit::Close(window_id));
-                    if self.content.active_content != content::ActiveContentPage::Settings {
+                    if !Self::is_configuration_page(self.content.active_content) {
                         self.content.active_content = content::ActiveContentPage::Settings;
                         self.sidebar.active_tab = sidebar::Tab::Settings;
                     }
@@ -441,7 +440,11 @@ impl App {
                 )));
             }
             Message::DiscardPendingSettings => {
+                let manager_config_changed = self.content.settings.has_manager_changes();
                 self.content.settings.discard_changes();
+                if manager_config_changed {
+                    self.manager_health.invalidate();
+                }
                 task = self.complete_pending_settings_exit();
             }
             Message::CancelPendingSettingsExit => self.pending_settings_exit = None,
@@ -730,8 +733,8 @@ impl App {
             return Task::none();
         }
 
-        if self.content.active_content == content::ActiveContentPage::Settings
-            && target != content::ActiveContentPage::Settings
+        if Self::is_configuration_page(self.content.active_content)
+            && !Self::is_configuration_page(target)
             && self.content.settings.is_dirty()
         {
             self.pending_settings_exit = Some(PendingSettingsExit::Navigate(target));
@@ -753,6 +756,13 @@ impl App {
         } else {
             Task::none()
         }
+    }
+
+    fn is_configuration_page(page: content::ActiveContentPage) -> bool {
+        matches!(
+            page,
+            content::ActiveContentPage::Health | content::ActiveContentPage::Settings
+        )
     }
 
     fn focus_search(&self, page: content::ActiveContentPage) -> Task<Message> {
@@ -1135,7 +1145,7 @@ impl App {
                         "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Remove"
                     }
                     content::ActiveContentPage::Health => {
-                        "Ctrl+R Recheck  ·  / Focus  ·  Tab Move Focus"
+                        "Ctrl+R Recheck  ·  / Focus  ·  Ctrl+Enter Save"
                     }
                     content::ActiveContentPage::Settings => {
                         "Alt+1–5 Navigate  ·  Tab Move Focus  ·  Ctrl+Enter Save"
@@ -1265,7 +1275,7 @@ impl App {
         if self.pending_settings_exit.is_some() {
             let prompt = container(
                 row![
-                    iced::widget::text("Save changes before leaving Settings?")
+                    iced::widget::text("Save configuration changes before leaving?")
                         .size(13)
                         .font(crate::theme::FONT_SEMIBOLD)
                         .style(crate::theme::text_on_surface)
@@ -1626,6 +1636,63 @@ mod tests {
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
+    }
+
+    fn dirty_configuration_app(page: content::ActiveContentPage) -> App {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        let _ = app.update_message(Message::Content(content::Message::Settings(
+            content::SettingsMessage::NotificationsChanged(true),
+        )));
+        app.content.active_content = page;
+        app.sidebar.active_tab = page.into();
+        app
+    }
+
+    #[test]
+    fn dirty_configuration_can_move_between_settings_and_managers() {
+        let mut app = dirty_configuration_app(content::ActiveContentPage::Health);
+
+        let _ = app.navigate_to(content::ActiveContentPage::Settings);
+
+        assert_eq!(
+            app.content.active_content,
+            content::ActiveContentPage::Settings
+        );
+        assert!(app.pending_settings_exit.is_none());
+    }
+
+    #[test]
+    fn dirty_manager_configuration_prompts_before_leaving_configuration_pages() {
+        let mut app = dirty_configuration_app(content::ActiveContentPage::Health);
+
+        let _ = app.navigate_to(content::ActiveContentPage::Finding);
+
+        assert_eq!(
+            app.content.active_content,
+            content::ActiveContentPage::Health
+        );
+        assert!(matches!(
+            app.pending_settings_exit,
+            Some(PendingSettingsExit::Navigate(
+                content::ActiveContentPage::Finding
+            ))
+        ));
+    }
+
+    #[test]
+    fn discarding_application_preferences_preserves_health_state() {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        let _ = app.update_message(Message::Content(content::Message::Health(
+            content::HealthMessage::StartScan,
+        )));
+        assert!(app.manager_health.is_checking());
+        let _ = app.update_message(Message::Content(content::Message::Settings(
+            content::SettingsMessage::NotificationsChanged(true),
+        )));
+        let _ = app.update_message(Message::DiscardPendingSettings);
+        assert!(app.manager_health.is_checking());
     }
 
     #[test]
