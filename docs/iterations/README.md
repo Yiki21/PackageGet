@@ -69,4 +69,4 @@
 | 060 | 已完成 | 阶段 6/7：1.1.0 功能发布 | [060-1.1.0-release.md](060-1.1.0-release.md) |
 | 061 | 已完成 | 阶段 7：Gentoo Portage manager | [061-gentoo-portage-manager.md](061-gentoo-portage-manager.md) |
 | 062 | 已完成 | 阶段 7：Void Linux XBPS manager | [062-void-xbps-manager.md](062-void-xbps-manager.md) |
-| 063 | 进行中 | 阶段 6/7：1.2.0 功能发布 | [063-1.2.0-release.md](063-1.2.0-release.md) |
+| 063 | 已完成 | 阶段 6/7：1.2.0 功能发布 | [063-1.2.0-release.md](063-1.2.0-release.md) |

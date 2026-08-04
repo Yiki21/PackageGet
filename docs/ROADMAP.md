@@ -340,10 +340,11 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 两个manager的特权写操作均进入固定路径helper；Portage atom与XBPS package name在跨进程边界再次严格校验，自定义executable不会被提升为root。
 - main CI run `30927472564`通过Linux、Windows、macOS与官方Gentoo/Void容器真实只读manager smoke；Package run `30927472410`通过11个构建job及17资产bundle/checksum校验。
 
-当前进度（Iteration 063进行中）：
+当前进度（Iteration 063已完成）：
 
 - Portage、XBPS与portable tar显式系统集成按向后兼容功能增量准备发布为`1.2.0`；既有稳定tag保持不可变，资产矩阵仍为17项。
-- workspace、RPM、Arch、README与release notes统一到`1.2.0`；目标tag为`Build-v1.2.0`，tag前需重新通过最终HEAD本地门禁、跨平台CI和Package预构建。
+- workspace、RPM、Arch、README与release notes已统一到`1.2.0`；最终候选`adb14c3`通过本地门禁、CI run `30929169271`与Package预构建run `30929172767`。
+- annotated `Build-v1.2.0` tag解引用到`adb14c3`；tag Package run `30931404896`全部成功并发布17项产品资产及`SHA256SUMS`，全量回下载checksum与四个portable tar系统集成清单均验证通过。
 
 ### 阶段 7：扩展 Package Manager 生态
 
