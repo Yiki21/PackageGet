@@ -606,6 +606,7 @@ where
 
     let list = scrollable(column(group_elements).spacing(theme::spacing::MD))
         .height(Length::Fixed(280.0))
+        .spacing(theme::spacing::XS)
         .style(theme::scrollable_style);
     let panel = container(column![search, controls, list].spacing(theme::spacing::SM))
         .padding(theme::spacing::SM)

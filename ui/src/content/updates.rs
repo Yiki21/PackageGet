@@ -1532,7 +1532,7 @@ impl Updates {
         }
     }
 
-    fn start_load(
+    pub(crate) fn start_load(
         pm_config: &updater_core::Config,
         info: &mut UpdatesInfo,
         manager: ManagerId,

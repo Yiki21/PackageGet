@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use iced::{Length, Subscription, Task};
+use updater_core::ManagerOperationStatus;
 use updater_manager_api::{ManagerCapability, ManagerId, PackageUpdate};
 
 use crate::{
@@ -79,6 +80,12 @@ pub struct App {
     config_load_state: ConfigLoadState,
     /// Current package-data reload generation.
     package_data_generation: u64,
+    /// Managers whose in-flight installed initialization must not overwrite a
+    /// newer post-operation refresh.
+    installed_refresh_overrides: HashSet<ManagerId>,
+    /// Managers whose in-flight updates initialization must not overwrite a
+    /// newer post-operation refresh.
+    updates_refresh_overrides: HashSet<ManagerId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -241,6 +248,8 @@ impl App {
             pending_settings_exit: None,
             config_load_state: ConfigLoadState::Loading,
             package_data_generation: 0,
+            installed_refresh_overrides: HashSet::new(),
+            updates_refresh_overrides: HashSet::new(),
         };
 
         let task = Task::batch(vec![
@@ -356,15 +365,14 @@ impl App {
                             .take()
                             .unwrap_or_else(crate::activity::now_timestamp);
                         let notification = self.record_operation(&outcome, started_at);
-                        self.status_panel.record_outcome(outcome);
-                        let completion = if reload {
-                            Task::batch(vec![
-                                self.reload_package_data(content::ReloadReason::PackageOperation),
-                                follow_up.map(Message::Content),
-                            ])
+                        let refresh = if reload {
+                            self.refresh_package_managers(&outcome)
                         } else {
-                            follow_up.map(Message::Content)
+                            Task::none()
                         };
+                        self.status_panel.record_outcome(outcome);
+                        let completion =
+                            Task::batch(vec![refresh, follow_up.map(Message::Content)]);
                         Task::batch(vec![completion, notification])
                     }
                     content::Action::None => Task::none(),
@@ -563,7 +571,9 @@ impl App {
                 manager,
                 result,
             } => {
-                if generation == self.package_data_generation {
+                if generation == self.package_data_generation
+                    && !self.installed_refresh_overrides.contains(&manager)
+                {
                     self.installed_info.has_loading_count = true;
                     match result {
                         Ok(count) => {
@@ -610,7 +620,9 @@ impl App {
                 manager,
                 result,
             } => {
-                if generation == self.package_data_generation {
+                if generation == self.package_data_generation
+                    && !self.updates_refresh_overrides.contains(&manager)
+                {
                     self.updates_info.has_loading_count = true;
                     match result {
                         Ok(updates) => {
@@ -748,14 +760,37 @@ impl App {
     fn activate_page(&mut self, target: content::ActiveContentPage) -> Task<Message> {
         self.content.active_content = target;
         self.sidebar.active_tab = target.into();
-        if target == content::ActiveContentPage::Health && self.manager_health.should_scan_on_open()
-        {
-            Task::done(Message::Content(content::Message::Health(
-                content::HealthMessage::StartScan,
-            )))
-        } else {
-            Task::none()
+
+        let mut tasks = Vec::new();
+        match target {
+            content::ActiveContentPage::Updates
+                if !self.updates_info.has_loading_count && !self.updates_info.is_loading_count =>
+            {
+                self.updates_info.is_loading_count = true;
+                tasks.push(self.start_init_updates_counts_task(
+                    self.pm_config.clone(),
+                    self.package_data_generation,
+                ));
+            }
+            content::ActiveContentPage::Installed
+                if !self.installed_info.has_loading_count
+                    && !self.installed_info.is_loading_count =>
+            {
+                self.installed_info.is_loading_count = true;
+                tasks.push(self.start_init_installed_counts_task(
+                    self.pm_config.clone(),
+                    self.package_data_generation,
+                ));
+            }
+            content::ActiveContentPage::Health if self.manager_health.should_scan_on_open() => {
+                tasks.push(Task::done(Message::Content(content::Message::Health(
+                    content::HealthMessage::StartScan,
+                ))));
+            }
+            _ => {}
         }
+
+        Task::batch(tasks)
     }
 
     fn is_configuration_page(page: content::ActiveContentPage) -> bool {
@@ -1324,11 +1359,13 @@ impl App {
         self.installed_info.has_loading_count = true;
         self.installed_info.init_progress = None;
 
+        let refresh_overrides = std::mem::take(&mut self.installed_refresh_overrides);
         let managers: Vec<_> = self
             .installed_info
             .selected_managers
             .iter()
             .filter(|manager| !self.installed_info.init_errors.contains_key(manager))
+            .filter(|manager| !refresh_overrides.contains(manager))
             .cloned()
             .collect();
         if managers.is_empty() {
@@ -1355,6 +1392,7 @@ impl App {
         self.updates_info.is_loading_count = false;
         self.updates_info.has_loading_count = true;
         self.updates_info.init_progress = None;
+        self.updates_refresh_overrides.clear();
     }
 
     fn push_init_log(
@@ -1464,8 +1502,9 @@ impl App {
         self.installed_info.init_errors.clear();
         self.installed_info.init_logs.clear();
         self.installed_info.has_loading_count = false;
-        self.installed_info.is_loading_count = true;
+        self.installed_info.is_loading_count = reason != content::ReloadReason::Startup;
         self.installed_info.confirming_remove = false;
+        self.installed_refresh_overrides.clear();
 
         self.updates_info.updates_by_manager.clear();
         self.updates_info.selected_packages.clear();
@@ -1474,8 +1513,9 @@ impl App {
         self.updates_info.init_errors.clear();
         self.updates_info.init_logs.clear();
         self.updates_info.has_loading_count = false;
-        self.updates_info.is_loading_count = true;
+        self.updates_info.is_loading_count = reason != content::ReloadReason::Startup;
         self.content.updates.reset_pending_updates();
+        self.updates_refresh_overrides.clear();
 
         self.finding_info.search_results.clear();
         self.finding_info.search_errors.clear();
@@ -1483,10 +1523,92 @@ impl App {
         self.finding_info.searching_managers.clear();
         self.content.finding.reset_pending_install();
 
-        Task::batch(vec![
-            self.start_init_installed_counts_task(self.pm_config.clone(), generation),
-            self.start_init_updates_counts_task(self.pm_config.clone(), generation),
-        ])
+        if reason == content::ReloadReason::Startup {
+            Task::none()
+        } else {
+            Task::batch(vec![
+                self.start_init_installed_counts_task(self.pm_config.clone(), generation),
+                self.start_init_updates_counts_task(self.pm_config.clone(), generation),
+            ])
+        }
+    }
+
+    fn refresh_package_managers(&mut self, outcome: &content::OperationOutcome) -> Task<Message> {
+        let managers: HashSet<_> = outcome
+            .manager_outcomes
+            .iter()
+            .filter(|manager| manager.status == ManagerOperationStatus::Succeeded)
+            .map(|manager| manager.manager_id.clone())
+            .collect();
+        if managers.is_empty() {
+            return Task::none();
+        }
+
+        self.installed_info
+            .selected_packages
+            .retain(|(manager, _)| !managers.contains(manager));
+        self.updates_info
+            .selected_packages
+            .retain(|(manager, _)| !managers.contains(manager));
+        self.finding_info
+            .selected_packages
+            .retain(|(manager, _)| !managers.contains(manager));
+
+        let mut tasks = Vec::new();
+        for manager in managers {
+            self.finding_info.search_results.remove(&manager);
+            self.finding_info.search_errors.remove(&manager);
+            self.finding_info.searching_managers.remove(&manager);
+
+            let capabilities = self
+                .manager_catalog
+                .descriptor(&manager)
+                .map(|descriptor| descriptor.capabilities());
+            if (self.installed_info.has_loading_count || self.installed_info.is_loading_count)
+                && capabilities
+                    .is_some_and(|capabilities| capabilities.contains(ManagerCapability::Installed))
+            {
+                self.installed_info.init_errors.remove(&manager);
+                self.installed_info.load_errors.remove(&manager);
+                if self.installed_info.is_loading_count {
+                    self.installed_refresh_overrides.insert(manager.clone());
+                }
+                tasks.push(
+                    content::Installed::start_load(
+                        &self.pm_config,
+                        &mut self.installed_info,
+                        manager.clone(),
+                        &self.manager_catalog,
+                    )
+                    .map(content::Message::Installed)
+                    .map(Message::Content),
+                );
+            }
+
+            if (self.updates_info.has_loading_count || self.updates_info.is_loading_count)
+                && capabilities
+                    .is_some_and(|capabilities| capabilities.contains(ManagerCapability::Updates))
+            {
+                self.updates_info.init_errors.remove(&manager);
+                self.updates_info.load_errors.remove(&manager);
+                if self.updates_info.is_loading_count {
+                    self.updates_refresh_overrides.insert(manager.clone());
+                }
+                tasks.push(
+                    content::Updates::start_load(
+                        &self.pm_config,
+                        &mut self.updates_info,
+                        manager,
+                        &self.manager_catalog,
+                        true,
+                    )
+                    .map(content::Message::Updates)
+                    .map(Message::Content),
+                );
+            }
+        }
+
+        Task::batch(tasks)
     }
 
     fn start_init_installed_counts_task(
@@ -1916,7 +2038,138 @@ mod tests {
     }
 
     #[test]
-    fn package_reload_invalidates_requests_and_preserves_configured_selection() {
+    fn startup_defers_package_scans_until_their_page_is_opened() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+
+        assert_eq!(app.package_data_generation, 1);
+        assert!(!app.installed_info.has_loading_count);
+        assert!(!app.installed_info.is_loading_count);
+        assert!(!app.updates_info.has_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert!(app.updates_info.selected_managers.contains(&manager));
+
+        let _ = app.activate_page(content::ActiveContentPage::Updates);
+
+        assert!(app.updates_info.is_loading_count);
+        assert_eq!(app.updates_info.init_progress, Some((0, 1)));
+        assert!(!app.installed_info.is_loading_count);
+    }
+
+    #[test]
+    fn post_operation_refresh_only_reloads_successful_managers() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        app.pm_config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        app.installed_info.has_loading_count = true;
+        app.updates_info.has_loading_count = true;
+        app.installed_info.selected_managers = HashSet::from([cargo.clone(), npm.clone()]);
+        app.updates_info.selected_managers = HashSet::from([cargo.clone(), npm.clone()]);
+        app.finding_info.selected_managers = HashSet::from([cargo.clone(), npm.clone()]);
+        app.installed_info
+            .installed_packages
+            .insert(cargo.clone(), (1, Vec::new()));
+        app.installed_info
+            .installed_packages
+            .insert(npm.clone(), (2, Vec::new()));
+        app.updates_info
+            .updates_by_manager
+            .insert(cargo.clone(), (1, Vec::new()));
+        app.updates_info
+            .updates_by_manager
+            .insert(npm.clone(), (2, Vec::new()));
+        app.finding_info
+            .search_results
+            .insert(cargo.clone(), Vec::new());
+        app.finding_info
+            .search_results
+            .insert(npm.clone(), Vec::new());
+        app.installed_info
+            .selected_packages
+            .insert((cargo.clone(), "cargo-edit".to_owned()));
+        app.installed_info
+            .selected_packages
+            .insert((npm.clone(), "typescript".to_owned()));
+
+        let outcome = updater_core::OperationOutcome {
+            action: updater_manager_api::PackageAction::Update,
+            completed_packages: 1,
+            total_packages: 2,
+            completed_managers: 1,
+            total_managers: 2,
+            failed_manager: None,
+            error: None,
+            cancelled: false,
+            manager_outcomes: vec![
+                updater_core::ManagerOperationOutcome {
+                    manager_id: cargo.clone(),
+                    scope: updater_manager_api::PackageScope::User,
+                    requested_packages: 1,
+                    completed_packages: 1,
+                    status: updater_core::ManagerOperationStatus::Succeeded,
+                    error: None,
+                },
+                updater_core::ManagerOperationOutcome {
+                    manager_id: npm.clone(),
+                    scope: updater_manager_api::PackageScope::User,
+                    requested_packages: 1,
+                    completed_packages: 0,
+                    status: updater_core::ManagerOperationStatus::NotStarted,
+                    error: None,
+                },
+            ],
+            scope: updater_manager_api::PackageScope::User,
+        };
+
+        let _ = app.refresh_package_managers(&outcome);
+
+        assert_eq!(
+            app.installed_info
+                .loading_installed
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from([cargo.clone()])
+        );
+        assert_eq!(
+            app.updates_info
+                .loading_updates
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from([cargo.clone()])
+        );
+        assert!(app.installed_info.installed_packages.contains_key(&npm));
+        assert!(app.updates_info.updates_by_manager.contains_key(&npm));
+        assert!(!app.finding_info.search_results.contains_key(&cargo));
+        assert!(app.finding_info.search_results.contains_key(&npm));
+        assert!(
+            !app.installed_info
+                .selected_packages
+                .contains(&(cargo, "cargo-edit".to_owned()))
+        );
+        assert!(
+            app.installed_info
+                .selected_packages
+                .contains(&(npm, "typescript".to_owned()))
+        );
+    }
+
+    #[test]
+    fn configuration_reload_invalidates_requests_and_preserves_configured_selection() {
         let mut app = app();
         let manager = manager_id("builtin:cargo");
         app.pm_config = updater_core::Config {
@@ -1935,7 +2188,7 @@ mod tests {
             .searching_managers
             .insert(manager.clone(), 1);
 
-        let _ = app.reload_package_data(content::ReloadReason::PackageOperation);
+        let _ = app.reload_package_data(content::ReloadReason::ConfigurationChanged);
 
         assert_eq!(app.package_data_generation, 8);
         assert!(app.installed_info.loading_installed.is_empty());

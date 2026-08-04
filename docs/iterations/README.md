@@ -70,3 +70,4 @@
 | 061 | 已完成 | 阶段 7：Gentoo Portage manager | [061-gentoo-portage-manager.md](061-gentoo-portage-manager.md) |
 | 062 | 已完成 | 阶段 7：Void Linux XBPS manager | [062-void-xbps-manager.md](062-void-xbps-manager.md) |
 | 063 | 已完成 | 阶段 6/7：1.2.0 功能发布 | [063-1.2.0-release.md](063-1.2.0-release.md) |
+| 064 | 已完成 | 阶段 5/7：启动、定向刷新与 RubyGems 可靠性 | [064-startup-refresh-rubygems-reliability.md](064-startup-refresh-rubygems-reliability.md) |

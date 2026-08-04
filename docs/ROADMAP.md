@@ -346,6 +346,14 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - workspace、RPM、Arch、README与release notes已统一到`1.2.0`；最终候选`adb14c3`通过本地门禁、CI run `30929169271`与Package预构建run `30929172767`。
 - annotated `Build-v1.2.0` tag解引用到`adb14c3`；tag Package run `30931404896`全部成功并发布17项产品资产及`SHA256SUMS`，全量回下载checksum与四个portable tar系统集成清单均验证通过。
 
+当前进度（Iteration 064已完成）：
+
+- 启动 package data 改为按页面懒加载：首屏不再并发执行全部 configured manager 的 installed 与 updates 扫描，首次进入对应页面时才初始化。
+- package operation 完成后只刷新 `manager_outcomes` 中成功执行过的 manager；未执行 manager 的缓存、选择与 Discover 搜索结果保持不变，较旧初始化结果不能覆盖新的定向刷新。
+- RubyGems 写操作识别“输出 `ERROR:` 但退出 0”的失败行为，避免把实际安装错误记录为成功。
+- source picker 将滚动条嵌入布局，为行尾选择框预留间距；1200x800 与 700x800 隔离桌面检查均无重叠。
+- workspace 串行 format、check、test、clippy 与 build 门禁全部通过。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

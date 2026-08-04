@@ -350,11 +350,15 @@ impl PackageManager for RubyGemsManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
-            timeout(
+            let mut reported_error = None;
+            let result = timeout(
                 COMMAND_TIMEOUT,
                 run_cancellable_command_with_progress(command, progress, |event| {
                     let (fraction, message) = event.into_parts();
                     if let Some(message) = message {
+                        if reported_error.is_none() && is_rubygems_error(&message) {
+                            reported_error = Some(message.clone());
+                        }
                         progress.emit(ProgressEvent::Message { message });
                     }
                     progress.emit(ProgressEvent::Advanced {
@@ -371,7 +375,15 @@ impl PackageManager for RubyGemsManager {
                     "RubyGems write command timed out",
                 )
                 .with_detail(command.program().to_string_lossy())
-            })??;
+            })?;
+            result?;
+            if let Some(detail) = reported_error {
+                return Err(ManagerError::new(
+                    ManagerErrorKind::Other,
+                    "RubyGems reported a package operation failure",
+                )
+                .with_detail(detail));
+            }
         }
         progress.emit(ProgressEvent::Finished {
             completed: total,
@@ -386,6 +398,10 @@ struct GemEnvironment {
     home: PathBuf,
     user_home: PathBuf,
     repositories: Vec<PathBuf>,
+}
+
+fn is_rubygems_error(line: &str) -> bool {
+    line.trim_start().starts_with("ERROR:")
 }
 
 impl GemEnvironment {

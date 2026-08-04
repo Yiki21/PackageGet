@@ -175,6 +175,25 @@ exit /b 0
     }
 }
 
+fn fake_gem_reporting_update_error() -> Fixture {
+    let fixture = fake_gem();
+    let script = fs::read_to_string(&fixture.executable).expect("read fake RubyGems executable");
+    #[cfg(unix)]
+    let (needle, replacement) = (
+        "case \"$1\" in install|update|uninstall) exit 0 ;; esac",
+        "if [ \"$1\" = \"update\" ]; then printf '%s\\n' 'ERROR:  Error installing rake' >&2; exit 0; fi\ncase \"$1\" in install|update|uninstall) exit 0 ;; esac",
+    );
+    #[cfg(windows)]
+    let (needle, replacement) = (
+        "if \"%1\"==\"update\" goto write",
+        "if \"%1\"==\"update\" (\n  >&2 echo ERROR:  Error installing rake\n  exit /b 0\n)",
+    );
+    let failing_script = script.replace(needle, replacement);
+    assert_ne!(failing_script, script, "inject fake RubyGems update error");
+    fs::write(&fixture.executable, failing_script).expect("write failing fake RubyGems executable");
+    fixture
+}
+
 fn origin_value(package: &updater_manager_api::PackageInfo) -> serde_json::Value {
     serde_json::from_str(
         package
@@ -390,6 +409,34 @@ async fn targets_reject_default_uninstall_wrong_scope_and_forged_repository() {
             .kind(),
         ManagerErrorKind::Protocol
     );
+}
+
+#[tokio::test]
+async fn update_rejects_error_output_even_when_rubygems_exits_successfully() {
+    let manager = RubyGemsManager::new();
+    let fixture = fake_gem_reporting_update_error();
+    let config = config(&manager, &fixture.executable);
+    let target = manager
+        .installed(&config)
+        .await
+        .expect("RubyGems inventory")
+        .into_iter()
+        .find(|package| package.name == "rake" && package.scope == PackageScope::User)
+        .expect("user rake")
+        .target();
+    let sink = |_| {};
+
+    let error = manager
+        .execute(&config, PackageAction::Update, &[target], &sink)
+        .await
+        .expect_err("RubyGems ERROR output must fail the update");
+
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+    assert_eq!(
+        error.message(),
+        "RubyGems reported a package operation failure"
+    );
+    assert_eq!(error.detail(), Some("ERROR:  Error installing rake"));
 }
 
 #[tokio::test]

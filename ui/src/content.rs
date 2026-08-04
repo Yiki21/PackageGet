@@ -8,7 +8,7 @@ mod updates;
 mod workflows;
 
 use crate::{
-    content::{finding::Finding, health::HealthCenter, setting::Settings, updates::Updates},
+    content::{finding::Finding, health::HealthCenter, setting::Settings},
     shortcut::SelectionDirection,
 };
 
@@ -21,6 +21,7 @@ pub use setting::Message as SettingsMessage;
 pub(crate) use shared::{configured_managers_with_capability, open_directory, search_input_id};
 pub(crate) use updater_core::CancellationToken;
 pub use updater_core::OperationOutcome;
+pub(crate) use updates::Updates;
 pub use updates::UpdatesInfo;
 
 pub struct ViewOptions {
@@ -101,8 +102,6 @@ pub enum ReloadReason {
     Startup,
     /// Configured package managers changed.
     ConfigurationChanged,
-    /// A package install, update, or removal completed.
-    PackageOperation,
 }
 
 impl ReloadReason {
@@ -449,7 +448,6 @@ mod reload_reason_tests {
     fn only_startup_resets_page_context() {
         assert!(!ReloadReason::Startup.preserves_page_context());
         assert!(ReloadReason::ConfigurationChanged.preserves_page_context());
-        assert!(ReloadReason::PackageOperation.preserves_page_context());
     }
 
     #[test]
