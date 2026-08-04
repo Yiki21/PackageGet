@@ -82,11 +82,19 @@ pub(crate) fn system_helper_command(action: &str, manager: &str) -> CommandSpec 
 }
 
 pub(crate) async fn manager_availability(
+    descriptor: &ManagerDescriptor,
     config: &ManagerConfig,
     default_program: &str,
     version_args: &[&str],
 ) -> ManagerAvailability {
-    manager_availability_with_version(config, default_program, version_args, detected_version).await
+    manager_availability_with_version(
+        descriptor,
+        config,
+        default_program,
+        version_args,
+        detected_version,
+    )
+    .await
 }
 
 pub(crate) fn unsupported_platform(descriptor: &ManagerDescriptor) -> Option<ManagerAvailability> {
@@ -100,11 +108,16 @@ pub(crate) fn unsupported_platform(descriptor: &ManagerDescriptor) -> Option<Man
 }
 
 pub(crate) async fn manager_availability_with_version(
+    descriptor: &ManagerDescriptor,
     config: &ManagerConfig,
     default_program: &str,
     version_args: &[&str],
     detect_version: fn(&Output) -> Option<String>,
 ) -> ManagerAvailability {
+    if let Some(availability) = unsupported_platform(descriptor) {
+        return availability;
+    }
+
     let program = resolve_executable(config, default_program);
 
     if config.executable().is_some() {
@@ -554,6 +567,10 @@ mod tests {
     use std::fs;
 
     use tempfile::tempdir;
+    use updater_manager_api::{
+        ManagerCapabilities, ManagerCapability, ManagerCategory, ManagerConfig, ManagerDescriptor,
+        ManagerId, SupportedPlatforms,
+    };
 
     use super::*;
 
@@ -583,6 +600,35 @@ mod tests {
                 None,
             ),
             Some(first_command)
+        );
+    }
+
+    #[tokio::test]
+    async fn availability_returns_unsupported_before_command_probe() {
+        let unsupported_platform = match Platform::current() {
+            Some(Platform::Windows) => Platform::Linux,
+            _ => Platform::Windows,
+        };
+        let descriptor = ManagerDescriptor::new(
+            ManagerId::parse("test:windows-only").expect("valid test manager ID"),
+            "Unsupported test manager",
+            ManagerCategory::Development,
+            SupportedPlatforms::from([unsupported_platform]),
+            ManagerCapabilities::from([ManagerCapability::Installed]),
+        )
+        .expect("valid test descriptor");
+        let config = ManagerConfig::new(descriptor.id().clone());
+
+        let availability =
+            manager_availability(&descriptor, &config, "command-that-does-not-exist", &[]).await;
+
+        assert_eq!(
+            availability,
+            ManagerAvailability::Unavailable {
+                reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
+                    platform: Platform::current(),
+                },
+            }
         );
     }
 

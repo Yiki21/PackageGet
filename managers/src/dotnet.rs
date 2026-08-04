@@ -194,7 +194,7 @@ impl PackageManager for DotnetToolManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        Ok(manager_availability(config, DOTNET_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, DOTNET_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

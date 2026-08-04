@@ -255,7 +255,7 @@ impl PackageManager for PipxManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        Ok(manager_availability(config, PIPX_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, PIPX_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

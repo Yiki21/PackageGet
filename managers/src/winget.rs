@@ -8,11 +8,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use unicode_width::UnicodeWidthChar;
 use updater_manager_api::{
-    AuthorizationHint, AvailabilityReason, ManagerAvailability, ManagerCapabilities,
-    ManagerCapability, ManagerCategory, ManagerConfig, ManagerDescriptor, ManagerError,
-    ManagerErrorKind, ManagerId, ManagerResult, PackageAction, PackageInfo, PackageManager,
-    PackageOrigin, PackageScope, PackageTarget, PackageUpdate, Platform, ProgressEvent,
-    ProgressSink, SupportedPlatforms,
+    AuthorizationHint, ManagerAvailability, ManagerCapabilities, ManagerCapability,
+    ManagerCategory, ManagerConfig, ManagerDescriptor, ManagerError, ManagerErrorKind, ManagerId,
+    ManagerResult, PackageAction, PackageInfo, PackageManager, PackageOrigin, PackageScope,
+    PackageTarget, PackageUpdate, Platform, ProgressEvent, ProgressSink, SupportedPlatforms,
 };
 
 use crate::{
@@ -216,14 +215,7 @@ impl PackageManager for WingetManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if !cfg!(target_os = "windows") {
-            return Ok(ManagerAvailability::Unavailable {
-                reason: AvailabilityReason::UnsupportedPlatform {
-                    platform: Platform::current(),
-                },
-            });
-        }
-        Ok(manager_availability(config, WINGET_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, WINGET_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

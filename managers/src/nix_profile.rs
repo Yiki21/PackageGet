@@ -209,7 +209,7 @@ impl PackageManager for NixProfileManager {
             return Ok(availability);
         }
         self.settings(config)?;
-        Ok(manager_availability(config, NIX_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, NIX_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

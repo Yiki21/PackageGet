@@ -129,7 +129,7 @@ UI catalog与执行任务共享同一个`ManagerRegistry`。已注册且已配�
 1. 先确定不可变的 namespaced `ManagerId`、支持平台、category、authorization 和实际 capability；descriptor 只广告已经实现的操作。
 2. 在 `updater-managers/src/<manager>.rs` 中实现 `PackageManager`。先调用 `config.validate_for(self.descriptor())`，再由 manager 自己解析并校验 `settings`；不要新增 `Config` 顶层字段，也不要在 core 增加该 manager 的 ID 分支。
 3. 对 manager-private settings 提供同模块的 typed getter/setter（如果 UI 需要编辑），并为 malformed settings、wrong identity、path/scope/origin 约束写单测。
-4. `availability` 必须先遵守 descriptor 的平台集合；不支持当前平台时直接返回 `ManagerAvailability::Unavailable` 的 `UnsupportedPlatform`，不能依赖 catalog 过滤掩盖错误。
+4. `availability` 必须通过 `managers::command::manager_availability`（或带自定义版本解析的同一入口）执行平台检查；公共入口会在任何命令探测前根据 descriptor 返回结构化 `UnsupportedPlatform`，不能依赖 catalog 过滤掩盖错误。
 5. 添加 `managers/tests/<manager>_contract.rs`，覆盖 descriptor、空输入、命令 argv、结构化输出解析、写操作 target 冻结和 capability 边界。网络或宿主 CLI smoke 只能是显式 ignored 的只读测试。
 6. 将实例加入 `builtin_managers()` 和 catalog contract；不要修改通用 catalog 测试去强制 manager 声明不存在的 CRUD 能力。
 7. 只有存在真正的 manager-private 设置时才添加 UI 控件；控件直接调用该 manager 的 typed getter/setter。普通 manager 不需要新增 UI helper、enum 分发或通用动态表单。

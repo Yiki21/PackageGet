@@ -230,15 +230,7 @@ impl PackageManager for ZypperManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if !cfg!(target_os = "linux") {
-            return Ok(ManagerAvailability::Unavailable {
-                reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: Platform::current(),
-                },
-            });
-        }
-
-        Ok(manager_availability(config, ZYPPER_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, ZYPPER_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

@@ -212,15 +212,7 @@ impl PackageManager for AptManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if !cfg!(target_os = "linux") {
-            return Ok(ManagerAvailability::Unavailable {
-                reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: Platform::current(),
-                },
-            });
-        }
-
-        Ok(manager_availability(config, APT_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, APT_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

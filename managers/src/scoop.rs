@@ -13,7 +13,6 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
-        unsupported_platform,
     },
     progress::run_cancellable_command_with_progress,
 };
@@ -152,10 +151,7 @@ impl PackageManager for ScoopManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if let Some(availability) = unsupported_platform(self.descriptor()) {
-            return Ok(availability);
-        }
-        Ok(manager_availability(config, SCOOP_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, SCOOP_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

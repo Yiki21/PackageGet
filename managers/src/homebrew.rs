@@ -294,15 +294,7 @@ impl PackageManager for HomebrewManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if !cfg!(any(target_os = "linux", target_os = "macos")) {
-            return Ok(ManagerAvailability::Unavailable {
-                reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: Platform::current(),
-                },
-            });
-        }
-
-        Ok(manager_availability(config, HOMEBREW_COMMAND, &["--version"]).await)
+        Ok(manager_availability(self.descriptor(), config, HOMEBREW_COMMAND, &["--version"]).await)
     }
 
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {

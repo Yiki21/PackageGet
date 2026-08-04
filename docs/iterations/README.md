@@ -63,3 +63,4 @@
 | 054 | 已完成 | 阶段 7：Windows Scoop manager | [054-scoop-manager.md](054-scoop-manager.md) |
 | 055 | 已完成 | 阶段 7：Windows Chocolatey manager | [055-chocolatey-manager.md](055-chocolatey-manager.md) |
 | 056 | 已完成 | 阶段 7：Windows manager 真实只读 smoke | [056-windows-manager-smoke.md](056-windows-manager-smoke.md) |
+| 057 | 已完成 | 阶段 7：共享 availability 平台契约 | [057-availability-platform-contract.md](057-availability-platform-contract.md) |

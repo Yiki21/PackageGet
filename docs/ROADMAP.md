@@ -272,6 +272,12 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - Snap 与 Nix 的直接 availability contract 现在会在不支持的平台返回结构化 UnsupportedPlatform；新增 manager 必须先完成 descriptor、config validation、platform availability、capability contract 和离线 fixture，再接入 UI。
 - workspace 全量格式、check、test、clippy 和 build 门禁均已通过；本节变更应随下一次 release notes 一并发布。
 
+当前进度（Iteration 057已完成）：
+
+- availability 平台契约收敛到 managers crate 的唯一共享入口；入口在解析可执行文件或启动版本命令前依据 manager descriptor 返回结构化 `UnsupportedPlatform`。
+- APT、DNF、Pacman、Zypper、Flatpak、Homebrew、Winget、Scoop、Chocolatey 与 Snap 移除重复的 runtime 平台分支；Nix 在私有 profile 校验前复用同一平台 policy，避免不支持平台被误报为配置错误。
+- authoring checklist 明确该入口和离线回归测试；catalog 过滤仍只负责构建当前平台的默认 manager 集合，不再承担 availability 正确性的兜底职责。
+
 当前进度（Iteration 052已完成）：
 
 - Installed 与 Updates 的详情面板改为用户选择包后再异步请求 metadata；包列表加载不再顺带执行昂贵的单包查询，generation 会丢弃快速切换选择产生的过期结果。

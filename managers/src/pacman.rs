@@ -208,15 +208,8 @@ impl PackageManager for PacmanManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
-        if !cfg!(target_os = "linux") {
-            return Ok(ManagerAvailability::Unavailable {
-                reason: updater_manager_api::AvailabilityReason::UnsupportedPlatform {
-                    platform: Platform::current(),
-                },
-            });
-        }
-
         Ok(manager_availability_with_version(
+            self.descriptor(),
             config,
             PACMAN_COMMAND,
             &["--version"],
