@@ -62,17 +62,6 @@ impl RubyGemsManager {
         Self { descriptor }
     }
 
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "RubyGems configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
-    }
-
     async fn environment(&self, config: &ManagerConfig) -> ManagerResult<GemEnvironment> {
         self.validate_config(config)?;
         let gem = resolve_executable(config, GEM_COMMAND);

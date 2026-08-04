@@ -58,7 +58,8 @@ impl UvManager {
     /// # Errors
     ///
     /// Returns a typed target-validation, timeout, or command error.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -76,17 +77,6 @@ impl UvManager {
             ManagerError::new(ManagerErrorKind::Timeout, "uv tool write command timed out")
                 .with_detail(command.program().to_string_lossy())
         })?
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "uv configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
     }
 
     async fn tool_root(&self, config: &ManagerConfig) -> ManagerResult<PathBuf> {

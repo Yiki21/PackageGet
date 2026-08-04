@@ -4,6 +4,10 @@ use iced::Task;
 use rfd::FileHandle;
 use updater_core::ManagerConfig;
 use updater_manager_api::{AvailabilityReason, ManagerAvailability, ManagerCategory, ManagerId};
+use updater_managers::{
+    configured_go_bin_dir, configured_nix_profile, set_configured_go_bin_dir,
+    set_configured_nix_profile,
+};
 
 use crate::{
     content::{ManagerHealthInfo, shared},
@@ -14,26 +18,32 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    /// Editable configuration shown on the Settings page.
+    /// Shared draft configuration used by Settings and Package Managers.
     draft: updater_core::Config,
     /// Last configuration synchronized from or saved to persistent storage.
     baseline: updater_core::Config,
-    /// Search text for filtering configured and available managers.
-    manager_query: String,
     /// Whether the draft has been initialized from application state.
     is_initialized: bool,
     /// Whether config save is in progress.
     pub is_saving: bool,
+    /// Last save result shown in UI.
+    pub save_status: Option<SaveStatus>,
+    /// State owned by the Package Managers page.
+    pub manager_page: ManagerPageState,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ManagerPageState {
+    /// Search text for filtering configured and available managers.
+    pub manager_query: String,
     /// Whether package-manager auto detection is in progress.
     pub is_detecting: bool,
     /// Manager currently waiting for custom-path selection.
     pub selecting_manager: Option<ManagerId>,
     /// Managers detected from PATH scan.
     pub detected_in_path: Vec<ManagerId>,
-    /// Last availability result for each manager.
-    pub availability: HashMap<ManagerId, Result<ManagerAvailability, String>>,
-    /// Last save result shown in UI.
-    pub save_status: Option<SaveStatus>,
+    /// Availability results from the last package-manager detection or path validation.
+    pub detection_results: HashMap<ManagerId, Result<ManagerAvailability, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,9 +142,9 @@ impl Settings {
 
     pub fn discard_changes(&mut self) {
         self.draft.clone_from(&self.baseline);
-        self.availability.clear();
+        self.manager_page.detection_results.clear();
         self.save_status = None;
-        self.selecting_manager = None;
+        self.manager_page.selecting_manager = None;
     }
 
     fn section_title(text: &'static str) -> iced::widget::Text<'static> {
@@ -205,11 +215,11 @@ impl Settings {
 
         match message {
             Message::ManagerQueryChanged(query) => {
-                self.manager_query = query;
+                self.manager_page.manager_query = query;
                 Action::None
             }
             Message::DetectPackageManagers => {
-                self.is_detecting = true;
+                self.manager_page.is_detecting = true;
                 let config = self.draft.clone();
                 let registry = catalog.registry();
                 let task = Task::future(async move {
@@ -220,11 +230,11 @@ impl Settings {
                             .manager(&id)
                             .cloned()
                             .unwrap_or_else(|| ManagerConfig::new(id.clone()));
-                        let availability = manager
+                        let detection_results = manager
                             .availability(&manager_config)
                             .await
                             .map_err(|error| error.to_string());
-                        results.push((id, availability));
+                        results.push((id, detection_results));
                     }
                     results
                 })
@@ -232,17 +242,17 @@ impl Settings {
                 Action::Run(task)
             }
             Message::FinishDetect(results) => {
-                self.is_detecting = false;
-                self.detected_in_path = results
+                self.manager_page.is_detecting = false;
+                self.manager_page.detected_in_path = results
                     .iter()
-                    .filter_map(|(manager, availability)| {
-                        availability
+                    .filter_map(|(manager, detection_results)| {
+                        detection_results
                             .as_ref()
                             .is_ok_and(ManagerAvailability::is_available)
                             .then_some(manager.clone())
                     })
                     .collect();
-                self.availability = results
+                self.manager_page.detection_results = results
                     .into_iter()
                     .filter(|(manager, _)| {
                         manager.as_str() != "builtin:nix-profile"
@@ -265,7 +275,7 @@ impl Settings {
                 self.draft
                     .managers
                     .retain(|configured| configured.id != manager);
-                self.availability.remove(&manager);
+                self.manager_page.detection_results.remove(&manager);
                 self.save_status = None;
                 if self.draft.managers.len() == previous_len {
                     Action::None
@@ -284,11 +294,6 @@ impl Settings {
                 let managers_to_validate = config
                     .managers
                     .iter()
-                    .filter(|configured| {
-                        configured.executable().is_some()
-                            || configured.id.as_str() == "builtin:nix-profile"
-                    })
-                    .filter(|configured| catalog.supports_current_platform(&configured.id))
                     .filter_map(|configured| {
                         registry
                             .get(&configured.id)
@@ -298,28 +303,35 @@ impl Settings {
 
                 Action::Run(Task::future(async move {
                     let mut validation = Vec::with_capacity(managers_to_validate.len());
+                    let mut invalid_count = 0;
                     for (manager, configured) in managers_to_validate {
                         let id = configured.id.clone();
-                        let availability = manager
+                        if let Err(error) = manager.validate_config(&configured) {
+                            invalid_count += 1;
+                            validation.push((id, Err(error.to_string())));
+                            continue;
+                        }
+                        if configured.executable().is_none() {
+                            continue;
+                        }
+                        let detection_results = manager
                             .availability(&configured)
                             .await
                             .map_err(|error| error.to_string());
-                        validation.push((id, availability));
+                        if !detection_results
+                            .as_ref()
+                            .is_ok_and(ManagerAvailability::is_available)
+                        {
+                            invalid_count += 1;
+                        }
+                        validation.push((id, detection_results));
                     }
 
-                    let invalid_count = validation
-                        .iter()
-                        .filter(|(_, availability)| {
-                            !availability
-                                .as_ref()
-                                .is_ok_and(ManagerAvailability::is_available)
-                        })
-                        .count();
                     let result = if invalid_count == 0 {
                         config.save().await.map_err(|error| error.to_string())
                     } else {
                         Err(format!(
-                            "{invalid_count} custom executable path(s) failed validation"
+                            "{invalid_count} manager configuration(s) failed validation"
                         ))
                     };
 
@@ -336,9 +348,11 @@ impl Settings {
                 result,
             } => {
                 self.is_saving = false;
-                for (manager, availability) in validation {
+                for (manager, detection_results) in validation {
                     if self.draft.manager(&manager) == config.manager(&manager) {
-                        self.availability.insert(manager, availability);
+                        self.manager_page
+                            .detection_results
+                            .insert(manager, detection_results);
                     }
                 }
                 match result {
@@ -356,7 +370,7 @@ impl Settings {
                 }
             }
             Message::OpenDialog(manager) => {
-                self.selecting_manager = Some(manager);
+                self.manager_page.selecting_manager = Some(manager);
 
                 let task = Task::future(
                     rfd::AsyncFileDialog::new()
@@ -372,9 +386,9 @@ impl Settings {
             }
             Message::SelectedPath(file_handle) => {
                 let mut changed = false;
-                if let Some(manager) = self.selecting_manager.take() {
+                if let Some(manager) = self.manager_page.selecting_manager.take() {
                     let path = file_handle.path().to_path_buf();
-                    self.availability.remove(&manager);
+                    self.manager_page.detection_results.remove(&manager);
                     self.save_status = None;
 
                     if let Some(existing) = self.draft.manager_mut(&manager) {
@@ -400,7 +414,7 @@ impl Settings {
                 let mut changed = false;
                 if let Some(configured) = self.draft.manager_mut(&manager) {
                     changed = configured.executable.take().is_some();
-                    self.availability.remove(&manager);
+                    self.manager_page.detection_results.remove(&manager);
                     self.save_status = None;
                 }
                 if changed {
@@ -410,7 +424,7 @@ impl Settings {
                 }
             }
             Message::CancelSelection => {
-                self.selecting_manager = None;
+                self.manager_page.selecting_manager = None;
                 Action::None
             }
             Message::OpenGoBinDirDialog => {
@@ -427,27 +441,45 @@ impl Settings {
                 Action::Run(task)
             }
             Message::SelectedGoBinDir(file_handle) => {
-                let path = file_handle.path().to_string_lossy().to_string();
-                let changed = self.draft.go_bin_dir() != Some(path.as_str());
-                if let Err(error) = self.draft.set_go_bin_dir(Some(path)) {
+                let path = file_handle.path().to_path_buf();
+                let id = ManagerId::parse("builtin:go")
+                    .expect("built-in Go manager ID must remain valid");
+                let previous = self
+                    .draft
+                    .manager(&id)
+                    .and_then(|manager| configured_go_bin_dir(manager).ok().flatten());
+                let Some(manager) = self.draft.manager_mut(&id) else {
+                    self.save_status = Some(SaveStatus::Error(
+                        "Go manager must be enabled before changing its binary directory".into(),
+                    ));
+                    return Action::None;
+                };
+                if let Err(error) = set_configured_go_bin_dir(manager, Some(path.clone())) {
                     self.save_status = Some(SaveStatus::Error(error.to_string()));
                     return Action::None;
                 }
                 self.save_status = None;
-                if changed {
+                if previous.as_deref() != Some(path.as_path()) {
+                    self.manager_page.detection_results.remove(&id);
                     Action::ManagerConfigChanged
                 } else {
                     Action::None
                 }
             }
             Message::ClearGoBinDir => {
-                let changed = self.draft.go_bin_dir().is_some();
-                if let Err(error) = self.draft.set_go_bin_dir(None) {
+                let id = ManagerId::parse("builtin:go")
+                    .expect("built-in Go manager ID must remain valid");
+                let Some(manager) = self.draft.manager_mut(&id) else {
+                    return Action::None;
+                };
+                let changed = configured_go_bin_dir(manager).ok().flatten().is_some();
+                if let Err(error) = set_configured_go_bin_dir(manager, None) {
                     self.save_status = Some(SaveStatus::Error(error.to_string()));
                     return Action::None;
                 }
                 self.save_status = None;
                 if changed {
+                    self.manager_page.detection_results.remove(&id);
                     Action::ManagerConfigChanged
                 } else {
                     Action::None
@@ -468,17 +500,31 @@ impl Settings {
             Message::SelectedNixProfile(file_handle) => {
                 let id = ManagerId::parse("builtin:nix-profile")
                     .expect("built-in Nix profile manager ID must remain valid");
-                let previous_profile = self.draft.nix_profile().map(str::to_owned);
+                let previous_profile = self
+                    .draft
+                    .manager(&id)
+                    .and_then(|manager| configured_nix_profile(manager).ok());
                 let added_manager = self.draft.manager(&id).is_none();
                 if added_manager {
                     self.draft.managers.push(ManagerConfig::new(id.clone()));
                 }
                 let changed = match file_handle.path().to_str() {
-                    Some(path) => match self.draft.set_nix_profile(path.to_owned()) {
+                    Some(path) => match self
+                        .draft
+                        .manager_mut(&id)
+                        .ok_or_else(|| "Nix profile manager was not added".to_owned())
+                        .and_then(|manager| {
+                            set_configured_nix_profile(manager, path.to_owned().into())
+                                .map_err(|error| error.to_string())
+                        }) {
                         Ok(()) => {
-                            self.availability.remove(&id);
+                            self.manager_page.detection_results.remove(&id);
                             self.save_status = None;
-                            added_manager || previous_profile.as_deref() != Some(path)
+                            added_manager
+                                || previous_profile
+                                    .as_deref()
+                                    .and_then(|profile| profile.to_str())
+                                    != Some(path)
                         }
                         Err(error) => {
                             if added_manager {
@@ -626,7 +672,7 @@ impl Settings {
 
         let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         for manager in pm_config.managers.iter().filter(|manager| {
-            shared::manager_matches_query(&manager.id, catalog, &self.manager_query)
+            shared::manager_matches_query(&manager.id, catalog, &self.manager_page.manager_query)
         }) {
             let category = catalog
                 .descriptor(&manager.id)
@@ -704,14 +750,17 @@ impl Settings {
             text("Configured sources are grouped by the kind of software they manage.")
                 .size(14)
                 .style(theme::text_on_surface_muted),
-            text_input("Filter package managers...", &self.manager_query)
-                .id(shared::search_input_id(
-                    crate::content::ActiveContentPage::Health,
-                ))
-                .on_input(Message::ManagerQueryChanged)
-                .padding([8, 10])
-                .size(14)
-                .style(theme::text_input_style),
+            text_input(
+                "Filter package managers...",
+                &self.manager_page.manager_query
+            )
+            .id(shared::search_input_id(
+                crate::content::ActiveContentPage::Health,
+            ))
+            .on_input(Message::ManagerQueryChanged)
+            .padding([8, 10])
+            .size(14)
+            .style(theme::text_input_style),
             content,
         ]
         .spacing(theme::spacing::SM)
@@ -779,10 +828,10 @@ impl Settings {
 
         let detected_count = available_managers
             .iter()
-            .filter(|manager| self.detected_in_path.contains(manager))
+            .filter(|manager| self.manager_page.detected_in_path.contains(manager))
             .count();
 
-        let detect_tip = if self.is_detecting {
+        let detect_tip = if self.manager_page.is_detecting {
             "Scanning $PATH...".to_string()
         } else if detected_count == 0 {
             "Click \"Scan $PATH\" to discover available managers.".to_string()
@@ -796,7 +845,7 @@ impl Settings {
         let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         for manager in &available_managers {
             let descriptor = catalog.descriptor(manager);
-            if !shared::manager_matches_query(manager, catalog, &self.manager_query) {
+            if !shared::manager_matches_query(manager, catalog, &self.manager_page.manager_query) {
                 continue;
             }
             let category =
@@ -815,7 +864,7 @@ impl Settings {
             }
             let count = managers.len();
             let rows = column(managers.into_iter().map(|manager| {
-                let detected_in_path = self.detected_in_path.contains(&manager);
+                let detected_in_path = self.manager_page.detected_in_path.contains(&manager);
                 let is_nix_profile = manager.as_str() == "builtin:nix-profile";
                 let action_message = if is_nix_profile {
                     Message::OpenNixProfileDialog
@@ -989,14 +1038,15 @@ impl Settings {
             );
         } else if is_configured
             || detected_in_path
-            || self.availability.contains_key(manager)
+            || self.manager_page.detection_results.contains_key(manager)
             || health_info.result(manager).is_some()
         {
-            let availability = self
-                .availability
-                .get(manager)
-                .or_else(|| health_info.result(manager));
-            let status = match availability {
+            let status_result = if is_configured {
+                health_info.result(manager)
+            } else {
+                self.manager_page.detection_results.get(manager)
+            };
+            let status = match status_result {
                 None => text("Status: not scanned")
                     .size(14)
                     .style(theme::text_on_surface_alt)
@@ -1102,8 +1152,9 @@ impl Settings {
         use iced::widget::{row, text};
 
         let go_bin_info = pm_config
-            .go_bin_dir()
-            .map(|dir| format!("Binary Dir: {}", dir))
+            .manager(&ManagerId::parse("builtin:go").expect("valid Go manager ID"))
+            .and_then(|manager| configured_go_bin_dir(manager).ok().flatten())
+            .map(|dir| format!("Binary Dir: {}", dir.display()))
             .unwrap_or_else(|| {
                 "Binary Dir: Auto Detect (go env GOBIN > go env GOPATH/bin)".to_string()
             });
@@ -1117,7 +1168,11 @@ impl Settings {
         let change_btn =
             Self::secondary_button("Choose Binary Dir", 13.0, Some(Message::OpenGoBinDirDialog));
 
-        let buttons = if pm_config.go_bin_dir().is_some() {
+        let buttons = if pm_config
+            .manager(&ManagerId::parse("builtin:go").expect("valid Go manager ID"))
+            .and_then(|manager| configured_go_bin_dir(manager).ok().flatten())
+            .is_some()
+        {
             row![
                 change_btn,
                 Self::secondary_button("Reset As Auto Detect", 13.0, Some(Message::ClearGoBinDir))
@@ -1138,8 +1193,9 @@ impl Settings {
         use iced::widget::{row, text};
 
         let profile = pm_config
-            .nix_profile()
-            .map(|path| format!("Profile: {path}"))
+            .manager(&ManagerId::parse("builtin:nix-profile").expect("valid Nix manager ID"))
+            .and_then(|manager| configured_nix_profile(manager).ok())
+            .map(|path| format!("Profile: {}", path.display()))
             .unwrap_or_else(|| "Profile: not configured".to_owned());
         let info = text(profile)
             .size(14)
@@ -1159,13 +1215,13 @@ impl Settings {
     fn view_manager_buttons(&self) -> iced::Element<'static, Message> {
         use iced::widget::{container, row, svg};
 
-        let detect_msg = if self.is_detecting {
+        let detect_msg = if self.manager_page.is_detecting {
             None
         } else {
             Some(Message::DetectPackageManagers)
         };
 
-        let detect_label = if self.is_detecting {
+        let detect_label = if self.manager_page.is_detecting {
             "Scanning $PATH..."
         } else {
             "Scan $PATH"
@@ -1393,7 +1449,7 @@ mod tests {
         let catalog = ManagerCatalog::builtin();
         let mut settings = Settings::default();
         settings.sync_from_config(&active);
-        settings.availability.insert(
+        settings.manager_page.detection_results.insert(
             manager.clone(),
             Ok(ManagerAvailability::Unavailable {
                 reason: AvailabilityReason::CommandMissing {
@@ -1406,7 +1462,12 @@ mod tests {
 
         assert!(matches!(action, Action::ManagerConfigChanged));
         assert_eq!(settings.draft.manager_executable(&manager), None);
-        assert!(!settings.availability.contains_key(&manager));
+        assert!(
+            !settings
+                .manager_page
+                .detection_results
+                .contains_key(&manager)
+        );
         assert!(settings.is_dirty());
     }
 
@@ -1416,7 +1477,10 @@ mod tests {
         let manager = manager_id("builtin:nix-profile");
         let catalog = ManagerCatalog::builtin();
         let mut settings = Settings {
-            is_detecting: true,
+            manager_page: ManagerPageState {
+                is_detecting: true,
+                ..ManagerPageState::default()
+            },
             ..Settings::default()
         };
 
@@ -1430,9 +1494,14 @@ mod tests {
         );
 
         assert!(matches!(action, Action::None));
-        assert!(!settings.is_detecting);
-        assert!(!settings.detected_in_path.contains(&manager));
-        assert!(!settings.availability.contains_key(&manager));
+        assert!(!settings.manager_page.is_detecting);
+        assert!(!settings.manager_page.detected_in_path.contains(&manager));
+        assert!(
+            !settings
+                .manager_page
+                .detection_results
+                .contains_key(&manager)
+        );
         assert!(settings.draft.manager(&manager).is_none());
     }
 
@@ -1469,11 +1538,17 @@ mod tests {
         assert_eq!(settings.baseline, active);
         assert_eq!(settings.draft, attempted);
         assert!(settings.is_dirty());
-        assert!(settings.availability.get(&manager).is_some_and(|result| {
-            result
-                .as_ref()
-                .is_ok_and(|availability| !availability.is_available())
-        }));
+        assert!(
+            settings
+                .manager_page
+                .detection_results
+                .get(&manager)
+                .is_some_and(|result| {
+                    result
+                        .as_ref()
+                        .is_ok_and(|detection_results| !detection_results.is_available())
+                })
+        );
         assert!(matches!(settings.save_status, Some(SaveStatus::Error(_))));
     }
 
@@ -1518,7 +1593,12 @@ mod tests {
             settings.draft.manager_executable(&manager),
             Some("/newer/cargo".into())
         );
-        assert!(!settings.availability.contains_key(&manager));
+        assert!(
+            !settings
+                .manager_page
+                .detection_results
+                .contains_key(&manager)
+        );
         assert!(settings.is_dirty());
         assert!(!settings.is_saving);
     }

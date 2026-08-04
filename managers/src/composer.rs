@@ -58,17 +58,6 @@ impl ComposerGlobalManager {
         Self { descriptor }
     }
 
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "Composer Global configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
-    }
-
     async fn environment(&self, config: &ManagerConfig) -> ManagerResult<ComposerEnvironment> {
         self.validate_config(config)?;
         let composer = resolve_executable(config, COMPOSER_COMMAND);

@@ -502,6 +502,34 @@ impl ManagerConfig {
     pub fn executable(&self) -> Option<&Path> {
         self.executable.as_deref()
     }
+
+    /// Validates the manager-neutral configuration invariants for `descriptor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a protocol error when the IDs differ or private settings are not
+    /// represented by a JSON object.
+    pub fn validate_for(&self, descriptor: &ManagerDescriptor) -> ManagerResult<()> {
+        if &self.id != descriptor.id() {
+            return Err(ManagerError::new(
+                ManagerErrorKind::Protocol,
+                "manager configuration ID does not match the implementation",
+            )
+            .with_detail(format!(
+                "expected {}, received {}",
+                descriptor.id(),
+                self.id
+            )));
+        }
+        if !self.settings.is_object() {
+            return Err(ManagerError::new(
+                ManagerErrorKind::Protocol,
+                "manager settings must be a JSON object",
+            )
+            .with_detail(self.id.to_string()));
+        }
+        Ok(())
+    }
 }
 
 /// Installation scope reported by a manager.
@@ -913,6 +941,19 @@ pub trait PackageManager: Send + Sync {
     /// Returns stable metadata for this implementation.
     fn descriptor(&self) -> &ManagerDescriptor;
 
+    /// Validates manager-owned configuration without performing I/O.
+    ///
+    /// Implementations with a private settings schema should override this
+    /// method, call the default checks, and validate their typed settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a protocol error when the configuration belongs to another
+    /// manager or its private settings are not a JSON object.
+    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
+        config.validate_for(self.descriptor())
+    }
+
     /// Checks whether the manager is usable with `config`.
     ///
     /// # Errors
@@ -1079,6 +1120,44 @@ mod tests {
                 ManagerCapabilities::default(),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn manager_config_validation_is_id_bound_and_object_only() {
+        let id = ManagerId::parse("builtin:apt").expect("valid manager ID");
+        let descriptor = ManagerDescriptor::new(
+            id.clone(),
+            "APT",
+            ManagerCategory::System,
+            SupportedPlatforms::from([Platform::Linux]),
+            ManagerCapabilities::from([ManagerCapability::Installed]),
+        )
+        .expect("valid descriptor");
+
+        assert!(
+            ManagerConfig::new(id.clone())
+                .validate_for(&descriptor)
+                .is_ok()
+        );
+
+        let mut malformed = ManagerConfig::new(id.clone());
+        malformed.settings = Value::Array(Vec::new());
+        assert_eq!(
+            malformed
+                .validate_for(&descriptor)
+                .expect_err("array settings must be rejected")
+                .kind(),
+            ManagerErrorKind::Protocol
+        );
+
+        let wrong_id = ManagerConfig::new(ManagerId::parse("builtin:dnf").expect("valid ID"));
+        assert_eq!(
+            wrong_id
+                .validate_for(&descriptor)
+                .expect_err("wrong manager ID must be rejected")
+                .kind(),
+            ManagerErrorKind::Protocol
         );
     }
 

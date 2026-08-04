@@ -94,7 +94,8 @@ impl PipxManager {
     /// # Errors
     ///
     /// Returns a typed target-validation, timeout, or command error.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -112,17 +113,6 @@ impl PipxManager {
             ManagerError::new(ManagerErrorKind::Timeout, "pipx write command timed out")
                 .with_detail(command.program().to_string_lossy())
         })?
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "pipx configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
     }
 
     async fn venvs_root(&self, config: &ManagerConfig) -> ManagerResult<PathBuf> {

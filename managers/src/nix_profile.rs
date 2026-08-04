@@ -16,7 +16,9 @@ use updater_manager_api::{
 };
 
 use crate::{
-    command::{CommandSpec, manager_availability, resolve_executable, run_output},
+    command::{
+        CommandSpec, manager_availability, resolve_executable, run_output, unsupported_platform,
+    },
     progress::run_cancellable_command_with_progress,
 };
 
@@ -56,16 +58,8 @@ impl NixProfileManager {
     }
 
     fn settings(&self, config: &ManagerConfig) -> ManagerResult<NixSettings> {
-        if &config.id != self.descriptor.id() {
-            return Err(protocol(
-                "Nix profile configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ));
-        }
-        let settings: NixSettings = serde_json::from_value(config.settings.clone())
-            .map_err(|error| protocol("Nix profile settings are invalid", &error.to_string()))?;
-        validate_profile_path(&settings.profile)?;
-        Ok(settings)
+        config.validate_for(self.descriptor())?;
+        configured_nix_profile(config).map(|profile| NixSettings { profile })
     }
 
     async fn inventory(&self, config: &ManagerConfig) -> ManagerResult<(PathBuf, Vec<NixElement>)> {
@@ -206,7 +200,14 @@ impl PackageManager for NixProfileManager {
         &self.descriptor
     }
 
+    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
+        self.settings(config).map(|_| ())
+    }
+
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
+        if let Some(availability) = unsupported_platform(self.descriptor()) {
+            return Ok(availability);
+        }
         self.settings(config)?;
         Ok(manager_availability(config, NIX_COMMAND, &["--version"]).await)
     }
@@ -269,6 +270,59 @@ impl PackageManager for NixProfileManager {
 #[serde(deny_unknown_fields)]
 struct NixSettings {
     profile: PathBuf,
+}
+
+/// Returns the configured current-user Nix profile.
+///
+/// # Errors
+///
+/// Returns a protocol error when the configuration ID, settings schema, or
+/// profile path is invalid.
+pub fn configured_nix_profile(config: &ManagerConfig) -> ManagerResult<PathBuf> {
+    if config.id.as_str() != NIX_ID {
+        return Err(protocol(
+            "Nix profile configuration ID does not match the manager",
+            config.id.as_str(),
+        ));
+    }
+    let settings: NixSettings = serde_json::from_value(config.settings.clone())
+        .map_err(|error| protocol("Nix profile settings are invalid", &error.to_string()))?;
+    validate_profile_path(&settings.profile)?;
+    Ok(settings.profile)
+}
+
+/// Sets the configured current-user Nix profile.
+///
+/// # Errors
+///
+/// Returns a protocol error when the configuration does not belong to the Nix
+/// profile manager, its settings are malformed, or `profile` is outside the
+/// supported current-user profile scope.
+pub fn set_configured_nix_profile(
+    config: &mut ManagerConfig,
+    profile: PathBuf,
+) -> ManagerResult<()> {
+    if config.id.as_str() != NIX_ID {
+        return Err(protocol(
+            "Nix profile configuration ID does not match the manager",
+            config.id.as_str(),
+        ));
+    }
+    validate_profile_path(&profile)?;
+    let settings = config.settings.as_object_mut().ok_or_else(|| {
+        protocol(
+            "Nix profile settings must be a JSON object",
+            config.id.as_str(),
+        )
+    })?;
+    let value = serde_json::to_value(profile).map_err(|error| {
+        protocol(
+            "Nix profile path could not be serialized",
+            &error.to_string(),
+        )
+    })?;
+    settings.insert("profile".to_owned(), value);
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

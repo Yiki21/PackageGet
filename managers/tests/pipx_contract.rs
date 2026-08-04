@@ -10,8 +10,8 @@ use tokio::{
     task::JoinHandle,
 };
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager,
-    PackageOrigin, PackageScope, PackageTarget, Platform,
+    AuthorizationHint, ManagerCapability, ManagerConfig, NoopProgressSink, PackageAction,
+    PackageManager, PackageOrigin, PackageScope, PackageTarget, Platform,
 };
 #[cfg(unix)]
 use updater_manager_api::{ManagerErrorKind, ProgressEvent};
@@ -612,7 +612,12 @@ async fn malformed_origin_and_non_registry_upgrade_are_rejected_before_execution
         Some(PackageOrigin::new("PyPI").with_reference("registry:venv=other;distribution=tool"));
     assert_eq!(
         manager
-            .execute_target_with_progress(&config, PackageAction::Update, &target, |_| {})
+            .execute(
+                &config,
+                PackageAction::Update,
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
+            )
             .await
             .expect_err("command failure remains visible")
             .kind(),
@@ -624,7 +629,12 @@ async fn malformed_origin_and_non_registry_upgrade_are_rejected_before_execution
         Some(PackageOrigin::new("git").with_reference("git:venv=tool;distribution=tool"));
     assert_eq!(
         manager
-            .execute_target_with_progress(&config, PackageAction::Update, &target, |_| {})
+            .execute(
+                &config,
+                PackageAction::Update,
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
+            )
             .await
             .expect_err("git upgrade is read-only")
             .kind(),
@@ -637,7 +647,12 @@ async fn malformed_origin_and_non_registry_upgrade_are_rejected_before_execution
     );
     assert_eq!(
         manager
-            .execute_target_with_progress(&config, PackageAction::Uninstall, &target, |_| {})
+            .execute(
+                &config,
+                PackageAction::Uninstall,
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
+            )
             .await
             .expect_err("reject mismatched distribution")
             .kind(),

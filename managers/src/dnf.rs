@@ -112,7 +112,8 @@ impl DnfManager {
     /// Returns a protocol error for a mismatched manager configuration, an
     /// unsupported error for unknown future actions, or a typed command error
     /// when DNF or `pkexec` fails.
-    pub async fn execute_packages_with_progress(
+    #[allow(dead_code)]
+    async fn execute_packages_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -170,22 +171,6 @@ impl DnfManager {
         }
 
         Ok(updates)
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            return Ok(());
-        }
-
-        Err(ManagerError::new(
-            ManagerErrorKind::Protocol,
-            "dnf configuration ID does not match the manager",
-        )
-        .with_detail(format!(
-            "expected {}, received {}",
-            self.descriptor.id(),
-            config.id
-        )))
     }
 
     fn write_command(

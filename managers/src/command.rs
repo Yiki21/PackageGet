@@ -9,8 +9,8 @@ use std::{
 use directories_next::UserDirs;
 use tokio::{process::Command, time::timeout};
 use updater_manager_api::{
-    AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerError, ManagerErrorKind,
-    ManagerResult, Platform,
+    AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerDescriptor, ManagerError,
+    ManagerErrorKind, ManagerResult, Platform,
 };
 
 const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
@@ -87,6 +87,16 @@ pub(crate) async fn manager_availability(
     version_args: &[&str],
 ) -> ManagerAvailability {
     manager_availability_with_version(config, default_program, version_args, detected_version).await
+}
+
+pub(crate) fn unsupported_platform(descriptor: &ManagerDescriptor) -> Option<ManagerAvailability> {
+    let platform = Platform::current();
+    platform
+        .filter(|platform| descriptor.platforms().contains(*platform))
+        .is_none()
+        .then_some(ManagerAvailability::Unavailable {
+            reason: AvailabilityReason::UnsupportedPlatform { platform },
+        })
 }
 
 pub(crate) async fn manager_availability_with_version(

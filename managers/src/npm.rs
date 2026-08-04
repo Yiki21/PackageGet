@@ -84,7 +84,8 @@ impl NpmManager {
     /// # Errors
     ///
     /// Returns a typed target-validation, registry, timeout, or command error.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -94,17 +95,6 @@ impl NpmManager {
         self.validate_config(config)?;
         let command = self.write_command(config, action, target).await?;
         run_npm_command_with_progress(&command, on_progress).await
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "npm configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
     }
 
     async fn global_root(&self, config: &ManagerConfig) -> ManagerResult<PathBuf> {
@@ -727,6 +717,7 @@ fn npm_command(path: &Path) -> CommandSpec {
         .env("NPM_CONFIG_UPDATE_NOTIFIER", "false")
 }
 
+#[allow(dead_code)]
 async fn run_npm_command_with_progress(
     command: &CommandSpec,
     on_progress: impl FnMut(CommandProgress),

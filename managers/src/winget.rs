@@ -75,21 +75,6 @@ impl WingetManager {
         Self { descriptor }
     }
 
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            return Ok(());
-        }
-        Err(ManagerError::new(
-            ManagerErrorKind::Protocol,
-            "winget configuration ID does not match the manager",
-        )
-        .with_detail(format!(
-            "expected {}, received {}",
-            self.descriptor.id(),
-            config.id
-        )))
-    }
-
     async fn export_inventory(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {
         self.validate_config(config)?;
         let export_path = export_path();

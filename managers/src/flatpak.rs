@@ -112,7 +112,8 @@ impl FlatpakManager {
     ///
     /// Returns a protocol or unsupported error for incomplete target identity,
     /// or a typed command error when Flatpak fails.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -225,22 +226,6 @@ impl FlatpakManager {
             ));
         }
         Ok(architecture)
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            return Ok(());
-        }
-
-        Err(ManagerError::new(
-            ManagerErrorKind::Protocol,
-            "flatpak configuration ID does not match the manager",
-        )
-        .with_detail(format!(
-            "expected {}, received {}",
-            self.descriptor.id(),
-            config.id
-        )))
     }
 
     fn write_command(

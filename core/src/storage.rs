@@ -6,7 +6,6 @@ use std::{
 
 use directories_next::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use updater_manager_api::{ManagerCategory, ManagerConfig, ManagerId};
 
@@ -67,7 +66,9 @@ impl Config {
     ) -> CoreResult<Self> {
         let path = path.as_ref();
         if path.exists() {
-            return Self::read_from_path(path).await;
+            let config = Self::read_from_path(path).await?;
+            config.validate_registered_managers(registry)?;
+            return Ok(config);
         }
 
         let config = Self::detect_package_managers(registry).await;
@@ -192,20 +193,24 @@ impl Config {
                     manager.id
                 )));
             }
-            if manager.id.as_str() == "builtin:nix-profile" {
-                let profile = manager
-                    .settings
-                    .get("profile")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        CoreError::ConfigError(
-                            "settings for manager builtin:nix-profile require profile".into(),
-                        )
-                    })?;
-                validate_nix_profile_path(profile)?;
-            }
         }
 
+        Ok(())
+    }
+
+    /// Validates settings owned by manager implementations registered in this build.
+    ///
+    /// Unknown manager configurations remain opaque so another build can preserve
+    /// and later restore them.
+    pub fn validate_registered_managers(&self, registry: &ManagerRegistry) -> CoreResult<()> {
+        for config in &self.managers {
+            let Some(manager) = registry.get(&config.id) else {
+                continue;
+            };
+            manager.validate_config(config).map_err(|error| {
+                CoreError::ConfigError(format!("invalid settings for {}: {error}", config.id))
+            })?;
+        }
         Ok(())
     }
 
@@ -226,85 +231,6 @@ impl Config {
         self.manager(id)
             .and_then(|manager| manager.executable().map(Path::to_path_buf))
     }
-
-    /// Returns the explicitly configured Nix profile path.
-    #[must_use]
-    pub fn nix_profile(&self) -> Option<&str> {
-        let id = ManagerId::parse("builtin:nix-profile")
-            .expect("built-in Nix profile manager ID must be valid");
-        self.manager(&id)
-            .and_then(|manager| manager.settings.get("profile"))
-            .and_then(Value::as_str)
-    }
-
-    /// Sets the single user profile owned by the configured Nix manager.
-    pub fn set_nix_profile(&mut self, profile: String) -> CoreResult<()> {
-        validate_nix_profile_path(&profile)?;
-        let id = ManagerId::parse("builtin:nix-profile")
-            .expect("built-in Nix profile manager ID must be valid");
-        let manager = self.manager_mut(&id).ok_or_else(|| {
-            CoreError::ConfigError(
-                "cannot configure Nix profile settings when builtin:nix-profile is disabled".into(),
-            )
-        })?;
-        let settings = manager.settings.as_object_mut().ok_or_else(|| {
-            CoreError::ConfigError(
-                "settings for manager builtin:nix-profile must be a JSON object".into(),
-            )
-        })?;
-        settings.insert("profile".to_owned(), Value::String(profile));
-        Ok(())
-    }
-
-    /// Returns the configured Go binary directory, when explicitly set.
-    #[must_use]
-    pub fn go_bin_dir(&self) -> Option<&str> {
-        let id = ManagerId::parse("builtin:go").expect("built-in Go manager ID must be valid");
-        self.manager(&id)
-            .and_then(|manager| manager.settings.get("go_bin_dir"))
-            .and_then(Value::as_str)
-    }
-
-    /// Sets or clears the Go binary directory on the Go manager configuration.
-    pub fn set_go_bin_dir(&mut self, directory: Option<String>) -> CoreResult<()> {
-        let id = ManagerId::parse("builtin:go").expect("built-in Go manager ID must be valid");
-        let manager = self.manager_mut(&id).ok_or_else(|| {
-            CoreError::ConfigError(
-                "cannot configure Go settings when builtin:go is disabled".into(),
-            )
-        })?;
-
-        let settings = manager.settings.as_object_mut().ok_or_else(|| {
-            CoreError::ConfigError("settings for manager builtin:go must be a JSON object".into())
-        })?;
-        if let Some(directory) = directory {
-            settings.insert("go_bin_dir".to_owned(), Value::String(directory));
-        } else {
-            settings.remove("go_bin_dir");
-        }
-        Ok(())
-    }
-
-    /// Resolves the effective Go binary directory using config and environment defaults.
-    #[must_use]
-    pub fn resolved_go_bin_dir(&self) -> String {
-        use directories_next::UserDirs;
-        use std::env;
-
-        if let Some(directory) = self.go_bin_dir() {
-            return directory.to_owned();
-        }
-        if let Ok(gobin) = env::var("GOBIN") {
-            return gobin;
-        }
-        if let Ok(gopath) = env::var("GOPATH") {
-            return format!("{gopath}/bin");
-        }
-
-        UserDirs::new()
-            .and_then(|dirs| dirs.home_dir().join("go/bin").to_str().map(str::to_owned))
-            .unwrap_or_else(|| "go/bin".to_owned())
-    }
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
@@ -320,29 +246,6 @@ fn temporary_path(path: &Path) -> PathBuf {
     ))
 }
 
-fn validate_nix_profile_path(profile: &str) -> CoreResult<()> {
-    let path = Path::new(profile);
-    if profile.trim() != profile
-        || profile.is_empty()
-        || profile.chars().any(char::is_control)
-        || !path.is_absolute()
-    {
-        return Err(CoreError::ConfigError(
-            "Nix profile path must be a non-empty absolute path".into(),
-        ));
-    }
-    let normalized = profile.replace('\\', "/");
-    if normalized == "/nix/var/nix/profiles/system"
-        || normalized.starts_with("/nix/var/nix/profiles/system-")
-        || normalized == "/nix/var/nix/profiles/default"
-    {
-        return Err(CoreError::ConfigError(
-            "Nix system profiles cannot be configured as a user profile".into(),
-        ));
-    }
-    Ok(())
-}
-
 fn config_io_error(action: &str, path: &Path, error: std::io::Error) -> CoreError {
     CoreError::ConfigError(format!(
         "could not {action} configuration at {}: {error}",
@@ -352,8 +255,12 @@ fn config_io_error(action: &str, path: &Path, error: std::io::Error) -> CoreErro
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Map;
+    use serde_json::{Map, Value};
     use tempfile::tempdir;
+    use updater_managers::{
+        configured_go_bin_dir, configured_nix_profile, set_configured_go_bin_dir,
+        set_configured_nix_profile,
+    };
 
     use super::*;
 
@@ -483,13 +390,22 @@ mod tests {
             ..Config::default()
         };
 
-        config
-            .set_go_bin_dir(Some("/custom/go/bin".to_owned()))
+        set_configured_go_bin_dir(&mut config.managers[0], Some("/custom/go/bin".into()))
             .expect("set Go bin directory");
-        assert_eq!(config.go_bin_dir(), Some("/custom/go/bin"));
+        assert_eq!(
+            configured_go_bin_dir(&config.managers[0])
+                .expect("read Go bin directory")
+                .as_deref()
+                .and_then(|path| path.to_str()),
+            Some("/custom/go/bin")
+        );
 
-        config.set_go_bin_dir(None).expect("clear Go bin directory");
-        assert_eq!(config.go_bin_dir(), None);
+        set_configured_go_bin_dir(&mut config.managers[0], None).expect("clear Go bin directory");
+        assert!(
+            configured_go_bin_dir(&config.managers[0])
+                .expect("read cleared Go bin directory")
+                .is_none()
+        );
         assert_eq!(config.managers[0].settings, Value::Object(Map::new()));
     }
 
@@ -500,15 +416,18 @@ mod tests {
             ..Config::default()
         };
 
-        assert!(config.validate().is_err());
-        config
-            .set_nix_profile("/home/test/.local/state/nix/profiles/profile".to_owned())
-            .expect("set explicit Nix profile");
+        assert!(configured_nix_profile(&config.managers[0]).is_err());
+        set_configured_nix_profile(
+            &mut config.managers[0],
+            "/home/test/.local/state/nix/profiles/profile".into(),
+        )
+        .expect("set explicit Nix profile");
         assert_eq!(
-            config.nix_profile(),
+            configured_nix_profile(&config.managers[0])
+                .expect("read explicit Nix profile")
+                .to_str(),
             Some("/home/test/.local/state/nix/profiles/profile")
         );
-        config.validate().expect("validate configured Nix profile");
     }
 
     #[test]
@@ -524,10 +443,7 @@ mod tests {
             "/nix/var/nix/profiles/system-42-link",
             "/nix/var/nix/profiles/default",
         ] {
-            assert!(
-                config.set_nix_profile(profile.to_owned()).is_err(),
-                "unexpectedly accepted {profile}"
-            );
+            assert!(set_configured_nix_profile(&mut config.managers[0], profile.into()).is_err());
         }
     }
 

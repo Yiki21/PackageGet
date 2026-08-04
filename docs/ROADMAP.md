@@ -262,6 +262,16 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 只有 managers draft 的变化才会触发 manager data reload、Health generation 失效和旧结果清理；配置页面的职责边界现在同时体现在 UI 和状态生命周期上。
 - 新增回归测试覆盖应用偏好保存与丢弃路径；updater UI 定向测试共 69 项通过。
 
+当前进度（Iteration 051已完成）：
+
+- 在继续增加 Package Manager 前完成三路架构 review，确认 core、manager 实现和 UI 的扩展边界；本轮不引入动态插件、通用配置表单或跨层 manager 特例。
+- `PackageManager::validate_config` 与 `ManagerConfig::validate_for` 成为统一配置入口；core 只校验 manager-neutral 不变量，Go `GOBIN` 与 Nix profile 的 schema/读写归还各自 manager，未知 manager 配置继续原样保留。
+- Package Managers 页面中的探测结果改为独立的 `detection_results`；已配置 manager 的状态只读取 HealthCenter 记录，manager 配置变化会清理 Health generation，消除双 availability cache 的覆盖顺序问题。
+- 跨 manager stop/failure/cancel 的 per-manager outcome 组装收敛到单一 finalizer；补齐 missing-config、target identity mismatch、pre-cancel 和 empty-group 回归测试，并修复 partial completion 聚合。
+- legacy direct execution helpers 与 `CommandProgress` 已收窄为 manager crate 内部的测试兼容面，不再作为 public manager API 暴露；过期的 `core/src/pm.rs` 已删除。built-in catalog 测试只约束 descriptor 的真实能力，不再要求每个 manager 伪造完整 CRUD。
+- Snap 与 Nix 的直接 availability contract 现在会在不支持的平台返回结构化 UnsupportedPlatform；新增 manager 必须先完成 descriptor、config validation、platform availability、capability contract 和离线 fixture，再接入 UI。
+- workspace 全量格式、check、test、clippy 和 build 门禁均已通过；本节变更应随下一次 release notes 一并发布。
+
 当前进度（Iteration 054已完成）：
 
 - 开始扩展 Package Manager 生态，新增 Windows `Scoop` direct manager；首轮覆盖 availability、installed、updates、search、install、update 和 uninstall，并按 descriptor 只注册到 Windows catalog。

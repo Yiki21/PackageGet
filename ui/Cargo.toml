@@ -127,6 +127,7 @@ simple-icons-pack.workspace = true
 tokio.workspace = true
 updater_core.workspace = true
 updater_manager_api.workspace = true
+updater_managers.workspace = true
 url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

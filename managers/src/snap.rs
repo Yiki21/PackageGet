@@ -12,6 +12,7 @@ use updater_manager_api::{
 use crate::{
     command::{
         CommandSpec, command_status_error, manager_availability, resolve_executable, run_output,
+        unsupported_platform,
     },
     progress::run_cancellable_command_with_progress,
 };
@@ -52,17 +53,6 @@ impl SnapManager {
             message: Some("Snap writes are authorized by snapd through Polkit.".to_owned()),
         });
         Self { descriptor }
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "Snap configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
     }
 
     async fn installed_entries(&self, config: &ManagerConfig) -> ManagerResult<Vec<SnapEntry>> {
@@ -167,6 +157,9 @@ impl PackageManager for SnapManager {
 
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
+        if let Some(availability) = unsupported_platform(self.descriptor()) {
+            return Ok(availability);
+        }
         Ok(manager_availability(config, SNAP_COMMAND, &["version"]).await)
     }
 

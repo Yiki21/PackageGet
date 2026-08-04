@@ -11,7 +11,7 @@ use updater_manager_api::{
 };
 #[cfg(unix)]
 use updater_manager_api::{
-    ManagerErrorKind, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+    ManagerErrorKind, NoopProgressSink, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
 };
 use updater_managers::PnpmManager;
 
@@ -487,11 +487,11 @@ async fn malformed_json_and_target_origin_are_protocol_errors() {
     target.origin = Some(PackageOrigin::new("pnpm global").with_reference("package:@scope/other"));
     assert_eq!(
         manager
-            .execute_target_with_progress(
+            .execute(
                 &config(&manager, &executable),
                 PackageAction::Uninstall,
-                &target,
-                |_| {},
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
             )
             .await
             .expect_err("reject mismatched identity")

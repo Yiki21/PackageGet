@@ -192,86 +192,68 @@ pub async fn execute_package_groups(
     for (group_index, group) in groups.iter().enumerate() {
         let (manager_id, targets) = *group;
         if cancellation.is_cancelled() {
-            manager_outcomes.push(ManagerOperationOutcome {
-                manager_id: manager_id.clone(),
-                scope: aggregate_scope(targets.iter()),
-                requested_packages: targets.len(),
-                completed_packages: 0,
-                status: ManagerOperationStatus::NotStarted,
-                error: Some("Stopped before starting this manager".to_owned()),
-            });
-            append_not_started_outcomes(
-                &mut manager_outcomes,
-                groups.iter().copied().skip(group_index + 1),
-            );
-            return OperationOutcome {
+            return stopped_operation(
                 action,
+                &groups,
+                group_index,
+                manager_id,
+                targets,
                 completed_packages,
-                total_packages,
                 completed_managers,
+                total_packages,
                 total_managers,
-                failed_manager: None,
-                error: Some("Stopped before starting another manager".to_owned()),
-                cancelled: true,
-                manager_outcomes,
                 scope,
-            };
+                ManagerOperationStatus::NotStarted,
+                0,
+                "Stopped before starting another manager".to_owned(),
+                None,
+                true,
+                &mut manager_outcomes,
+            );
         }
 
         let manager = match registry.manager_for(manager_id, action.capability()) {
             Ok(manager) => manager,
             Err(error) => {
-                manager_outcomes.push(ManagerOperationOutcome {
-                    manager_id: manager_id.clone(),
-                    scope: aggregate_scope(targets.iter()),
-                    requested_packages: targets.len(),
-                    completed_packages: 0,
-                    status: ManagerOperationStatus::Failed,
-                    error: Some(error.to_string()),
-                });
-                append_not_started_outcomes(
-                    &mut manager_outcomes,
-                    groups.iter().copied().skip(group_index + 1),
-                );
-                return OperationOutcome {
+                return stopped_operation(
                     action,
+                    &groups,
+                    group_index,
+                    manager_id,
+                    targets,
                     completed_packages,
-                    total_packages,
                     completed_managers,
+                    total_packages,
                     total_managers,
-                    failed_manager: Some(manager_id.clone()),
-                    error: Some(error.to_string()),
-                    cancelled: false,
-                    manager_outcomes,
                     scope,
-                };
+                    ManagerOperationStatus::Failed,
+                    0,
+                    error.to_string(),
+                    Some(manager_id.clone()),
+                    false,
+                    &mut manager_outcomes,
+                );
             }
         };
         let Some(manager_config) = config.manager(manager_id) else {
-            manager_outcomes.push(ManagerOperationOutcome {
-                manager_id: manager_id.clone(),
-                scope: aggregate_scope(targets.iter()),
-                requested_packages: targets.len(),
-                completed_packages: 0,
-                status: ManagerOperationStatus::Failed,
-                error: Some(format!("manager is not configured: {manager_id}")),
-            });
-            append_not_started_outcomes(
-                &mut manager_outcomes,
-                groups.iter().copied().skip(group_index + 1),
-            );
-            return OperationOutcome {
+            return stopped_operation(
                 action,
+                &groups,
+                group_index,
+                manager_id,
+                targets,
                 completed_packages,
-                total_packages,
                 completed_managers,
+                total_packages,
                 total_managers,
-                failed_manager: Some(manager_id.clone()),
-                error: Some(format!("manager is not configured: {manager_id}")),
-                cancelled: false,
-                manager_outcomes,
                 scope,
-            };
+                ManagerOperationStatus::Failed,
+                0,
+                format!("manager is not configured: {manager_id}"),
+                Some(manager_id.clone()),
+                false,
+                &mut manager_outcomes,
+            );
         };
         if targets
             .iter()
@@ -279,30 +261,24 @@ pub async fn execute_package_groups(
         {
             let error =
                 format!("package target belongs to a different manager group: {manager_id}");
-            manager_outcomes.push(ManagerOperationOutcome {
-                manager_id: manager_id.clone(),
-                scope: aggregate_scope(targets.iter()),
-                requested_packages: targets.len(),
-                completed_packages: 0,
-                status: ManagerOperationStatus::Failed,
-                error: Some(error.clone()),
-            });
-            append_not_started_outcomes(
-                &mut manager_outcomes,
-                groups.iter().copied().skip(group_index + 1),
-            );
-            return OperationOutcome {
+            return stopped_operation(
                 action,
+                &groups,
+                group_index,
+                manager_id,
+                targets,
                 completed_packages,
-                total_packages,
                 completed_managers,
+                total_packages,
                 total_managers,
-                failed_manager: Some(manager_id.clone()),
-                error: Some(error),
-                cancelled: false,
-                manager_outcomes,
                 scope,
-            };
+                ManagerOperationStatus::Failed,
+                0,
+                error,
+                Some(manager_id.clone()),
+                false,
+                &mut manager_outcomes,
+            );
         }
         let manager_completed = AtomicUsize::new(0);
         let progress_events = |event| match event {
@@ -364,38 +340,32 @@ pub async fn execute_package_groups(
             let cancelled = error.kind() == ManagerErrorKind::Cancelled;
             let completed =
                 completed_packages + manager_completed.load(Ordering::Relaxed).min(targets.len());
-            manager_outcomes.push(ManagerOperationOutcome {
-                manager_id: manager_id.clone(),
-                scope: aggregate_scope(targets.iter()),
-                requested_packages: targets.len(),
-                completed_packages: completed.saturating_sub(completed_packages),
-                status: if cancelled {
+            return stopped_operation(
+                action,
+                &groups,
+                group_index,
+                manager_id,
+                targets,
+                completed,
+                completed_managers,
+                total_packages,
+                total_managers,
+                scope,
+                if cancelled {
                     ManagerOperationStatus::Cancelled
                 } else {
                     ManagerOperationStatus::Failed
                 },
-                error: Some(detail.clone()),
-            });
-            append_not_started_outcomes(
-                &mut manager_outcomes,
-                groups.iter().copied().skip(group_index + 1),
-            );
-            return OperationOutcome {
-                action,
-                completed_packages: completed,
-                total_packages,
-                completed_managers,
-                total_managers,
-                failed_manager: (!cancelled).then(|| manager_id.clone()),
-                error: Some(if cancelled {
+                completed.saturating_sub(completed_packages),
+                if cancelled {
                     detail
                 } else {
                     format!("Failed to {action_name} packages from {manager_id}: {detail}")
-                }),
+                },
+                (!cancelled).then(|| manager_id.clone()),
                 cancelled,
-                manager_outcomes,
-                scope,
-            };
+                &mut manager_outcomes,
+            );
         }
 
         manager_outcomes.push(ManagerOperationOutcome {
@@ -420,6 +390,53 @@ pub async fn execute_package_groups(
         error: None,
         cancelled: false,
         manager_outcomes,
+        scope,
+    }
+}
+
+// Keep the finalizer's aggregation inputs explicit: each call site documents
+// the exact progress and stop state it is returning to the UI.
+#[allow(clippy::too_many_arguments)]
+fn stopped_operation(
+    action: PackageAction,
+    groups: &[&(ManagerId, Vec<PackageTarget>)],
+    group_index: usize,
+    manager_id: &ManagerId,
+    targets: &[PackageTarget],
+    completed_packages: usize,
+    completed_managers: usize,
+    total_packages: usize,
+    total_managers: usize,
+    scope: PackageScope,
+    status: ManagerOperationStatus,
+    manager_completed_packages: usize,
+    error: String,
+    failed_manager: Option<ManagerId>,
+    cancelled: bool,
+    manager_outcomes: &mut Vec<ManagerOperationOutcome>,
+) -> OperationOutcome {
+    manager_outcomes.push(ManagerOperationOutcome {
+        manager_id: manager_id.clone(),
+        scope: aggregate_scope(targets.iter()),
+        requested_packages: targets.len(),
+        completed_packages: manager_completed_packages,
+        status,
+        error: Some(error.clone()),
+    });
+    append_not_started_outcomes(
+        manager_outcomes,
+        groups.iter().copied().skip(group_index + 1),
+    );
+    OperationOutcome {
+        action,
+        completed_packages,
+        total_packages,
+        completed_managers,
+        total_managers,
+        failed_manager,
+        error: Some(error),
+        cancelled,
+        manager_outcomes: std::mem::take(manager_outcomes),
         scope,
     }
 }

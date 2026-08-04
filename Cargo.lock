@@ -4476,6 +4476,7 @@ dependencies = [
  "simple-icons-pack",
  "tokio",
  "updater-manager-api",
+ "updater-managers",
  "updater_core",
  "url",
  "winresource",

@@ -105,7 +105,8 @@ impl HomebrewManager {
     ///
     /// Returns a protocol or unsupported error for an invalid target, or a
     /// typed command error when Homebrew fails.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -183,22 +184,6 @@ impl HomebrewManager {
             ));
         }
         Ok(updates)
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            return Ok(());
-        }
-
-        Err(ManagerError::new(
-            ManagerErrorKind::Protocol,
-            "homebrew configuration ID does not match the manager",
-        )
-        .with_detail(format!(
-            "expected {}, received {}",
-            self.descriptor.id(),
-            config.id
-        )))
     }
 
     fn write_command(

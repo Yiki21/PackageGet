@@ -116,10 +116,25 @@ UI catalog与执行任务共享同一个`ManagerRegistry`。已注册且已配�
 - Config要求`ManagerConfig.settings`为JSON object；manager拥有其内部schema并负责typed解析与运行时校验。带一等Settings UI的built-in可以在core额外冻结必填持久化不变量，例如Nix的单一绝对user profile；其他manager-private字段仍由core不透明保存。
 - manager settings升级必须由manager自身保持兼容；不要把manager私有字段提升为Config顶层字段。
 - `PackageInfo.name`与`PackageTarget.name`使用manager真实write identity；展示别名放在metadata/origin中。
+- `package_info`是可选的按需只读详情扩展点；只有能以低副作用、稳定结构化输出提供 richer metadata 的 manager 才实现它，不能在 installed/updates 列表加载时顺带执行单包详情命令。
 - 所有write target先整组验证，再开始命令与progress，防止部分写入。
 - manager内部可以批处理或逐项串行，但不能改变core的跨manager串行语义。
 - 命令、HTTP和文件系统边界使用固定timeout与结构化`ManagerErrorKind`。
 - 默认测试离线；真实宿主或网络smoke必须显式`#[ignore]`且保持只读。
+
+## 新 manager 接入清单
+
+按以下顺序接入一个新 manager，避免把实现细节扩散到 core 或 UI：
+
+1. 先确定不可变的 namespaced `ManagerId`、支持平台、category、authorization 和实际 capability；descriptor 只广告已经实现的操作。
+2. 在 `updater-managers/src/<manager>.rs` 中实现 `PackageManager`。先调用 `config.validate_for(self.descriptor())`，再由 manager 自己解析并校验 `settings`；不要新增 `Config` 顶层字段，也不要在 core 增加该 manager 的 ID 分支。
+3. 对 manager-private settings 提供同模块的 typed getter/setter（如果 UI 需要编辑），并为 malformed settings、wrong identity、path/scope/origin 约束写单测。
+4. `availability` 必须先遵守 descriptor 的平台集合；不支持当前平台时直接返回 `ManagerAvailability::Unavailable` 的 `UnsupportedPlatform`，不能依赖 catalog 过滤掩盖错误。
+5. 添加 `managers/tests/<manager>_contract.rs`，覆盖 descriptor、空输入、命令 argv、结构化输出解析、写操作 target 冻结和 capability 边界。网络或宿主 CLI smoke 只能是显式 ignored 的只读测试。
+6. 将实例加入 `builtin_managers()` 和 catalog contract；不要修改通用 catalog 测试去强制 manager 声明不存在的 CRUD 能力。
+7. 只有存在真正的 manager-private 设置时才添加 UI 控件；控件直接调用该 manager 的 typed getter/setter。普通 manager 不需要新增 UI helper、enum 分发或通用动态表单。
+8. 如果实现 `package_info`，为单包 query、target identity mismatch、未安装包和 malformed output 添加离线契约测试；UI 会在用户选择包后异步调用，并在失败时提供 retry。
+9. 完成 `cargo fmt`、workspace check/test/clippy 后，再补 README、ROADMAP 和 release notes 中的能力与平台说明。
 
 仓库中的可执行外部manager契约测试见`core/tests/manager_registry.rs`，跨manager执行契约见`core/tests/execution.rs`，built-in catalog契约见`managers/tests/builtin_catalog.rs`。
 Config磁盘schema和失败语义见[`configuration.md`](configuration.md)。

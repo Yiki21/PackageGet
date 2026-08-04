@@ -88,7 +88,8 @@ impl GoManager {
     ///
     /// Returns a typed configuration, target, command, filesystem, or path
     /// containment error.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -121,26 +122,14 @@ impl GoManager {
         }
     }
 
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "Go configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
-    }
-
     fn settings(config: &ManagerConfig) -> ManagerResult<GoSettings> {
         serde_json::from_value(config.settings.clone())
             .map_err(|error| protocol("Go manager settings are invalid", &error.to_string()))
     }
 
     async fn bin_dir(&self, config: &ManagerConfig) -> ManagerResult<PathBuf> {
-        let settings = Self::settings(config)?;
-        if let Some(path) = settings.go_bin_dir {
-            return validate_bin_dir_value(path, "go_bin_dir");
+        if let Some(path) = configured_go_bin_dir(config)? {
+            return Ok(path);
         }
         let go = resolve_executable(config, GO_COMMAND);
         let environment = go_environment(&go).await?;
@@ -392,6 +381,11 @@ impl PackageManager for GoManager {
         &self.descriptor
     }
 
+    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
+        config.validate_for(self.descriptor())?;
+        configured_go_bin_dir(config).map(|_| ())
+    }
+
     async fn availability(&self, config: &ManagerConfig) -> ManagerResult<ManagerAvailability> {
         self.validate_config(config)?;
         Ok(manager_availability(config, GO_COMMAND, &["version"]).await)
@@ -523,6 +517,62 @@ impl PackageManager for GoManager {
 struct GoSettings {
     #[serde(default)]
     go_bin_dir: Option<PathBuf>,
+}
+
+/// Returns the explicitly configured Go binary directory.
+///
+/// # Errors
+///
+/// Returns a protocol error when the configuration ID, settings schema, or
+/// configured directory is invalid.
+pub fn configured_go_bin_dir(config: &ManagerConfig) -> ManagerResult<Option<PathBuf>> {
+    if config.id.as_str() != GO_ID {
+        return Err(protocol(
+            "Go configuration ID does not match the manager",
+            config.id.as_str(),
+        ));
+    }
+    GoManager::settings(config)?
+        .go_bin_dir
+        .map(|path| validate_bin_dir_value(path, "go_bin_dir"))
+        .transpose()
+}
+
+/// Sets or clears the explicitly configured Go binary directory.
+///
+/// # Errors
+///
+/// Returns a protocol error when the configuration does not belong to Go, its
+/// settings are malformed, or `directory` is not an absolute path.
+pub fn set_configured_go_bin_dir(
+    config: &mut ManagerConfig,
+    directory: Option<PathBuf>,
+) -> ManagerResult<()> {
+    let directory = directory
+        .map(|path| validate_bin_dir_value(path, "go_bin_dir"))
+        .transpose()?;
+    configured_go_bin_dir(config)?;
+    let settings = config.settings.as_object_mut().ok_or_else(|| {
+        protocol(
+            "Go manager settings must be a JSON object",
+            config.id.as_str(),
+        )
+    })?;
+    match directory {
+        Some(path) => {
+            let value = serde_json::to_value(path).map_err(|error| {
+                protocol(
+                    "Go binary directory could not be serialized",
+                    &error.to_string(),
+                )
+            })?;
+            settings.insert("go_bin_dir".to_owned(), value);
+        }
+        None => {
+            settings.remove("go_bin_dir");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

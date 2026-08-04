@@ -12,7 +12,9 @@ use updater_manager_api::{
     AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager, Platform,
 };
 #[cfg(unix)]
-use updater_manager_api::{PackageOrigin, PackageScope, PackageTarget, ProgressEvent};
+use updater_manager_api::{
+    NoopProgressSink, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
+};
 use updater_managers::GoManager;
 
 #[cfg(unix)]
@@ -338,7 +340,12 @@ async fn uninstall_only_removes_a_regular_basename_inside_gobin() {
     );
 
     manager
-        .execute_target_with_progress(&config, PackageAction::Uninstall, &target, |_| {})
+        .execute(
+            &config,
+            PackageAction::Uninstall,
+            std::slice::from_ref(&target),
+            &NoopProgressSink,
+        )
         .await
         .expect("remove contained binary");
     assert!(!bin.path().join("tool").exists());
@@ -349,7 +356,12 @@ async fn uninstall_only_removes_a_regular_basename_inside_gobin() {
     target.name = "link".to_owned();
     assert_eq!(
         manager
-            .execute_target_with_progress(&config, PackageAction::Uninstall, &target, |_| {})
+            .execute(
+                &config,
+                PackageAction::Uninstall,
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
+            )
             .await
             .expect_err("reject symlink removal")
             .kind(),
@@ -358,7 +370,12 @@ async fn uninstall_only_removes_a_regular_basename_inside_gobin() {
     target.name = "../outside".to_owned();
     assert_eq!(
         manager
-            .execute_target_with_progress(&config, PackageAction::Uninstall, &target, |_| {})
+            .execute(
+                &config,
+                PackageAction::Uninstall,
+                std::slice::from_ref(&target),
+                &NoopProgressSink,
+            )
             .await
             .expect_err("reject traversal")
             .kind(),

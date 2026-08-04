@@ -22,7 +22,7 @@ const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 /// Bounded command progress emitted by a built-in manager.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct CommandProgress {
+pub(crate) struct CommandProgress {
     fraction: f32,
     message: Option<String>,
 }
@@ -37,19 +37,21 @@ impl CommandProgress {
 
     /// Returns the normalized completion fraction from `0.0` through `1.0`.
     #[must_use]
-    pub fn fraction(&self) -> f32 {
+    #[allow(dead_code)]
+    pub(crate) fn fraction(&self) -> f32 {
         self.fraction
     }
 
     /// Returns the bounded command output line, when one was emitted.
     #[must_use]
-    pub fn message(&self) -> Option<&str> {
+    #[allow(dead_code)]
+    pub(crate) fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
 
     /// Consumes the progress value into its fraction and optional message.
     #[must_use]
-    pub fn into_parts(self) -> (f32, Option<String>) {
+    pub(crate) fn into_parts(self) -> (f32, Option<String>) {
         (self.fraction, self.message)
     }
 }
@@ -114,6 +116,7 @@ pub(crate) async fn run_cancellable_command_with_progress_and_status(
     .await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn run_dnf_command_with_progress(
     spec: &CommandSpec,
     on_progress: impl FnMut(CommandProgress),
@@ -294,7 +297,7 @@ fn is_executable_busy(error: &io::Error) -> bool {
 fn cancelled_error() -> ManagerError {
     ManagerError::new(
         ManagerErrorKind::Cancelled,
-        "package manager command was cancelled after its process exited",
+        "package manager command was cancelled",
     )
 }
 

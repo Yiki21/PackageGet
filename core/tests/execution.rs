@@ -251,6 +251,141 @@ async fn unsupported_capability_stops_before_manager_execution() {
 }
 
 #[tokio::test]
+async fn missing_config_stops_before_manager_execution() {
+    let id = manager_id("org.example:missing-config");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(FakeManager::new(
+            id.as_str(),
+            [ManagerCapability::Install],
+            Arc::clone(&order),
+            None,
+        )))
+        .unwrap();
+
+    let outcome = execute_package_groups(
+        &registry,
+        &Config::default(),
+        PackageAction::Install,
+        &[(id.clone(), vec![target(&id, "alpha")])],
+        &CancellationToken::default(),
+        &|_| {},
+    )
+    .await;
+
+    assert_eq!(outcome.failed_manager, Some(id));
+    assert_eq!(outcome.completed_packages, 0);
+    assert_eq!(
+        outcome.manager_outcomes[0].status,
+        ManagerOperationStatus::Failed
+    );
+    assert!(order.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn target_manager_mismatch_stops_before_manager_execution() {
+    let configured = manager_id("org.example:configured");
+    let foreign = manager_id("org.example:foreign");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(FakeManager::new(
+            configured.as_str(),
+            [ManagerCapability::Install],
+            Arc::clone(&order),
+            None,
+        )))
+        .unwrap();
+
+    let outcome = execute_package_groups(
+        &registry,
+        &config(std::slice::from_ref(&configured)),
+        PackageAction::Install,
+        &[(configured.clone(), vec![target(&foreign, "alpha")])],
+        &CancellationToken::default(),
+        &|_| {},
+    )
+    .await;
+
+    assert_eq!(outcome.failed_manager, Some(configured));
+    assert_eq!(
+        outcome.manager_outcomes[0].status,
+        ManagerOperationStatus::Failed
+    );
+    assert!(
+        outcome
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("different manager group"))
+    );
+    assert!(order.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pre_cancelled_operation_marks_groups_not_started() {
+    let first = manager_id("org.example:cancel-first");
+    let second = manager_id("org.example:cancel-second");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    for id in [&first, &second] {
+        registry
+            .register(Arc::new(FakeManager::new(
+                id.as_str(),
+                [ManagerCapability::Install],
+                Arc::clone(&order),
+                None,
+            )))
+            .unwrap();
+    }
+    let cancellation = CancellationToken::default();
+    cancellation.cancel();
+
+    let outcome = execute_package_groups(
+        &registry,
+        &config(&[first.clone(), second.clone()]),
+        PackageAction::Install,
+        &[
+            (first.clone(), vec![target(&first, "alpha")]),
+            (second.clone(), vec![target(&second, "beta")]),
+        ],
+        &cancellation,
+        &|_| {},
+    )
+    .await;
+
+    assert!(outcome.is_cancelled());
+    assert_eq!(outcome.completed_packages, 0);
+    assert_eq!(outcome.completed_managers, 0);
+    assert!(
+        outcome
+            .manager_outcomes
+            .iter()
+            .all(|manager| manager.status == ManagerOperationStatus::NotStarted)
+    );
+    assert!(order.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn empty_groups_are_a_successful_noop() {
+    let registry = ManagerRegistry::new();
+    let outcome = execute_package_groups(
+        &registry,
+        &Config::default(),
+        PackageAction::Install,
+        &[],
+        &CancellationToken::default(),
+        &|_| {},
+    )
+    .await;
+
+    assert!(outcome.is_success());
+    assert_eq!(outcome.total_packages, 0);
+    assert_eq!(outcome.total_managers, 0);
+    assert!(outcome.manager_outcomes.is_empty());
+}
+
+#[tokio::test]
 async fn failure_reports_partial_progress_and_skips_later_groups() {
     let failing = manager_id("org.example:failing");
     let skipped = manager_id("org.example:skipped");

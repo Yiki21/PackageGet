@@ -84,7 +84,8 @@ impl PnpmManager {
     /// # Errors
     ///
     /// Returns a typed configuration, target, or command execution error.
-    pub async fn execute_target_with_progress(
+    #[allow(dead_code)]
+    async fn execute_target_with_progress(
         &self,
         config: &ManagerConfig,
         action: PackageAction,
@@ -94,17 +95,6 @@ impl PnpmManager {
         self.validate_config(config)?;
         let command = self.write_command(config, action, target).await?;
         run_pnpm_command_with_progress(&command, on_progress).await
-    }
-
-    fn validate_config(&self, config: &ManagerConfig) -> ManagerResult<()> {
-        if &config.id == self.descriptor.id() {
-            Ok(())
-        } else {
-            Err(protocol(
-                "pnpm configuration ID does not match the manager",
-                &format!("expected {}, received {}", self.descriptor.id(), config.id),
-            ))
-        }
     }
 
     async fn installed_packages(
@@ -750,6 +740,7 @@ fn pnpm_command(path: &Path) -> CommandSpec {
         .env("CI", "true")
 }
 
+#[allow(dead_code)]
 async fn run_pnpm_command_with_progress(
     command: &CommandSpec,
     on_progress: impl FnMut(CommandProgress),
