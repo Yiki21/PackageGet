@@ -325,11 +325,12 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 写操作固定为 `bun add --global`、`bun update --global` 和 `bun remove --global`，保留 scoped package、semver、typed origin 和 user scope 合同，拒绝 version-pinned uninstall 及 file/git/workspace spec。
 - 离线 contract 覆盖 Unix、Windows batch、空状态、重复/畸形输出和写命令 argv；Linux 本机 Bun 1.3.14 真实隔离 smoke通过，workspace串行门禁及原生Windows/macOS contract CI run `30911656819`全部通过。
 
-当前进度（Iteration 060进行中）：
+当前进度（Iteration 060已完成）：
 
 - `Build-v1.0.0`保持不可变；当前main在其后完成Package Managers管理/健康页、Scoop、Chocolatey、Bun Global及manager contract收口，按向后兼容功能增量统一升为`1.1.0`。
 - workspace、RPM、Arch、README、release notes与metadata preflight统一到`1.1.0`；目标tag为`Build-v1.1.0`，继续发布17个跨平台资产及同一`SHA256SUMS`。
-- tag只会在最终HEAD本地串行门禁、Linux/Windows/macOS CI和main分支Package预构建全部通过后创建；公开Release仍需回下载校验资产清单与checksum。
+- 最终候选commit `7dc2662`通过本地串行门禁、Linux/Windows/macOS CI run `30913317664`与main分支Package预构建run `30913316595`后，已创建并推送annotated `Build-v1.1.0` tag。
+- tag Package run `30913958640`全部通过并发布公开Release；远端tag解引用到`7dc2662`，17个包资产及`SHA256SUMS`全量回下载校验通过。
 
 ### 阶段 7：扩展 Package Manager 生态
 
