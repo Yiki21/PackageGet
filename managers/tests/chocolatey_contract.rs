@@ -56,9 +56,19 @@ async fn availability_reports_unsupported_host_without_spawning_choco() {
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[ignore = "requires a real Chocolatey installation"]
-async fn real_chocolatey_availability_smoke() {
+async fn real_chocolatey_read_only_smoke() {
     let manager = ChocolateyManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
 
     assert!(manager.availability(&config).await.unwrap().is_available());
+    let packages = manager
+        .installed(&config)
+        .await
+        .expect("read Chocolatey installed inventory");
+    assert!(!packages.is_empty());
+    assert!(packages.iter().all(|package| {
+        package.manager_id == *manager.descriptor().id()
+            && package.scope == updater_manager_api::PackageScope::System
+            && package.origin.as_ref().map(|origin| origin.name.as_str()) == Some("Chocolatey")
+    }));
 }

@@ -54,9 +54,13 @@ async fn availability_reports_the_unsupported_host_without_spawning_winget() {
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[ignore = "requires a real Windows App Installer installation"]
-async fn real_winget_availability_smoke() {
+async fn real_winget_read_only_smoke() {
     let manager = WingetManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
 
     assert!(manager.availability(&config).await.unwrap().is_available());
+    manager
+        .installed(&config)
+        .await
+        .expect("read Winget installed inventory");
 }

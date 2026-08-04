@@ -51,9 +51,13 @@ async fn availability_reports_the_unsupported_host_without_spawning_scoop() {
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[ignore = "requires a real Scoop installation"]
-async fn real_scoop_availability_smoke() {
+async fn real_scoop_read_only_smoke() {
     let manager = ScoopManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone());
 
     assert!(manager.availability(&config).await.unwrap().is_available());
+    manager
+        .installed(&config)
+        .await
+        .expect("read Scoop installed inventory");
 }

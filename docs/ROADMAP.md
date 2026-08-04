@@ -299,6 +299,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 写操作统一添加 `--yes --no-progress`，descriptor 明确声明 RequiresElevation；不会把 Chocolatey 的 machine-wide 安装伪装成 Scoop 的 user/global 语义。
 - 新增 parser、更新 identity、command argv、descriptor、非 Windows UnsupportedPlatform 和 Windows CI offline contract；真实 Chocolatey availability 继续作为 Windows ignored smoke。
 
+当前进度（Iteration 056已完成）：
+
+- Windows CI 对 runner 预装的 Chocolatey 显式运行 ignored read-only smoke，真实验证 availability、`choco list --limit-output` inventory、system scope 和 origin，不再只依赖离线 fixture。
+- Winget 与 Scoop 的真实 smoke 扩展为 availability 加 installed inventory；Hosted runner 若提供对应 CLI 就执行，否则输出明确 skip 记录，不通过安装额外工具改变 runner 状态。
+- 所有真实 smoke 仍需显式 `--ignored --exact`，普通 workspace tests 保持完全离线；CI 不执行 search、updates 或任何 install/update/uninstall 写操作。
+- 新增 Windows smoke 迭代文档和 CI 门禁；继续扩展 manager 前至少已有一个 Windows system/application manager 的真实只读路径由 hosted runner 持续覆盖。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
