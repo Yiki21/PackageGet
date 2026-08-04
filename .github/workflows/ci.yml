@@ -84,6 +84,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --lib --locked
 
+      - name: Run Scoop Windows offline contract tests
+        if: runner.os == 'Windows'
+        run: cargo test -p updater-managers --test scoop_contract --locked
+
       - name: Run Cargo Windows offline contract tests
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test cargo_contract --locked

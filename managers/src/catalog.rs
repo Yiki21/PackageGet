@@ -5,7 +5,8 @@ use updater_manager_api::{PackageManager, Platform};
 use crate::{
     AptManager, CargoManager, ComposerGlobalManager, DnfManager, DotnetToolManager, FlatpakManager,
     GoManager, HomebrewManager, NixProfileManager, NpmManager, PacmanManager, PipxManager,
-    PnpmManager, RubyGemsManager, SnapManager, UvManager, WingetManager, ZypperManager,
+    PnpmManager, RubyGemsManager, ScoopManager, SnapManager, UvManager, WingetManager,
+    ZypperManager,
 };
 
 /// Creates the direct built-in package managers for the current target.
@@ -37,6 +38,7 @@ fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
         Arc::new(PacmanManager::new()),
         Arc::new(ZypperManager::new()),
         Arc::new(WingetManager::new()),
+        Arc::new(ScoopManager::new()),
         Arc::new(FlatpakManager::new()),
         Arc::new(SnapManager::new()),
         Arc::new(HomebrewManager::new()),

@@ -265,6 +265,7 @@ fn platform_catalogs_only_include_advertised_managers() {
         windows,
         [
             "builtin:winget",
+            "builtin:scoop",
             "builtin:cargo",
             "builtin:go",
             "builtin:npm",

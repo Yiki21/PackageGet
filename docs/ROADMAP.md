@@ -262,6 +262,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 只有 managers draft 的变化才会触发 manager data reload、Health generation 失效和旧结果清理；配置页面的职责边界现在同时体现在 UI 和状态生命周期上。
 - 新增回归测试覆盖应用偏好保存与丢弃路径；updater UI 定向测试共 69 项通过。
 
+当前进度（Iteration 054已完成）：
+
+- 开始扩展 Package Manager 生态，新增 Windows `Scoop` direct manager；首轮覆盖 availability、installed、updates、search、install、update 和 uninstall，并按 descriptor 只注册到 Windows catalog。
+- Scoop installed inventory 使用官方 `scoop export` JSON；status/search 使用带 header 的对象表格解析，保留 bucket source、local/global scope 和 updated 时间，重复 local/global identity 会显式报 protocol error。
+- 写操作保持 user/global scope 和 bucket identity；Scoop 不支持稳定的 version-pinned target，因此该类 target 明确拒绝，不把模糊包名升级成隐式语义。
+- 新增 Scoop parser、命令构造、descriptor、非 Windows UnsupportedPlatform 和 Windows CI offline contract；Linux/macOS catalog 与既有 manager 顺序不变。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
