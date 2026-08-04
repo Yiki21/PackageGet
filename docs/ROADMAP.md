@@ -278,6 +278,12 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - APT、DNF、Pacman、Zypper、Flatpak、Homebrew、Winget、Scoop、Chocolatey 与 Snap 移除重复的 runtime 平台分支；Nix 在私有 profile 校验前复用同一平台 policy，避免不支持平台被误报为配置错误。
 - authoring checklist 明确该入口和离线回归测试；catalog 过滤仍只负责构建当前平台的默认 manager 集合，不再承担 availability 正确性的兜底职责。
 
+当前进度（Iteration 058已完成）：
+
+- Package Managers 页的可添加列表现在只展示 descriptor 支持当前平台的 manager；不支持平台的 built-in 不再出现 Select Path/Add 操作。
+- `AddDetectedManager` 在状态更新层再次拒绝不支持当前平台的 manager，避免旧 UI 消息或自动化调用绕过展示层过滤。
+- 已经存在的 unsupported 配置继续保留并可卸载，保证跨平台迁移和未知配置不会被静默删除；本轮不改变保存时对既有配置的保留策略。
+
 当前进度（Iteration 052已完成）：
 
 - Installed 与 Updates 的详情面板改为用户选择包后再异步请求 metadata；包列表加载不再顺带执行昂贵的单包查询，generation 会丢弃快速切换选择产生的过期结果。

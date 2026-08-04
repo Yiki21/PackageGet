@@ -64,3 +64,4 @@
 | 055 | 已完成 | 阶段 7：Windows Chocolatey manager | [055-chocolatey-manager.md](055-chocolatey-manager.md) |
 | 056 | 已完成 | 阶段 7：Windows manager 真实只读 smoke | [056-windows-manager-smoke.md](056-windows-manager-smoke.md) |
 | 057 | 已完成 | 阶段 7：共享 availability 平台契约 | [057-availability-platform-contract.md](057-availability-platform-contract.md) |
+| 058 | 已完成 | 阶段 7：Package Managers 平台可添加项过滤 | [058-manager-platform-filter.md](058-manager-platform-filter.md) |

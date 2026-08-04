@@ -262,6 +262,9 @@ impl Settings {
                 Action::None
             }
             Message::AddDetectedManager(manager) => {
+                if !catalog.supports_current_platform(&manager) {
+                    return Action::None;
+                }
                 let exists = self.draft.manager(&manager).is_some();
 
                 if !exists {
@@ -823,6 +826,7 @@ impl Settings {
                     .descriptor(manager)
                     .is_some_and(|descriptor| descriptor.category() != ManagerCategory::System)
             })
+            .filter(|manager| catalog.supports_current_platform(manager))
             .filter(|manager| pm_config.manager(manager).is_none())
             .collect();
 
@@ -1502,6 +1506,28 @@ mod tests {
                 .detection_results
                 .contains_key(&manager)
         );
+        assert!(settings.draft.manager(&manager).is_none());
+    }
+
+    #[test]
+    fn unsupported_manager_cannot_be_added_to_the_draft() {
+        let active = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+        let manager = if catalog.supports_current_platform(&manager_id("builtin:winget")) {
+            manager_id("builtin:apt")
+        } else {
+            manager_id("builtin:winget")
+        };
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+
+        let action = settings.update(
+            Message::AddDetectedManager(manager.clone()),
+            &active,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
         assert!(settings.draft.manager(&manager).is_none());
     }
 
