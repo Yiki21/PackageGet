@@ -339,6 +339,11 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - XBPS inventory使用`xbps-query --list-pkgs`，update discovery使用`xbps-install --update --dry-run`的六字段事务格式并只接纳`update`动作。
 - 两个manager的特权写操作均进入固定路径helper；Portage atom与XBPS package name在跨进程边界再次严格校验，自定义executable不会被提升为root。
 
+当前进度（Iteration 063进行中）：
+
+- Portage、XBPS与portable tar显式系统集成按向后兼容功能增量准备发布为`1.2.0`；既有稳定tag保持不可变，资产矩阵仍为17项。
+- workspace、RPM、Arch、README与release notes统一到`1.2.0`；目标tag为`Build-v1.2.0`，tag前需重新通过最终HEAD本地门禁、跨平台CI和Package预构建。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
