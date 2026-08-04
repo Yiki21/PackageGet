@@ -67,3 +67,5 @@
 | 058 | 已完成 | 阶段 7：Package Managers 平台可添加项过滤 | [058-manager-platform-filter.md](058-manager-platform-filter.md) |
 | 059 | 已完成 | 阶段 7：Bun Global manager | [059-bun-global-manager.md](059-bun-global-manager.md) |
 | 060 | 已完成 | 阶段 6/7：1.1.0 功能发布 | [060-1.1.0-release.md](060-1.1.0-release.md) |
+| 061 | 进行中 | 阶段 7：Gentoo Portage manager | [061-gentoo-portage-manager.md](061-gentoo-portage-manager.md) |
+| 062 | 进行中 | 阶段 7：Void Linux XBPS manager | [062-void-xbps-manager.md](062-void-xbps-manager.md) |
