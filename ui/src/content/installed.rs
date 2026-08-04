@@ -38,6 +38,8 @@ pub struct Installed {
     source_query: String,
     /// Package currently shown in the details inspector.
     inspected_package: Option<PackageSelectionKey>,
+    /// On-demand metadata request and result for the current inspector package.
+    package_detail: shared::PackageDetailState,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,15 @@ pub enum Message {
     SortOptionChanged(SortOption),
     /// Package-inspector selection message.
     InspectPackage(ManagerId, String),
+    /// Retry on-demand package metadata loading.
+    RetryPackageInfo(ManagerId, String),
+    /// On-demand package metadata result.
+    PackageInfoLoaded {
+        generation: u64,
+        manager: ManagerId,
+        package_name: String,
+        result: Box<Result<Option<PackageInfo>, String>>,
+    },
     /// Copy text from the inspector.
     CopyInspectorText(String),
     /// Open a validated homepage URL.
@@ -286,9 +297,51 @@ impl Installed {
                 info.sort_by = sort_option;
                 Action::None
             }
-            Message::InspectPackage(manager, package_name) => {
-                self.inspected_package = Some(shared::selection_key(&manager, &package_name));
+            Message::InspectPackage(manager, package_name)
+            | Message::RetryPackageInfo(manager, package_name) => {
+                let key = shared::selection_key(&manager, &package_name);
+                self.inspected_package = Some(key.clone());
                 info.inspector_error = None;
+                let Some(target) = info
+                    .installed_packages
+                    .get(&manager)
+                    .and_then(|(_, packages)| {
+                        packages.iter().find(|package| package.name == package_name)
+                    })
+                    .map(PackageInfo::target)
+                else {
+                    return Action::None;
+                };
+                let Some(config) = pm_config.manager(&manager).cloned() else {
+                    info.inspector_error = Some(format!("manager is not configured: {manager}"));
+                    return Action::None;
+                };
+                let generation = self.package_detail.begin(key);
+                let registry = catalog.registry();
+                Action::Run(
+                    Task::future(shared::load_package_info(registry, config, target)).then(
+                        move |result| {
+                            Task::done(Message::PackageInfoLoaded {
+                                generation,
+                                manager: manager.clone(),
+                                package_name: package_name.clone(),
+                                result: Box::new(result),
+                            })
+                        },
+                    ),
+                )
+            }
+            Message::PackageInfoLoaded {
+                generation,
+                manager,
+                package_name,
+                result,
+            } => {
+                self.package_detail.finish(
+                    generation,
+                    shared::selection_key(&manager, &package_name),
+                    *result,
+                );
                 Action::None
             }
             Message::CopyInspectorText(value) => {
@@ -791,7 +844,7 @@ impl Installed {
     }
 
     fn packages_list_view<'a>(
-        &self,
+        &'a self,
         info: &'a InstalledInfo,
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
@@ -1020,7 +1073,7 @@ impl Installed {
     }
 
     fn package_inspector_view<'a>(
-        &self,
+        &'a self,
         inspected: Option<(ManagerId, &'a PackageInfo)>,
         inspector_error: Option<&'a str>,
         catalog: &'a ManagerCatalog,
@@ -1028,15 +1081,29 @@ impl Installed {
         use crate::content::shared::PackageInspector;
         use iced::widget::{column, text};
 
-        let package = inspected.map(|(manager, package)| PackageInspector {
-            manager,
-            name: &package.name,
-            version: &package.version,
-            available_version: None,
-            description: package.description.as_deref(),
-            size: package.size,
-            install_date: package.install_date.as_deref(),
-            homepage: package.homepage.as_deref(),
+        let retry_info = inspected.as_ref().and_then(|(manager, package)| {
+            let key = shared::selection_key(manager, &package.name);
+            self.package_detail
+                .error(&key)
+                .map(|_| Message::RetryPackageInfo(manager.clone(), package.name.clone()))
+        });
+        let package = inspected.map(|(manager, package)| {
+            let key = shared::selection_key(&manager, &package.name);
+            let displayed = self.package_detail.package(&key).unwrap_or(package);
+            PackageInspector {
+                manager,
+                name: &displayed.name,
+                version: &displayed.version,
+                available_version: None,
+                description: displayed.description.as_deref(),
+                size: displayed.size,
+                install_date: displayed.install_date.as_deref(),
+                homepage: displayed.homepage.as_deref(),
+                scope: displayed.scope,
+                origin: displayed.origin.as_ref(),
+                is_loading: self.package_detail.is_loading(&key),
+                detail_error: self.package_detail.error(&key),
+            }
         });
         let mut content = column![shared::package_inspector(
             package,
@@ -1044,6 +1111,7 @@ impl Installed {
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::OpenHomepage,
+            retry_info,
         )]
         .height(iced::Length::Fill);
         if let Some(error) = inspector_error {

@@ -229,6 +229,36 @@ impl PackageManager for DnfManager {
         Ok(parse_installed_packages(&stdout, self.descriptor.id()))
     }
 
+    async fn package_info(
+        &self,
+        config: &ManagerConfig,
+        target: &PackageTarget,
+    ) -> ManagerResult<Option<PackageInfo>> {
+        self.validate_config(config)?;
+        if &target.manager_id != self.descriptor.id() {
+            return Err(ManagerError::new(
+                ManagerErrorKind::Protocol,
+                "dnf package target belongs to another manager",
+            )
+            .with_detail(&target.name));
+        }
+
+        let spec = CommandSpec::new(RPM_COMMAND).args([
+            OsString::from("-q"),
+            OsString::from("--queryformat"),
+            OsString::from(RPM_QUERY_FORMAT),
+            OsString::from(&target.name),
+        ]);
+        let output = run_output(&spec).await?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let stdout = decode_stdout(output, "dnf package information is not valid UTF-8")?;
+        Ok(parse_installed_packages(&stdout, self.descriptor.id())
+            .into_iter()
+            .next())
+    }
+
     async fn count_installed(&self, config: &ManagerConfig) -> ManagerResult<usize> {
         self.validate_config(config)?;
         let spec = CommandSpec::new(RPM_COMMAND).args(["-qa", "--queryformat", "%{NAME}\n"]);

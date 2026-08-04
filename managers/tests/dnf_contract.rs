@@ -109,6 +109,12 @@ async fn mismatched_config_and_targets_are_rejected_before_progress() {
 
     assert_eq!(target_error.kind(), ManagerErrorKind::Protocol);
     assert!(events.lock().expect("progress lock").is_empty());
+
+    let info_error = manager
+        .package_info(&config, &target)
+        .await
+        .expect_err("reject mismatched package information target");
+    assert_eq!(info_error.kind(), ManagerErrorKind::Protocol);
 }
 
 #[tokio::test]

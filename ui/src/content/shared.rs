@@ -2,14 +2,15 @@ use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
     path::PathBuf,
+    sync::Arc,
 };
 
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Border, Element, Length};
-use updater_core::Config;
+use updater_core::{Config, ManagerRegistry};
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerId, PackageInfo, PackageTarget,
-    Platform,
+    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerId, PackageInfo,
+    PackageOrigin, PackageScope, PackageTarget, Platform,
 };
 
 use crate::{icon, manager_catalog::ManagerCatalog, theme};
@@ -153,6 +154,65 @@ pub struct PackageInspector<'a> {
     pub size: Option<u64>,
     pub install_date: Option<&'a str>,
     pub homepage: Option<&'a str>,
+    pub scope: PackageScope,
+    pub origin: Option<&'a PackageOrigin>,
+    pub is_loading: bool,
+    pub detail_error: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PackageDetailState {
+    generation: u64,
+    key: Option<PackageSelectionKey>,
+    request: Option<(u64, PackageSelectionKey)>,
+    package: Option<PackageInfo>,
+    error: Option<String>,
+}
+
+impl PackageDetailState {
+    pub fn begin(&mut self, key: PackageSelectionKey) -> u64 {
+        self.generation = self.generation.saturating_add(1);
+        self.key = Some(key.clone());
+        self.request = Some((self.generation, key));
+        self.package = None;
+        self.error = None;
+        self.generation
+    }
+
+    pub fn finish(
+        &mut self,
+        generation: u64,
+        key: PackageSelectionKey,
+        result: Result<Option<PackageInfo>, String>,
+    ) -> bool {
+        if self.request.as_ref() != Some(&(generation, key.clone())) {
+            return false;
+        }
+        self.request = None;
+        match result {
+            Ok(package) => self.package = package,
+            Err(error) => self.error = Some(error),
+        }
+        true
+    }
+
+    pub fn package(&self, key: &PackageSelectionKey) -> Option<&PackageInfo> {
+        (self.key.as_ref() == Some(key))
+            .then_some(self.package.as_ref())
+            .flatten()
+    }
+
+    pub fn is_loading(&self, key: &PackageSelectionKey) -> bool {
+        self.request
+            .as_ref()
+            .is_some_and(|(_, request_key)| request_key == key)
+    }
+
+    pub fn error(&self, key: &PackageSelectionKey) -> Option<&str> {
+        (self.key.as_ref() == Some(key))
+            .then_some(self.error.as_deref())
+            .flatten()
+    }
 }
 
 pub struct ManagerSectionStyle {
@@ -162,6 +222,20 @@ pub struct ManagerSectionStyle {
 
 pub fn selection_key(manager: &ManagerId, package_name: &str) -> PackageSelectionKey {
     (manager.clone(), package_name.to_owned())
+}
+
+pub async fn load_package_info(
+    registry: Arc<ManagerRegistry>,
+    config: ManagerConfig,
+    target: PackageTarget,
+) -> Result<Option<PackageInfo>, String> {
+    let manager = registry
+        .get(&target.manager_id)
+        .ok_or_else(|| format!("manager is not registered: {}", target.manager_id))?;
+    manager
+        .package_info(&config, &target)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub fn package_summary<'a, Message>(package: &'a PackageInfo) -> iced::widget::Column<'a, Message>
@@ -416,7 +490,7 @@ where
                 .size(13)
                 .font(theme::FONT_SEMIBOLD)
                 .width(Length::Fill),
-            text(if state.expanded { "^" } else { "v" })
+            text(if state.expanded { "▴" } else { "▾" })
                 .size(14)
                 .font(theme::FONT_SEMIBOLD)
                 .style(theme::text_on_surface_muted),
@@ -553,7 +627,7 @@ fn manager_source_row<'a, Message>(
     on_toggle: fn(ManagerId, bool) -> Message,
 ) -> Element<'a, Message>
 where
-    Message: 'a,
+    Message: Clone + 'a,
 {
     let manager = entry.manager;
     let display_name = catalog.display_name(&manager).to_owned();
@@ -578,38 +652,40 @@ where
             }
             ManagerSourceStatus::Failed => ("Failed".to_owned(), theme::text_error),
         };
-    let checkbox = iced::widget::checkbox(selected)
+    let checkbox: Element<'_, Message> = iced::widget::checkbox(selected)
         .size(18)
-        .style(checkbox_style(row_disabled));
-    let checkbox: Element<'_, Message> = if row_disabled {
-        checkbox.into()
-    } else {
-        let toggle_manager = manager.clone();
-        checkbox
-            .on_toggle(move |selected| on_toggle(toggle_manager.clone(), selected))
-            .into()
-    };
+        .style(checkbox_style(row_disabled))
+        .into();
 
-    container(
-        row![
-            icon::manager_logo(&manager, &display_name, 28.0),
-            column![
-                text(display_name)
-                    .size(13)
-                    .font(theme::FONT_SEMIBOLD)
-                    .style(theme::text_on_surface),
-                text(detail).size(12).style(detail_style),
-            ]
-            .spacing(1)
-            .width(Length::Fill),
-            checkbox,
+    let content = row![
+        icon::manager_logo(&manager, &display_name, 28.0),
+        column![
+            text(display_name)
+                .size(13)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_surface),
+            text(detail).size(12).style(detail_style),
         ]
-        .spacing(theme::spacing::SM)
-        .align_y(Alignment::Center),
-    )
-    .padding([6, 8])
-    .width(Length::Fill)
-    .into()
+        .spacing(1)
+        .width(Length::Fill),
+        checkbox,
+    ]
+    .spacing(theme::spacing::SM)
+    .align_y(Alignment::Center);
+
+    if row_disabled {
+        return container(content)
+            .padding([6, 8])
+            .width(Length::Fill)
+            .into();
+    }
+
+    button(content)
+        .padding([6, 8])
+        .width(Length::Fill)
+        .style(theme::list_row(selected))
+        .on_press(on_toggle(manager, !selected))
+        .into()
 }
 
 fn picker_action_button<'a, Message>(
@@ -885,6 +961,7 @@ pub fn package_inspector<'a, Message>(
     on_copy_name: impl FnOnce(String) -> Message,
     on_copy_homepage: impl FnOnce(String) -> Message,
     on_open_homepage: impl Fn(String) -> Message + Copy + 'a,
+    on_retry_info: Option<Message>,
 ) -> Element<'a, Message>
 where
     Message: 'a + Clone,
@@ -933,6 +1010,31 @@ where
                 .wrapping(text::Wrapping::WordOrGlyph),
         );
     }
+    if package.is_loading {
+        details = details.push(
+            text("Loading package information...")
+                .size(12)
+                .style(theme::text_accent),
+        );
+    }
+    if let Some(error) = package.detail_error {
+        let mut error_details = column![
+            text(format!("Package information could not be loaded: {error}"))
+                .size(12)
+                .style(theme::text_error)
+                .wrapping(text::Wrapping::WordOrGlyph)
+        ]
+        .spacing(theme::spacing::XS);
+        if let Some(message) = on_retry_info {
+            error_details = error_details.push(
+                button(text("Retry").size(12))
+                    .padding([6, 10])
+                    .style(theme::secondary_button(true))
+                    .on_press(message),
+            );
+        }
+        details = details.push(error_details);
+    }
 
     details = details
         .push(divider())
@@ -948,6 +1050,28 @@ where
         .filter(|value| !value.trim().is_empty())
     {
         details = details.push(inspector_field("Installed", date, false));
+    }
+    details = details.push(inspector_field(
+        "Scope",
+        package_scope_label(package.scope),
+        false,
+    ));
+    details = details.push(inspector_field(
+        "Manager ID",
+        package.manager.as_str(),
+        true,
+    ));
+    if let Some(origin) = package.origin {
+        if !origin.name.trim().is_empty() {
+            details = details.push(inspector_field("Source", origin.name.as_str(), false));
+        }
+        if let Some(reference) = origin
+            .reference
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            details = details.push(inspector_field("Source reference", reference, true));
+        }
     }
     if let Some(homepage) = package.homepage.filter(|value| !value.trim().is_empty()) {
         details = details.push(
@@ -985,6 +1109,16 @@ where
         .height(iced::Length::Fill)
         .style(theme::scrollable_style)
         .into()
+}
+
+fn package_scope_label(scope: PackageScope) -> &'static str {
+    match scope {
+        PackageScope::System => "System",
+        PackageScope::User => "User",
+        PackageScope::Project => "Project",
+        PackageScope::Unknown => "Unknown",
+        _ => "Unknown",
+    }
 }
 
 fn divider<'a, Message>() -> iced::widget::Container<'a, Message> {
@@ -1195,8 +1329,11 @@ where
 mod tests {
     use std::ffi::{OsStr, OsString};
 
-    use super::{DesktopOpenCommand, DesktopTargetKind, desktop_open_commands, validate_http_url};
-    use updater_manager_api::{ManagerCapability, ManagerConfig, ManagerId, Platform};
+    use super::{
+        DesktopOpenCommand, DesktopTargetKind, PackageDetailState, desktop_open_commands,
+        selection_key, validate_http_url,
+    };
+    use updater_manager_api::{ManagerCapability, ManagerConfig, ManagerId, PackageInfo, Platform};
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
@@ -1241,6 +1378,29 @@ mod tests {
             ),
             Some(packages[0].clone())
         );
+    }
+
+    #[test]
+    fn package_detail_state_rejects_stale_async_results() {
+        let manager = manager_id("builtin:dnf");
+        let first_key = selection_key(&manager, "first");
+        let second_key = selection_key(&manager, "second");
+        let mut state = PackageDetailState::default();
+
+        let first_generation = state.begin(first_key.clone());
+        let second_generation = state.begin(second_key.clone());
+        let stale_package = PackageInfo::new(manager.clone(), "first", "1.0");
+        let current_package = PackageInfo::new(manager, "second", "2.0");
+
+        assert!(!state.finish(first_generation, first_key, Ok(Some(stale_package))));
+        assert!(state.is_loading(&second_key));
+        assert!(state.finish(
+            second_generation,
+            second_key.clone(),
+            Ok(Some(current_package.clone())),
+        ));
+        assert_eq!(state.package(&second_key), Some(&current_package));
+        assert!(!state.is_loading(&second_key));
     }
 
     #[test]

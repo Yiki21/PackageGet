@@ -272,6 +272,19 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - Snap 与 Nix 的直接 availability contract 现在会在不支持的平台返回结构化 UnsupportedPlatform；新增 manager 必须先完成 descriptor、config validation、platform availability、capability contract 和离线 fixture，再接入 UI。
 - workspace 全量格式、check、test、clippy 和 build 门禁均已通过；本节变更应随下一次 release notes 一并发布。
 
+当前进度（Iteration 052已完成）：
+
+- Installed 与 Updates 的详情面板改为用户选择包后再异步请求 metadata；包列表加载不再顺带执行昂贵的单包查询，generation 会丢弃快速切换选择产生的过期结果。
+- `PackageManager::package_info` 提供 manager-owned 的可选只读扩展点，默认不增加额外命令；DNF 首先通过单包 RPM query 返回 description、size、install date、homepage 和 system scope，Updates 在请求期间继续复用 installed cache。
+- Package Manager source picker 使用方向一致的 `▴`/`▾` chevron；可用 manager 的整行现在都是 toggle target，右侧 checkbox 只表达当前状态，不再要求精确点击小方框。
+- 新增异步详情 stale-result 与 DNF target identity 回归测试；后续 manager 只在能够可靠、低副作用地读取详情时实现该扩展点。
+
+当前进度（Iteration 053已完成）：
+
+- Package details 的异步请求失败后，Installed 与 Updates inspector 直接提供 Retry；Retry 复用同一 selection key、generation 和 manager-owned `package_info` 路径，不通过重新加载整个 package list 恢复。
+- Finding 等没有按需详情请求的页面不显示误导性的 Retry；配置错误仍由页面级错误展示，只有真实的 detail request failure 才显示重试动作。
+- manager authoring checklist 明确 `package_info` 的低副作用边界、离线 contract test 要求和 UI retry 语义，避免新 manager 在列表扫描阶段偷偷增加逐包命令。
+
 当前进度（Iteration 054已完成）：
 
 - 开始扩展 Package Manager 生态，新增 Windows `Scoop` direct manager；首轮覆盖 availability、installed、updates、search、install、update 和 uninstall，并按 descriptor 只注册到 Windows catalog。

@@ -398,6 +398,7 @@ impl Content {
                 .updates
                 .view(
                     updates_info,
+                    installed_info,
                     pm_config,
                     catalog,
                     show_inspector,

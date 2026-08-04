@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet};
 use iced::Task;
 use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
 use updater_manager_api::{
-    ManagerCapability, ManagerId, PackageAction, PackageTarget, PackageUpdate,
+    ManagerCapability, ManagerId, PackageAction, PackageInfo, PackageTarget, PackageUpdate,
 };
 
 use crate::{
+    content::InstalledInfo,
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
@@ -29,6 +30,8 @@ pub struct Updates {
     source_query: String,
     /// Update currently shown in the details inspector.
     inspected_package: Option<PackageSelectionKey>,
+    /// On-demand metadata request and result for the current inspector package.
+    package_detail: shared::PackageDetailState,
     /// Last inspector action error shown in UI.
     inspector_error: Option<String>,
     /// Sources still refreshing for an Update All preflight.
@@ -114,6 +117,15 @@ pub enum Message {
     RetryLoad(ManagerId),
     /// Show an update in the package inspector.
     InspectPackage(ManagerId, String),
+    /// Retry on-demand package metadata loading.
+    RetryPackageInfo(ManagerId, String),
+    /// On-demand package metadata result.
+    PackageInfoLoaded {
+        generation: u64,
+        manager: ManagerId,
+        package_name: String,
+        result: Box<Result<Option<PackageInfo>, String>>,
+    },
     /// Copy text from the inspector.
     CopyInspectorText(String),
     /// Refresh all sources and prepare an Update All plan.
@@ -286,9 +298,53 @@ impl Updates {
                 self.search_query = query;
                 Action::None
             }
-            Message::InspectPackage(pm_type, package_name) => {
-                self.inspected_package = Some(shared::selection_key(&pm_type, &package_name));
+            Message::InspectPackage(pm_type, package_name)
+            | Message::RetryPackageInfo(pm_type, package_name) => {
+                let key = shared::selection_key(&pm_type, &package_name);
+                self.inspected_package = Some(key.clone());
                 self.inspector_error = None;
+                let Some(target) = info
+                    .updates_by_manager
+                    .get(&pm_type)
+                    .and_then(|(_, packages)| {
+                        packages
+                            .iter()
+                            .find(|package| package.target.name == package_name)
+                    })
+                    .map(|package| package.target.clone())
+                else {
+                    return Action::None;
+                };
+                let Some(config) = pm_config.manager(&pm_type).cloned() else {
+                    self.inspector_error = Some(format!("manager is not configured: {pm_type}"));
+                    return Action::None;
+                };
+                let generation = self.package_detail.begin(key);
+                let registry = catalog.registry();
+                Action::Run(
+                    Task::future(shared::load_package_info(registry, config, target)).then(
+                        move |result| {
+                            Task::done(Message::PackageInfoLoaded {
+                                generation,
+                                manager: pm_type.clone(),
+                                package_name: package_name.clone(),
+                                result: Box::new(result),
+                            })
+                        },
+                    ),
+                )
+            }
+            Message::PackageInfoLoaded {
+                generation,
+                manager,
+                package_name,
+                result,
+            } => {
+                self.package_detail.finish(
+                    generation,
+                    shared::selection_key(&manager, &package_name),
+                    *result,
+                );
                 Action::None
             }
             Message::CopyInspectorText(value) => {
@@ -699,6 +755,7 @@ impl Updates {
     pub fn view<'a>(
         &'a self,
         info: &'a UpdatesInfo,
+        installed_info: &'a InstalledInfo,
         pm_config: &updater_core::Config,
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
@@ -789,7 +846,13 @@ impl Updates {
             toolbar,
             self.batch_actions_view(info, catalog),
             self.update_confirmation_view(catalog),
-            self.updates_list_view(info, catalog, show_inspector, inspector_drawer),
+            self.updates_list_view(
+                info,
+                installed_info,
+                catalog,
+                show_inspector,
+                inspector_drawer,
+            ),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -909,6 +972,7 @@ impl Updates {
     fn updates_list_view<'a>(
         &'a self,
         info: &'a UpdatesInfo,
+        installed_info: &'a InstalledInfo,
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
@@ -983,16 +1047,43 @@ impl Updates {
                 .and_then(|(_, packages)| {
                     packages.iter().find(|package| package.target.name == *name)
                 })
-                .map(|package| crate::content::shared::PackageInspector {
-                    manager: manager.clone(),
-                    name: &package.target.name,
-                    version: &package.current_version,
-                    available_version: Some(&package.available_version),
-                    description: None,
-                    size: None,
-                    install_date: None,
-                    homepage: None,
+                .map(|package| {
+                    let key = shared::selection_key(manager, &package.target.name);
+                    let installed = self.package_detail.package(&key).or_else(|| {
+                        installed_info
+                            .installed_packages
+                            .get(manager)
+                            .and_then(|(_, packages)| {
+                                packages
+                                    .iter()
+                                    .find(|installed| installed.name == package.target.name)
+                            })
+                    });
+                    crate::content::shared::PackageInspector {
+                        manager: manager.clone(),
+                        name: &package.target.name,
+                        version: &package.current_version,
+                        available_version: Some(&package.available_version),
+                        description: installed.and_then(|package| package.description.as_deref()),
+                        size: installed.and_then(|package| package.size),
+                        install_date: installed.and_then(|package| package.install_date.as_deref()),
+                        homepage: installed.and_then(|package| package.homepage.as_deref()),
+                        scope: installed.map_or(package.target.scope, |package| package.scope),
+                        origin: installed
+                            .and_then(|package| package.origin.as_ref())
+                            .or(package.target.origin.as_ref()),
+                        is_loading: self.package_detail.is_loading(&key),
+                        detail_error: self
+                            .package_detail
+                            .error(&key)
+                            .or(self.inspector_error.as_deref()),
+                    }
                 })
+        });
+        let retry_info = self.inspected_package.as_ref().and_then(|(manager, name)| {
+            self.package_detail
+                .error(&shared::selection_key(manager, name))
+                .map(|_| Message::RetryPackageInfo(manager.clone(), name.clone()))
         });
         let inspector = shared::package_inspector(
             inspected,
@@ -1000,6 +1091,7 @@ impl Updates {
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::CopyInspectorText,
+            retry_info,
         );
 
         if !show_inspector {

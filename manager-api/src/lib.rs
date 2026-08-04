@@ -972,6 +972,23 @@ pub trait PackageManager: Send + Sync {
         Err(ManagerError::unsupported(ManagerCapability::Installed))
     }
 
+    /// Loads richer metadata for one package when the manager can provide it.
+    ///
+    /// This optional read-only operation is intended for on-demand inspectors;
+    /// implementations should avoid performing it while loading package lists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified manager, command, network, or parsing error. The
+    /// default returns no additional metadata.
+    async fn package_info(
+        &self,
+        _config: &ManagerConfig,
+        _target: &PackageTarget,
+    ) -> ManagerResult<Option<PackageInfo>> {
+        Ok(None)
+    }
+
     /// Counts installed packages.
     ///
     /// # Errors

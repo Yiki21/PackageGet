@@ -817,6 +817,10 @@ impl Finding {
                     size: package.size,
                     install_date: package.install_date.as_deref(),
                     homepage: package.homepage.as_deref(),
+                    scope: package.scope,
+                    origin: package.origin.as_ref(),
+                    is_loading: false,
+                    detail_error: None,
                 })
         });
         let mut inspector = column![shared::package_inspector(
@@ -825,6 +829,7 @@ impl Finding {
             Message::CopyInspectorText,
             Message::CopyInspectorText,
             Message::OpenHomepage,
+            None,
         )]
         .height(iced::Length::Fill);
         if let Some(error) = &self.inspector_error {
