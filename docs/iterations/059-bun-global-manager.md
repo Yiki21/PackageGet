@@ -1,7 +1,7 @@
 # Iteration 059：Bun Global manager
 
 - 日期：2026-08-04
-- 状态：进行中
+- 状态：已完成
 - ROADMAP阶段：阶段7——扩展 Package Manager生态
 
 ## 目标
@@ -22,9 +22,9 @@
 
 - [x] 新增直接`BunManager`实现、三平台catalog注册与Bun品牌标识。
 - [x] 添加installed/outdated解析、空global root、scoped identity、重复/畸形输出和写命令argv离线测试。
-- [ ] 在Windows与macOS原生CI执行同一Bun contract；真实宿主Bun smoke保持显式ignored且只读。
+- [x] 在Windows与macOS原生CI执行同一Bun contract；真实宿主Bun smoke保持显式ignored且只读。
 - [x] 更新README、第三方notice、ROADMAP与迭代索引。
-- [ ] 通过本地串行format/check/test/clippy/build门禁和原生CI。
+- [x] 通过本地串行format/check/test/clippy/build门禁和原生CI。
 
 ## 实施结果
 
@@ -33,6 +33,7 @@
 - installed严格解析官方global tree，updates严格解析`Package / Current / Update / Latest`表格；无global manifest或lockfile的官方空状态返回空inventory，其他退出码保留typed error。
 - 写操作冻结manager ID、current-user scope、`Bun global`/`package:<name>` origin和semver target，并保留scoped package identity；version-pinned uninstall和file/git/workspace spec明确拒绝。
 - Linux本机Bun 1.3.14在隔离global目录中复核了真实list/outdated输出；仓库fake fixture覆盖Unix、Windows batch和macOS runner可复用的同一argv合同。
+- GitHub Actions run [`30911656819`](https://github.com/Yiki21/PackageGet/actions/runs/30911656819)通过Linux质量门禁、Windows全部manager contract与macOS Bun/开发工具contract；Windows fixture将UTF-8 tree/table数据与纯ASCII batch调度分离，避免`cmd.exe`误解析。
 
 ## 非目标
 
@@ -48,7 +49,7 @@
 - [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
 - [x] `cargo build --workspace --locked --jobs 1`
 - [x] Linux本机真实Bun只读smoke。
-- [ ] GitHub Actions原生Windows/macOS Bun离线contract。
+- [x] GitHub Actions原生Windows/macOS Bun离线contract（run `30911656819`）。
 
 ## 官方 CLI 依据
 

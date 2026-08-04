@@ -313,17 +313,23 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 
 当前进度（Iteration 056已完成）：
 
-- Windows CI 对 runner 预装的 Chocolatey 显式运行 ignored read-only smoke，真实验证 availability、`choco list --limit-output` inventory、system scope 和 origin，不再只依赖离线 fixture。
+- Windows CI 在 runner 暴露 Chocolatey 时显式运行 ignored read-only smoke，真实验证 availability、`choco list --limit-output` inventory、system scope 和 origin；runner image 不再包含 `choco` 时明确 skip，且不阻断其他原生 contract。
 - Winget 与 Scoop 的真实 smoke 扩展为 availability 加 installed inventory；Hosted runner 若提供对应 CLI 就执行，否则输出明确 skip 记录，不通过安装额外工具改变 runner 状态。
 - 所有真实 smoke 仍需显式 `--ignored --exact`，普通 workspace tests 保持完全离线；CI 不执行 search、updates 或任何 install/update/uninstall 写操作。
 - 新增 Windows smoke 迭代文档和 CI 门禁；继续扩展 manager 前至少已有一个 Windows system/application manager 的真实只读路径由 hosted runner 持续覆盖。
 
-当前进度（Iteration 059进行中）：
+当前进度（Iteration 059已完成）：
 
 - 新增 Bun Global direct manager，支持 Linux、Windows 和 macOS 的 current-user 全局包；catalog、README、Arch optdepends 和 Bun 品牌标识已同步。
 - installed 使用 `bun list --global --depth 0`，updates 使用只读 `bun outdated --global`；空 global manifest/lockfile 状态映射为空 inventory，Search 保持未广告。
 - 写操作固定为 `bun add --global`、`bun update --global` 和 `bun remove --global`，保留 scoped package、semver、typed origin 和 user scope 合同，拒绝 version-pinned uninstall 及 file/git/workspace spec。
-- 离线 contract 覆盖 Unix、Windows batch、空状态、重复/畸形输出和写命令 argv；Linux 本机 Bun 1.3.14 真实隔离 smoke 通过，workspace 串行门禁已通过，原生 Windows/macOS contract CI 待本轮 push 后记录。
+- 离线 contract 覆盖 Unix、Windows batch、空状态、重复/畸形输出和写命令 argv；Linux 本机 Bun 1.3.14 真实隔离 smoke通过，workspace串行门禁及原生Windows/macOS contract CI run `30911656819`全部通过。
+
+当前进度（Iteration 060进行中）：
+
+- `Build-v1.0.0`保持不可变；当前main在其后完成Package Managers管理/健康页、Scoop、Chocolatey、Bun Global及manager contract收口，按向后兼容功能增量统一升为`1.1.0`。
+- workspace、RPM、Arch、README、release notes与metadata preflight统一到`1.1.0`；目标tag为`Build-v1.1.0`，继续发布17个跨平台资产及同一`SHA256SUMS`。
+- tag只会在最终HEAD本地串行门禁、Linux/Windows/macOS CI和main分支Package预构建全部通过后创建；公开Release仍需回下载校验资产清单与checksum。
 
 ### 阶段 7：扩展 Package Manager 生态
 
