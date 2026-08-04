@@ -63,10 +63,21 @@ exit 30
 fn fake_bun(log: &Path) -> (TempDir, PathBuf) {
     let directory = tempdir().expect("create fake Bun directory");
     let executable = directory.path().join("bun.cmd");
+    let inventory = directory.path().join("inventory.txt");
+    let outdated = directory.path().join("outdated.txt");
+    fs::write(
+        &inventory,
+        "C:\\Users\\test\\.bun\\install\\global node_modules (2)\n├── @scope/tool@1.0.0\n└── plain@2.0.0\n",
+    )
+    .expect("write fake Bun inventory");
+    fs::write(
+        &outdated,
+        "bun outdated v1.3.14 (fixture)\n|-------------------------------------------|\n| Package     | Current | Update | Latest   |\n|-------------|---------|--------|----------|\n| @scope/tool | 1.0.0   | 1.1.0  | 2.0.0    |\n| plain       | 2.0.0   | 2.0.0  | 2.0.0    |\n|-------------------------------------------|\n",
+    )
+    .expect("write fake Bun outdated table");
     let script = format!(
         r#"@echo off
 if "%1"=="--version" goto version
-chcp 65001 >nul
 if "%1"=="list" goto list
 if "%1"=="outdated" goto outdated
 if "%1"=="add" goto write
@@ -79,25 +90,21 @@ echo 1.3.14
 exit /b 0
 
 :list
-echo C:\Users\test\.bun\install\global node_modules ^(2^)
-echo ├── @scope/tool@1.0.0
-echo └── plain@2.0.0
+chcp 65001 >nul
+type "{}"
 exit /b 0
 
 :outdated
-echo bun outdated v1.3.14 ^(fixture^)
-echo ^|-------------------------------------------^|
-echo ^| Package     ^| Current ^| Update ^| Latest   ^|
-echo ^|-------------^|---------^|--------^|----------^|
-echo ^| @scope/tool ^| 1.0.0   ^| 1.1.0  ^| 2.0.0    ^|
-echo ^| plain       ^| 2.0.0   ^| 2.0.0  ^| 2.0.0    ^|
-echo ^|-------------------------------------------^|
+chcp 65001 >nul
+type "{}"
 exit /b 0
 
 :write
 echo %*>>"{}"
 exit /b 0
 "#,
+        inventory.display(),
+        outdated.display(),
         log.display()
     );
     fs::write(&executable, script).expect("write fake Bun command file");
