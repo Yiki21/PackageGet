@@ -236,6 +236,7 @@ fn platform_catalogs_only_include_advertised_managers() {
         [
             "builtin:winget",
             "builtin:scoop",
+            "builtin:chocolatey",
             "builtin:cargo",
             "builtin:go",
             "builtin:npm",

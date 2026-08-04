@@ -61,3 +61,4 @@
 | 049 | 已完成 | 阶段 7：Package Manager 配置职责收敛 | [049-manager-settings-consolidation.md](049-manager-settings-consolidation.md) |
 | 050 | 已完成 | 阶段 7：应用偏好与 Manager 状态生命周期隔离 | [050-application-preference-lifecycle.md](050-application-preference-lifecycle.md) |
 | 054 | 已完成 | 阶段 7：Windows Scoop manager | [054-scoop-manager.md](054-scoop-manager.md) |
+| 055 | 已完成 | 阶段 7：Windows Chocolatey manager | [055-chocolatey-manager.md](055-chocolatey-manager.md) |

@@ -88,6 +88,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test scoop_contract --locked
 
+      - name: Run Chocolatey Windows offline contract tests
+        if: runner.os == 'Windows'
+        run: cargo test -p updater-managers --test chocolatey_contract --locked
+
       - name: Run Cargo Windows offline contract tests
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test cargo_contract --locked

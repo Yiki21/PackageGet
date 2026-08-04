@@ -9,6 +9,7 @@
 mod apt;
 mod cargo;
 mod catalog;
+mod chocolatey;
 mod command;
 mod composer;
 mod dnf;
@@ -32,6 +33,7 @@ mod zypper;
 pub use apt::AptManager;
 pub use cargo::CargoManager;
 pub use catalog::{builtin_managers, builtin_managers_for};
+pub use chocolatey::ChocolateyManager;
 pub use composer::ComposerGlobalManager;
 pub use dnf::DnfManager;
 pub use dotnet::DotnetToolManager;

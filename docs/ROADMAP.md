@@ -292,6 +292,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 写操作保持 user/global scope 和 bucket identity；Scoop 不支持稳定的 version-pinned target，因此该类 target 明确拒绝，不把模糊包名升级成隐式语义。
 - 新增 Scoop parser、命令构造、descriptor、非 Windows UnsupportedPlatform 和 Windows CI offline contract；Linux/macOS catalog 与既有 manager 顺序不变。
 
+当前进度（Iteration 055已完成）：
+
+- 新增 Windows `Chocolatey` direct manager，按 machine scope 覆盖 availability、installed、updates、search、install、upgrade 和 uninstall，并只注册到 Windows catalog。
+- Chocolatey 读取 `--limit-output` 的稳定 pipe 输出，保留 package identity、system scope 和 manager origin；缺少 installed identity、重复 package、未知 scope 或版本锁定 target 都显式拒绝。
+- 写操作统一添加 `--yes --no-progress`，descriptor 明确声明 RequiresElevation；不会把 Chocolatey 的 machine-wide 安装伪装成 Scoop 的 user/global 语义。
+- 新增 parser、更新 identity、command argv、descriptor、非 Windows UnsupportedPlatform 和 Windows CI offline contract；真实 Chocolatey availability 继续作为 Windows ignored smoke。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
