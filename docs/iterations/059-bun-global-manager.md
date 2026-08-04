@@ -20,11 +20,19 @@
 
 ## 范围
 
-- [ ] 新增直接`BunManager`实现、三平台catalog注册与Bun品牌标识。
-- [ ] 添加installed/outdated解析、空global root、scoped identity、重复/畸形输出和写命令argv离线测试。
+- [x] 新增直接`BunManager`实现、三平台catalog注册与Bun品牌标识。
+- [x] 添加installed/outdated解析、空global root、scoped identity、重复/畸形输出和写命令argv离线测试。
 - [ ] 在Windows与macOS原生CI执行同一Bun contract；真实宿主Bun smoke保持显式ignored且只读。
-- [ ] 更新README、第三方notice、ROADMAP与迭代索引。
+- [x] 更新README、第三方notice、ROADMAP与迭代索引。
 - [ ] 通过本地串行format/check/test/clippy/build门禁和原生CI。
+
+## 实施结果
+
+- `BunManager`直接实现`updater-manager-api`，只广告installed、updates、install、update和uninstall；不把`bun pm view`exact metadata伪装成Search。
+- 共享availability入口先执行descriptor平台检查；Bun可执行文件发现覆盖`BUN_INSTALL/bin`和`~/.bun/bin`，catalog在Linux、Windows、macOS保持稳定顺序。
+- installed严格解析官方global tree，updates严格解析`Package / Current / Update / Latest`表格；无global manifest或lockfile的官方空状态返回空inventory，其他退出码保留typed error。
+- 写操作冻结manager ID、current-user scope、`Bun global`/`package:<name>` origin和semver target，并保留scoped package identity；version-pinned uninstall和file/git/workspace spec明确拒绝。
+- Linux本机Bun 1.3.14在隔离global目录中复核了真实list/outdated输出；仓库fake fixture覆盖Unix、Windows batch和macOS runner可复用的同一argv合同。
 
 ## 非目标
 
@@ -34,9 +42,17 @@
 
 ## 验证计划
 
-- `cargo fmt --all -- --check`
-- `cargo check --workspace --all-targets --locked --jobs 1`
-- `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`
-- `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
-- `cargo build --workspace --locked --jobs 1`
-- Linux本机真实Bun只读smoke；GitHub Actions原生Windows/macOS Bun离线contract。
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo check --workspace --all-targets --locked --jobs 1`
+- [x] `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`
+- [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
+- [x] `cargo build --workspace --locked --jobs 1`
+- [x] Linux本机真实Bun只读smoke。
+- [ ] GitHub Actions原生Windows/macOS Bun离线contract。
+
+## 官方 CLI 依据
+
+- [bun add --global](https://bun.com/docs/pm/cli/add#global)
+- [bun outdated](https://bun.com/docs/pm/cli/outdated)
+- [bun update](https://bun.com/docs/pm/cli/update)
+- [bun remove](https://bun.com/docs/pm/cli/remove)

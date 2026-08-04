@@ -19,6 +19,7 @@ depends=(
 )
 makedepends=('cargo' 'clang' 'mold')
 optdepends=(
+  'bun: manage Bun global packages'
   'cargo: manage globally installed Rust crates'
   'composer: manage direct Composer global dependencies'
   'dotnet-sdk: manage current-user .NET global tools'

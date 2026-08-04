@@ -428,6 +428,12 @@ fn manager_search_directories() -> Vec<PathBuf> {
     if let Some(pnpm_home) = env::var_os("PNPM_HOME") {
         push_search_directory(&mut directories, pnpm_home);
     }
+    if let Some(bun_install) = env::var_os("BUN_INSTALL") {
+        let bun_install = PathBuf::from(bun_install);
+        if !bun_install.as_os_str().is_empty() {
+            push_search_directory(&mut directories, bun_install.join("bin"));
+        }
+    }
     if let Some(homebrew_prefix) = env::var_os("HOMEBREW_PREFIX") {
         push_search_directory(&mut directories, PathBuf::from(homebrew_prefix).join("bin"));
     }
@@ -438,6 +444,7 @@ fn manager_search_directories() -> Vec<PathBuf> {
             home.join(".asdf/shims"),
             home.join(".local/share/pnpm"),
             home.join(".local/share/pnpm/bin"),
+            home.join(".bun/bin"),
             home.join(".local/bin"),
             home.join(".cargo/bin"),
             home.join("go/bin"),

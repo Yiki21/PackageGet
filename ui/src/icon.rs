@@ -6,7 +6,7 @@ use iced::{
     widget::{container, text},
 };
 use simple_icons_pack::{
-    Icon, SI_ARCHLINUX, SI_COMPOSER, SI_DEBIAN, SI_DOTNET, SI_FEDORA, SI_FLATPAK, SI_GO,
+    Icon, SI_ARCHLINUX, SI_BUN, SI_COMPOSER, SI_DEBIAN, SI_DOTNET, SI_FEDORA, SI_FLATPAK, SI_GO,
     SI_HOMEBREW, SI_NIXOS, SI_NPM, SI_OPENSUSE, SI_PNPM, SI_PYTHON, SI_RUBYGEMS, SI_RUST,
     SI_SNAPCRAFT, SI_UV,
 };
@@ -65,6 +65,7 @@ static MANAGER_LOGOS: LazyLock<HashMap<&'static str, ManagerLogo>> = LazyLock::n
         ("builtin:go", &SI_GO),
         ("builtin:npm", &SI_NPM),
         ("builtin:pnpm", &SI_PNPM),
+        ("builtin:bun", &SI_BUN),
         ("builtin:pipx", &SI_PYTHON),
         ("builtin:uv", &SI_UV),
         ("builtin:dotnet-tool", &SI_DOTNET),

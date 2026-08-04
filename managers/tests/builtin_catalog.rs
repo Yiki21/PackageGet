@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use updater_manager_api::{AuthorizationHint, ManagerCategory, PackageManager, Platform};
 use updater_managers::builtin_managers_for;
 
-const EXPECTED_IDS: [&str; 17] = [
+const EXPECTED_IDS: [&str; 18] = [
     "builtin:apt",
     "builtin:dnf",
     "builtin:pacman",
@@ -15,6 +15,7 @@ const EXPECTED_IDS: [&str; 17] = [
     "builtin:go",
     "builtin:npm",
     "builtin:pnpm",
+    "builtin:bun",
     "builtin:pipx",
     "builtin:uv",
     "builtin:dotnet-tool",
@@ -128,6 +129,12 @@ fn catalog_freezes_descriptor_display_category_platform_and_authorization() {
             AuthorizationClass::None,
         ),
         (
+            "Bun",
+            ManagerCategory::Development,
+            vec![Platform::Linux, Platform::Windows, Platform::MacOs],
+            AuthorizationClass::None,
+        ),
+        (
             "pipx",
             ManagerCategory::Development,
             vec![Platform::Linux, Platform::Windows, Platform::MacOs],
@@ -223,6 +230,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:go",
             "builtin:npm",
             "builtin:pnpm",
+            "builtin:bun",
             "builtin:pipx",
             "builtin:uv",
             "builtin:dotnet-tool",
@@ -241,6 +249,7 @@ fn platform_catalogs_only_include_advertised_managers() {
             "builtin:go",
             "builtin:npm",
             "builtin:pnpm",
+            "builtin:bun",
             "builtin:pipx",
             "builtin:uv",
             "builtin:dotnet-tool",

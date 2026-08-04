@@ -130,6 +130,9 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test pnpm_contract --locked
 
+      - name: Run Bun Global offline contract tests
+        run: cargo test -p updater-managers --test bun_contract --locked
+
       - name: Run pipx Windows offline contract tests
         if: runner.os == 'Windows'
         run: cargo test -p updater-managers --test pipx_contract --locked

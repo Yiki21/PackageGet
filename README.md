@@ -25,11 +25,13 @@ Currently supported package managers:
 - System packages: `apt`, `dnf`, `pacman`, `zypper`, and Windows `winget`
 - Windows applications: `scoop` and `chocolatey`
 - Applications: `flatpak`, `snap`, and `homebrew`
-- Development tools: `cargo`, `go`, `npm`, `pnpm`, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
+- Development tools: `cargo`, `go`, `npm`, `pnpm`, Bun Global, `pipx`, `uv tool`, `.NET global tools`, RubyGems, Composer Global, and Nix profiles
 
 The built-in catalog is filtered by platform. Linux adds the native system/application managers and all development managers. Windows uses `winget`, `scoop`, `chocolatey`, and the development managers except Nix. macOS uses `homebrew` plus the development managers, including Nix. Windows and macOS manager contracts are tested on native CI runners. The `1.0.0` packaging pipeline builds unsigned Linux, Windows, and macOS artifacts with a shared checksum manifest.
 
 Nix is deliberately not auto-enabled: choose one user profile from Settings first. Its initial contract supports installed packages and explicit install/update/uninstall operations while preserving flake identity. It does not advertise update inventory or package search, because `nix profile` has no read-only list-updates command or profile-scoped catalog.
+
+Bun Global uses `bun list --global` and `bun outdated --global` for current-user inventory and read-only update discovery. It supports explicit install, update, and uninstall targets, but does not advertise package search because Bun does not currently expose a registry-aware directory search contract.
 
 ## Features
 

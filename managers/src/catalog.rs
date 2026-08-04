@@ -3,7 +3,7 @@ use std::sync::Arc;
 use updater_manager_api::{PackageManager, Platform};
 
 use crate::{
-    AptManager, CargoManager, ChocolateyManager, ComposerGlobalManager, DnfManager,
+    AptManager, BunManager, CargoManager, ChocolateyManager, ComposerGlobalManager, DnfManager,
     DotnetToolManager, FlatpakManager, GoManager, HomebrewManager, NixProfileManager, NpmManager,
     PacmanManager, PipxManager, PnpmManager, RubyGemsManager, ScoopManager, SnapManager, UvManager,
     WingetManager, ZypperManager,
@@ -47,6 +47,7 @@ fn all_builtin_managers() -> Vec<Arc<dyn PackageManager>> {
         Arc::new(GoManager::new()),
         Arc::new(NpmManager::new()),
         Arc::new(PnpmManager::new()),
+        Arc::new(BunManager::new()),
         Arc::new(PipxManager::new()),
         Arc::new(UvManager::new()),
         Arc::new(DotnetToolManager::new()),

@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 mod apt;
+mod bun;
 mod cargo;
 mod catalog;
 mod chocolatey;
@@ -31,6 +32,7 @@ mod winget;
 mod zypper;
 
 pub use apt::AptManager;
+pub use bun::BunManager;
 pub use cargo::CargoManager;
 pub use catalog::{builtin_managers, builtin_managers_for};
 pub use chocolatey::ChocolateyManager;

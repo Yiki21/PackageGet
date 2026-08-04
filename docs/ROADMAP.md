@@ -318,6 +318,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 所有真实 smoke 仍需显式 `--ignored --exact`，普通 workspace tests 保持完全离线；CI 不执行 search、updates 或任何 install/update/uninstall 写操作。
 - 新增 Windows smoke 迭代文档和 CI 门禁；继续扩展 manager 前至少已有一个 Windows system/application manager 的真实只读路径由 hosted runner 持续覆盖。
 
+当前进度（Iteration 059进行中）：
+
+- 新增 Bun Global direct manager，支持 Linux、Windows 和 macOS 的 current-user 全局包；catalog、README、Arch optdepends 和 Bun 品牌标识已同步。
+- installed 使用 `bun list --global --depth 0`，updates 使用只读 `bun outdated --global`；空 global manifest/lockfile 状态映射为空 inventory，Search 保持未广告。
+- 写操作固定为 `bun add --global`、`bun update --global` 和 `bun remove --global`，保留 scoped package、semver、typed origin 和 user scope 合同，拒绝 version-pinned uninstall 及 file/git/workspace spec。
+- 离线 contract 覆盖 Unix、Windows batch、空状态、重复/畸形输出和写命令 argv；Linux 本机 Bun 1.3.14 真实隔离 smoke 通过，workspace 串行门禁已通过，原生 Windows/macOS contract CI 待本轮 push 后记录。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
