@@ -332,12 +332,13 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 最终候选commit `7dc2662`通过本地串行门禁、Linux/Windows/macOS CI run `30913317664`与main分支Package预构建run `30913316595`后，已创建并推送annotated `Build-v1.1.0` tag。
 - tag Package run `30913958640`全部通过并发布公开Release；远端tag解引用到`7dc2662`，17个包资产及`SHA256SUMS`全量回下载校验通过。
 
-当前进度（Iteration 061/062进行中）：
+当前进度（Iteration 061/062已完成）：
 
 - 新增Gentoo `Portage`与Void Linux `XBPS` direct system manager；两者均覆盖availability、installed、updates、search、install、update和uninstall，并只注册到Linux catalog。
 - Portage inventory保留`category/package:SLOT`及repository identity；update discovery只接纳`emerge --pretend`中的`U`/`D`版本迁移，不把rebuild、新依赖或新SLOT伪装成普通更新。
 - XBPS inventory使用`xbps-query --list-pkgs`，update discovery使用`xbps-install --update --dry-run`的六字段事务格式并只接纳`update`动作。
 - 两个manager的特权写操作均进入固定路径helper；Portage atom与XBPS package name在跨进程边界再次严格校验，自定义executable不会被提升为root。
+- main CI run `30927472564`通过Linux、Windows、macOS与官方Gentoo/Void容器真实只读manager smoke；Package run `30927472410`通过11个构建job及17资产bundle/checksum校验。
 
 当前进度（Iteration 063进行中）：
 

@@ -1,7 +1,7 @@
 # Iteration 061: Gentoo Portage Manager
 
 - Date: 2026-08-04
-- Status: In progress
+- Status: Complete
 - ROADMAP phase: Phase 7 - package-manager ecosystem expansion
 
 ## Goal
@@ -33,15 +33,15 @@ package updates.
 
 ## Scope
 
-- [ ] Add the direct `PortageManager` implementation and Linux catalog entry.
-- [ ] Extend the fixed-path system helper with manager-specific Portage atom
+- [x] Add the direct `PortageManager` implementation and Linux catalog entry.
+- [x] Extend the fixed-path system helper with manager-specific Portage atom
   validation and fixed `emerge` command plans.
-- [ ] Add parser, identity, command, unsupported-platform, and offline public API
+- [x] Add parser, identity, command, unsupported-platform, and offline public API
   contracts.
-- [ ] Add a Gentoo stage3 read-only CLI smoke to Linux CI.
-- [ ] Include the fixed helper and Polkit assets in portable tar archives behind
+- [x] Add a Gentoo stage3 read-only CLI smoke to Linux CI.
+- [x] Include the fixed helper and Polkit assets in portable tar archives behind
   an explicit root-run installer, so Gentoo release users can enable writes.
-- [ ] Update user documentation, brand attribution, ROADMAP progress, and the
+- [x] Update user documentation, brand attribution, ROADMAP progress, and the
   iteration index.
 
 ## Non-goals
@@ -54,13 +54,23 @@ package updates.
 
 ## Verification
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo check --workspace --all-targets --locked --jobs 1`
-- [ ] `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`
-- [ ] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
-- [ ] `cargo build --workspace --locked --jobs 1`
-- [ ] Gentoo stage3 real read-only CLI smoke.
-- [ ] GitHub Actions Linux/Windows/macOS CI.
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo check --workspace --all-targets --locked --jobs 1`
+- [x] `cargo test --workspace --all-targets --locked --jobs 1 -- --test-threads=1`
+- [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
+- [x] `cargo build --workspace --locked --jobs 1`
+- [x] Gentoo stage3 real read-only manager smoke.
+- [x] GitHub Actions Linux/Windows/macOS CI.
+
+## Evidence
+
+- Offline public API and parser/command contracts pass; the ordinary suite does
+  not invoke Portage or a privileged write.
+- The ignored manager smoke passes inside pinned official Gentoo stage3 image
+  `sha256:08914e15d306...`, covering availability, installed inventory, count,
+  SLOT/system scope, repository origin, and exact current version.
+- Main CI run `30927472564` and 17-asset Package prebuild run `30927472410`
+  completed successfully.
 
 ## Official CLI basis
 
