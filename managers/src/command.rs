@@ -7,7 +7,10 @@ use std::{
 };
 
 use directories_next::UserDirs;
-use tokio::{process::Command, time::timeout};
+use tokio::{
+    process::Command,
+    time::{sleep, timeout},
+};
 use updater_manager_api::{
     AvailabilityReason, ManagerAvailability, ManagerConfig, ManagerDescriptor, ManagerError,
     ManagerErrorKind, ManagerResult, Platform,
@@ -17,6 +20,8 @@ const MAX_DIAGNOSTIC_CHARS: usize = 8_192;
 const PKEXEC_PATH: &str = "/usr/bin/pkexec";
 const SYSTEM_HELPER_PATH: &str = "/usr/lib/updater/updater-system-helper";
 const DEFAULT_WINDOWS_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+const EXECUTABLE_BUSY_RETRIES: usize = 3;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommandSpec {
@@ -191,10 +196,31 @@ pub(crate) fn resolve_executable(config: &ManagerConfig, default_program: &str) 
 }
 
 pub(crate) async fn run_output(spec: &CommandSpec) -> ManagerResult<Output> {
-    build_command(spec)
-        .output()
-        .await
-        .map_err(|error| io_error("failed to execute package manager command", error))
+    let mut attempt = 0;
+    loop {
+        match build_command(spec).output().await {
+            Ok(output) => return Ok(output),
+            Err(error) if is_executable_busy(&error) && attempt < EXECUTABLE_BUSY_RETRIES => {
+                attempt += 1;
+                sleep(EXECUTABLE_BUSY_RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(io_error("failed to execute package manager command", error));
+            }
+        }
+    }
+}
+
+fn is_executable_busy(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ETXTBSY)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 pub(crate) fn require_success(

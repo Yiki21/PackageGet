@@ -13,8 +13,8 @@ installation while keeping the default test suite deterministic and offline.
 
 - [x] Extend Chocolatey's ignored smoke from availability to installed inventory.
 - [x] Assert Chocolatey inventory preserves manager ID, machine scope, and origin.
-- [x] Run Chocolatey's ignored smoke unconditionally on the Windows CI runner,
-  which declares Chocolatey in its package-management image manifest.
+- [x] Run Chocolatey's ignored smoke when the hosted Windows runner exposes
+  `choco`; skip with an explicit message when the image no longer includes it.
 - [x] Extend Winget and Scoop ignored smokes to read installed inventory.
 - [x] Run Winget/Scoop smokes only when their commands already exist on the
   hosted runner, with an explicit skip message otherwise.
@@ -27,8 +27,9 @@ installation while keeping the default test suite deterministic and offline.
   application contract.
 - Ignored tests remain opt-in locally. Only the Windows workflow invokes them
   with an exact test name.
-- Chocolatey inventory must be non-empty because the hosted image itself uses
-  Chocolatey for package management.
+- When `choco` is present, its inventory must be non-empty because the hosted
+  image is expected to use Chocolatey for package management. Runner image
+  changes must not prevent the remaining native manager contracts from running.
 
 ## Verification
 

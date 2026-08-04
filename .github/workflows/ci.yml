@@ -94,7 +94,14 @@ jobs:
 
       - name: Run Chocolatey native read-only smoke
         if: runner.os == 'Windows'
-        run: cargo test -p updater-managers --test chocolatey_contract --locked real_chocolatey_read_only_smoke -- --ignored --exact
+        shell: pwsh
+        run: |
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            cargo test -p updater-managers --test chocolatey_contract --locked real_chocolatey_read_only_smoke -- --ignored --exact
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Host "Chocolatey is not installed on this runner; skipping native smoke."
+          }
 
       - name: Run optional Winget and Scoop native read-only smokes
         if: runner.os == 'Windows'
