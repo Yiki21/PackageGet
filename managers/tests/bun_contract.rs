@@ -65,8 +65,8 @@ fn fake_bun(log: &Path) -> (TempDir, PathBuf) {
     let executable = directory.path().join("bun.cmd");
     let script = format!(
         r#"@echo off
-chcp 65001 >nul
 if "%1"=="--version" goto version
+chcp 65001 >nul
 if "%1"=="list" goto list
 if "%1"=="outdated" goto outdated
 if "%1"=="add" goto write
