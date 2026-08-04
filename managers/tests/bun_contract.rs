@@ -221,13 +221,17 @@ async fn native_contract_preserves_scoped_inventory_latest_updates_and_write_arg
     let (_directory, executable) = fake_bun(&log);
     let config = config(&manager, &executable);
 
-    assert!(matches!(
-        manager
-            .availability(&config)
-            .await
-            .expect("Bun availability"),
-        ManagerAvailability::Available { version: Some(version) } if version == "1.3.14"
-    ));
+    let availability = manager
+        .availability(&config)
+        .await
+        .expect("Bun availability");
+    assert!(
+        matches!(
+            &availability,
+            ManagerAvailability::Available { version: Some(version) } if version == "1.3.14"
+        ),
+        "unexpected Bun availability: {availability:?}"
+    );
     let installed = manager.installed(&config).await.expect("Bun inventory");
     assert_eq!(installed.len(), 2);
     assert_eq!(installed[0].name, "@scope/tool");
