@@ -393,6 +393,8 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
   修复发布为 `1.2.1`，不增加 Package Manager 或改变公开配置协议。
 - 继续复用 17 项跨平台产品资产与统一 `SHA256SUMS`；既有稳定 tag 和 Release
   保持不可变，目标 tag 为 `Build-v1.2.1`。
+- workspace、RPM、Arch、README 与 release notes 已统一到 `1.2.1`；本地串行
+  format/check/test/clippy/build 和模拟 tag metadata preflight 已通过。
 - tag 前需重新通过最终候选的本地串行门禁、Linux/Windows/macOS CI 和 main
   Package 预构建；tag 后需回下载全部公开资产验证 checksum。
 

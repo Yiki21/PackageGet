@@ -1,6 +1,6 @@
 #:tombi schema.strict = false
 [workspace.package]
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 description = "A GUI application for checking and downloading updates."
 

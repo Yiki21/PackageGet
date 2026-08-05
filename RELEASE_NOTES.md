@@ -1,15 +1,16 @@
-# Updater 1.2.0
+# Updater 1.2.1
 
-`1.2.0` is an unsigned cross-platform feature release of Updater. It adds native Gentoo Portage and Void Linux XBPS package management, real container-backed read-only validation, and optional privileged system integration for portable Linux archives while keeping the existing 17-asset bundle and one `SHA256SUMS` manifest.
+`1.2.1` is an unsigned cross-platform reliability release of Updater. It reduces startup work, scopes package and health refreshes to the managers that actually changed, improves partial-result visibility, and fixes RubyGems error detection while preserving the existing 17-product-asset bundle and one `SHA256SUMS` manifest.
 
 ## Highlights
 
-- Adds a direct Gentoo Portage system manager for installed packages, read-only update discovery, search, install, update, and dependency-aware removal. Installed targets retain `category/package:SLOT` and repository identity.
-- Filters Portage update plans to real ebuild or binary-package version transitions. Rebuilds, new dependencies, and new SLOTs are not presented as ordinary updates.
-- Adds a direct Void Linux XBPS system manager using `xbps-query` inventory/search and the official six-field `xbps-install --update --dry-run` transaction format.
-- Extends the restricted Polkit helper with fixed `/usr/bin/emerge`, `/usr/bin/xbps-install`, and `/usr/bin/xbps-remove` plans plus manager-specific input validation.
-- Runs ignored manager tests against pinned official Gentoo and Void Linux container images in Linux CI, covering real availability, inventory, count, scope, origin, and exact-version queries.
-- Includes the matching helper, policy, and icon in portable Linux tar archives behind an explicit root-run installer; extraction alone never modifies the host.
+- Defers installed-package and update scans until their pages are first opened, so the initial screen loads without launching every configured package manager.
+- Refreshes package data only for managers whose operations succeeded. Partial failures, cancellations, and managers that were not executed retain their existing caches and selections.
+- Shows completed manager sections and manager-specific errors progressively while other update sources are still loading, without reporting a premature empty state.
+- Reloads Installed and Updates data only for managers that were added, removed, or materially reconfigured; unchanged managers keep their caches, errors, selections, and in-flight work.
+- Applies the same per-manager invalidation to Package Manager health checks. Changed managers become unchecked while unaffected health results and scans remain valid.
+- Treats canonical RubyGems `ERROR:` output as a failed write even when `gem` exits with status 0, preserving the original error line in the structured failure.
+- Fixes source-picker scrollbar overlap and keeps update actions usable at narrow window widths.
 
 ## Release assets
 
@@ -20,13 +21,14 @@
 
 ## Compatibility and limits
 
-- Existing configuration and Activity history remain readable. Portage and XBPS are added to the Linux catalog and remain disabled when their required command families are unavailable.
-- Portage requires both `emerge` and `qlist` from `portage-utils`. Update discovery follows the configured world plan and excludes masked search results; USE/profile/repository configuration remains owned by Portage.
-- XBPS requires `xbps-query`, `xbps-install`, and `xbps-remove` from one command directory. Repository/key management, holds, orphan cleanup, and alternative selection remain outside this manager contract.
-- Portable tar users must explicitly run `system-integration/install.sh` as root before privileged system-manager writes work. AppImages do not include the installer and remain read-only for APT, DNF, Pacman, Zypper, Portage, and XBPS.
+- Existing configuration and Activity history remain readable. This patch adds no Package Manager, capability, or persistent configuration schema.
+- Package data and health results remain session-local. The first visit to Installed, Updates, or Health still performs the required real read-only scans.
+- A manager configuration change invalidates only that manager. Search results for an affected manager are cleared rather than replaying a previous query against new settings.
+- Health results have no background refresh or time-to-live policy. Once every enabled manager has a current result, `Recheck all` explicitly performs a full read-only scan.
+- RubyGems operations that previously looked successful solely because of a zero exit status can now surface as failures when the CLI reports `ERROR:`.
 - Windows and macOS artifacts are unsigned. SmartScreen or Gatekeeper may warn on first launch; signing and notarization are intentionally outside the 1.0 policy.
 - Flatpak distribution is outside 1.0 because the application depends on host package-manager CLIs and privileged authorization boundaries.
 
 ## Previous release
 
-`1.1.0` remains available under its original immutable tag and release assets. This release does not rewrite that history.
+`1.2.0` remains available under its original immutable tag and release assets. This release does not rewrite that history.
