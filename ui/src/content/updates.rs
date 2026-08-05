@@ -176,6 +176,20 @@ pub struct UpdatesInfo {
     pub failed_update_manager: Option<ManagerId>,
 }
 
+impl UpdatesInfo {
+    fn selected_loading_sources(&self) -> usize {
+        self.selected_managers
+            .iter()
+            .filter(|manager| {
+                self.loading_updates.contains_key(*manager)
+                    || (self.is_loading_count
+                        && !self.updates_by_manager.contains_key(*manager)
+                        && !self.init_errors.contains_key(*manager))
+            })
+            .count()
+    }
+}
+
 pub enum Action {
     /// No-op action.
     None,
@@ -183,11 +197,8 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Cooperative package operation task.
     CancellableRun(iced::Task<Message>, CancellationToken),
-    /// Complete a package operation and optionally reload package data.
-    PackageOperationFinished {
-        outcome: OperationOutcome,
-        reload: bool,
-    },
+    /// Complete a package operation and refresh managers that succeeded.
+    PackageOperationFinished { outcome: OperationOutcome },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -463,25 +474,21 @@ impl Updates {
                     info.selected_packages.clear();
                     info.last_update_error = None;
                     info.failed_update_manager = None;
-                    Action::PackageOperationFinished {
-                        outcome,
-                        reload: true,
-                    }
+                    Action::PackageOperationFinished { outcome }
                 } else {
                     info.failed_update_manager = outcome.failed_manager.clone();
                     let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
                     log::error!("Failed to update packages: {}", error);
                     info.last_update_error = Some(error);
-                    Action::PackageOperationFinished {
-                        outcome,
-                        reload: false,
-                    }
+                    Action::PackageOperationFinished { outcome }
                 }
             }
             Message::RefreshSelected => {
                 if info.is_updating
                     || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
+                    || info.is_loading_count
+                    || !info.loading_updates.is_empty()
                 {
                     return Action::None;
                 }
@@ -502,6 +509,8 @@ impl Updates {
                 if info.is_updating
                     || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
+                    || info.is_loading_count
+                    || !info.loading_updates.is_empty()
                 {
                     return Action::None;
                 }
@@ -538,6 +547,7 @@ impl Updates {
                 if info.is_updating
                     || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
+                    || info.is_loading_count
                     || !info.loading_updates.is_empty()
                 {
                     return Action::None;
@@ -774,14 +784,17 @@ impl Updates {
             ManagerCapability::Updates,
         )
         .len();
+        let selected_loading_sources = info.selected_loading_sources();
         let can_refresh = !info.is_updating
             && self.pending_update.is_none()
-            && self.update_all_refreshing.is_empty();
+            && self.update_all_refreshing.is_empty()
+            && !info.is_loading_count
+            && info.loading_updates.is_empty();
 
         let toolbar = shared::toolbar(
             column![
                 row![
-                    container(self.search_input_view()).width(iced::Length::Fill),
+                    container(self.search_input_view()).width(iced::Length::FillPortion(2)),
                     column![
                         shared::section_title("Actions"),
                         row![
@@ -797,11 +810,13 @@ impl Updates {
                             ),
                         ]
                         .spacing(8)
+                        .wrap()
                     ]
-                    .spacing(theme::spacing::SM),
+                    .spacing(theme::spacing::SM)
+                    .width(iced::Length::FillPortion(1)),
                 ]
                 .spacing(theme::spacing::MD)
-                .align_y(iced::Alignment::End),
+                .align_y(iced::Alignment::Start),
                 row![
                     container(self.manager_filter_view(info, pm_config, catalog))
                         .width(iced::Length::FillPortion(2)),
@@ -833,6 +848,12 @@ impl Updates {
                 theme::colors::ERROR,
             ));
         }
+        if selected_loading_sources > 0 {
+            summary_items.push((
+                format!("{selected_loading_sources} sources loading"),
+                theme::colors::UPDATES,
+            ));
+        }
 
         column![
             shared::page_header(
@@ -852,6 +873,7 @@ impl Updates {
                 catalog,
                 show_inspector,
                 inspector_drawer,
+                selected_loading_sources,
             ),
         ]
         .spacing(theme::spacing::LG)
@@ -976,6 +998,7 @@ impl Updates {
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
+        selected_loading_sources: usize,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable};
 
@@ -991,14 +1014,6 @@ impl Updates {
             return shared::centered_message("Please select a package manager to view");
         }
 
-        if info
-            .selected_managers
-            .iter()
-            .any(|pm_type| info.loading_updates.contains_key(pm_type))
-        {
-            return shared::centered_message("Loading selected package manager updates...");
-        }
-
         let filtered_managers: Vec<_> = info
             .selected_managers
             .iter()
@@ -1009,12 +1024,16 @@ impl Updates {
             })
             .collect();
 
+        if filtered_managers.is_empty() && selected_loading_sources > 0 {
+            return shared::centered_message("Loading selected package manager updates...");
+        }
+
         let total_updates: usize = filtered_managers.iter().map(|(_, (count, _))| *count).sum();
         let has_visible_errors = filtered_managers
             .iter()
             .any(|(pm_type, _)| info.load_errors.contains_key(pm_type));
 
-        if total_updates == 0 && !has_visible_errors {
+        if total_updates == 0 && !has_visible_errors && selected_loading_sources == 0 {
             return shared::centered_message("No updates available");
         }
 
@@ -1026,17 +1045,33 @@ impl Updates {
                     .any(|pkg| pkg.target.name.to_lowercase().contains(&search_query))
             });
 
-            if !has_any_match && !has_visible_errors {
+            if !has_any_match && !has_visible_errors && selected_loading_sources == 0 {
                 return shared::centered_message("No updates match your search");
             }
         }
 
-        let updates_sections: Vec<iced::Element<'_, Message>> = filtered_managers
-            .into_iter()
-            .map(|(manager, (count, packages))| {
+        let mut updates_sections =
+            Vec::with_capacity(filtered_managers.len() + usize::from(selected_loading_sources > 0));
+        if selected_loading_sources > 0 {
+            updates_sections.push(
+                iced::widget::text(format!(
+                    "Loading {selected_loading_sources} remaining selected source{}...",
+                    if selected_loading_sources == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ))
+                .size(13)
+                .style(theme::text_accent)
+                .into(),
+            );
+        }
+        updates_sections.extend(filtered_managers.into_iter().map(
+            |(manager, (count, packages))| {
                 self.package_manager_section(manager, *count, packages, info, catalog)
-            })
-            .collect();
+            },
+        ));
 
         let update_list = scrollable(column(updates_sections).spacing(20))
             .width(iced::Length::Fill)
@@ -1481,8 +1516,11 @@ impl Updates {
             update_button
         };
 
-        let update_all_enabled =
-            !info.is_updating && self.pending_update.is_none() && !is_preparing_all;
+        let update_all_enabled = !info.is_updating
+            && self.pending_update.is_none()
+            && !is_preparing_all
+            && !info.is_loading_count
+            && info.loading_updates.is_empty();
         let update_all = button(
             text(if is_preparing_all {
                 "Preparing Update All..."
@@ -1490,7 +1528,12 @@ impl Updates {
                 "Update All Available"
             })
             .size(13)
-            .font(theme::FONT_SEMIBOLD),
+            .font(theme::FONT_SEMIBOLD)
+            .style(if update_all_enabled {
+                theme::text_on_surface
+            } else {
+                theme::text_on_surface_muted
+            }),
         )
         .padding([8, 14])
         .style(theme::secondary_button(update_all_enabled));
@@ -1663,6 +1706,50 @@ mod tests {
 
     fn update(manager: &ManagerId, name: &str) -> PackageUpdate {
         PackageUpdate::new(PackageTarget::new(manager.clone(), name), "1.0", "2.0")
+    }
+
+    #[test]
+    fn selected_loading_sources_counts_initialization_without_cached_results() {
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        info.is_loading_count = true;
+        info.selected_managers = HashSet::from([cargo.clone(), npm]);
+        info.updates_by_manager.insert(cargo, (0, Vec::new()));
+
+        assert_eq!(info.selected_loading_sources(), 1);
+    }
+
+    #[test]
+    fn selected_loading_sources_counts_refreshes_with_cached_results() {
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        info.selected_managers.insert(cargo.clone());
+        info.updates_by_manager
+            .insert(cargo.clone(), (1, vec![update(&cargo, "cargo-edit")]));
+        info.loading_updates.insert(cargo, 1);
+        info.loading_updates.insert(npm, 2);
+
+        assert_eq!(info.selected_loading_sources(), 1);
+    }
+
+    #[test]
+    fn refresh_all_is_ignored_while_initialization_is_running() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            is_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+
+        let action = updates.update(
+            Message::RefreshAll,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
     }
 
     #[test]

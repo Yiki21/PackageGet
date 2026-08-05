@@ -133,10 +133,9 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Cooperative package operation task.
     CancellableRun(iced::Task<Message>, CancellationToken),
-    /// Complete a package operation and optionally reload package data.
+    /// Complete a package operation and refresh managers that succeeded.
     PackageOperationFinished {
         outcome: OperationOutcome,
-        reload: bool,
         follow_up: iced::Task<Message>,
     },
 }
@@ -451,18 +450,13 @@ impl Finding {
                     } else {
                         Task::done(Message::RepeatLastSearch)
                     };
-                    Action::PackageOperationFinished {
-                        outcome,
-                        reload: true,
-                        follow_up,
-                    }
+                    Action::PackageOperationFinished { outcome, follow_up }
                 } else {
                     let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
                     log::error!("Failed to install packages: {}", error);
                     info.last_install_error = Some(error);
                     Action::PackageOperationFinished {
                         outcome,
-                        reload: false,
                         follow_up: Task::none(),
                     }
                 }

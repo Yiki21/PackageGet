@@ -161,11 +161,8 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Cooperative package operation task.
     CancellableRun(iced::Task<Message>, CancellationToken),
-    /// Complete a package operation and optionally reload package data.
-    PackageOperationFinished {
-        outcome: OperationOutcome,
-        reload: bool,
-    },
+    /// Complete a package operation and refresh managers that succeeded.
+    PackageOperationFinished { outcome: OperationOutcome },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -504,18 +501,12 @@ impl Installed {
                 if outcome.is_success() {
                     info.selected_packages.clear();
                     info.last_remove_error = None;
-                    Action::PackageOperationFinished {
-                        outcome,
-                        reload: true,
-                    }
+                    Action::PackageOperationFinished { outcome }
                 } else {
                     let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
                     log::error!("Failed to remove packages: {}", error);
                     info.last_remove_error = Some(error);
-                    Action::PackageOperationFinished {
-                        outcome,
-                        reload: false,
-                    }
+                    Action::PackageOperationFinished { outcome }
                 }
             }
         }

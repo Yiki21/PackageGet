@@ -354,22 +354,14 @@ impl App {
                         };
                         Task::batch(vec![reload, follow_up.map(Message::Content), pending_exit])
                     }
-                    content::Action::PackageOperationFinished {
-                        outcome,
-                        reload,
-                        follow_up,
-                    } => {
+                    content::Action::PackageOperationFinished { outcome, follow_up } => {
                         self.active_operation_cancellation = None;
                         let started_at = self
                             .active_operation_started_at
                             .take()
                             .unwrap_or_else(crate::activity::now_timestamp);
                         let notification = self.record_operation(&outcome, started_at);
-                        let refresh = if reload {
-                            self.refresh_package_managers(&outcome)
-                        } else {
-                            Task::none()
-                        };
+                        let refresh = self.refresh_package_managers(&outcome);
                         self.status_panel.record_outcome(outcome);
                         let completion =
                             Task::batch(vec![refresh, follow_up.map(Message::Content)]);
@@ -2063,7 +2055,7 @@ mod tests {
     }
 
     #[test]
-    fn post_operation_refresh_only_reloads_successful_managers() {
+    fn partial_operation_refresh_only_reloads_successful_managers() {
         let mut app = app();
         let cargo = manager_id("builtin:cargo");
         let npm = manager_id("builtin:npm");
@@ -2110,8 +2102,8 @@ mod tests {
             total_packages: 2,
             completed_managers: 1,
             total_managers: 2,
-            failed_manager: None,
-            error: None,
+            failed_manager: Some(npm.clone()),
+            error: Some("npm update failed".to_owned()),
             cancelled: false,
             manager_outcomes: vec![
                 updater_core::ManagerOperationOutcome {
@@ -2127,8 +2119,8 @@ mod tests {
                     scope: updater_manager_api::PackageScope::User,
                     requested_packages: 1,
                     completed_packages: 0,
-                    status: updater_core::ManagerOperationStatus::NotStarted,
-                    error: None,
+                    status: updater_core::ManagerOperationStatus::Failed,
+                    error: Some("npm update failed".to_owned()),
                 },
             ],
             scope: updater_manager_api::PackageScope::User,

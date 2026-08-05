@@ -88,10 +88,9 @@ pub enum Action {
         /// Optional task to run after the reload starts.
         follow_up: iced::Task<Message>,
     },
-    /// Record a completed package operation and optionally reload package data.
+    /// Record a completed package operation and refresh managers that succeeded.
     PackageOperationFinished {
         outcome: OperationOutcome,
-        reload: bool,
         follow_up: iced::Task<Message>,
     },
 }
@@ -158,10 +157,9 @@ impl Content {
                         Action::CancellableRun(task.map(Message::Installed), cancellation)
                     }
                     installed::Action::None => Action::None,
-                    installed::Action::PackageOperationFinished { outcome, reload } => {
+                    installed::Action::PackageOperationFinished { outcome } => {
                         Action::PackageOperationFinished {
                             outcome,
-                            reload,
                             follow_up: iced::Task::none(),
                         }
                     }
@@ -176,10 +174,9 @@ impl Content {
                     updates::Action::CancellableRun(task, cancellation) => {
                         Action::CancellableRun(task.map(Message::Updates), cancellation)
                     }
-                    updates::Action::PackageOperationFinished { outcome, reload } => {
+                    updates::Action::PackageOperationFinished { outcome } => {
                         Action::PackageOperationFinished {
                             outcome,
-                            reload,
                             follow_up: iced::Task::none(),
                         }
                     }
@@ -195,15 +192,12 @@ impl Content {
                     finding::Action::CancellableRun(task, cancellation) => {
                         Action::CancellableRun(task.map(Message::Finding), cancellation)
                     }
-                    finding::Action::PackageOperationFinished {
-                        outcome,
-                        reload,
-                        follow_up,
-                    } => Action::PackageOperationFinished {
-                        outcome,
-                        reload,
-                        follow_up: follow_up.map(Message::Finding),
-                    },
+                    finding::Action::PackageOperationFinished { outcome, follow_up } => {
+                        Action::PackageOperationFinished {
+                            outcome,
+                            follow_up: follow_up.map(Message::Finding),
+                        }
+                    }
                     finding::Action::None => Action::None,
                 }
             }
