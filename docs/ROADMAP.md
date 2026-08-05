@@ -386,6 +386,16 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
   smoke；main CI run `30983907799` 的 Linux、Windows x86_64 与 macOS arm64
   原生 job 全部成功。
 
+当前进度（Iteration 068进行中）：
+
+- 将 Iteration 064–067 的启动懒加载、per-manager 部分成功刷新、Updates 渐进
+  展示、配置与 Health 差量失效以及 RubyGems 假成功识别作为向后兼容可靠性
+  修复发布为 `1.2.1`，不增加 Package Manager 或改变公开配置协议。
+- 继续复用 17 项跨平台产品资产与统一 `SHA256SUMS`；既有稳定 tag 和 Release
+  保持不可变，目标 tag 为 `Build-v1.2.1`。
+- tag 前需重新通过最终候选的本地串行门禁、Linux/Windows/macOS CI 和 main
+  Package 预构建；tag 后需回下载全部公开资产验证 checksum。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。
