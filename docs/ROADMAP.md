@@ -386,17 +386,19 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
   smoke；main CI run `30983907799` 的 Linux、Windows x86_64 与 macOS arm64
   原生 job 全部成功。
 
-当前进度（Iteration 068进行中）：
+当前进度（Iteration 068已完成）：
 
 - 将 Iteration 064–067 的启动懒加载、per-manager 部分成功刷新、Updates 渐进
   展示、配置与 Health 差量失效以及 RubyGems 假成功识别作为向后兼容可靠性
   修复发布为 `1.2.1`，不增加 Package Manager 或改变公开配置协议。
 - 继续复用 17 项跨平台产品资产与统一 `SHA256SUMS`；既有稳定 tag 和 Release
   保持不可变，目标 tag 为 `Build-v1.2.1`。
-- workspace、RPM、Arch、README 与 release notes 已统一到 `1.2.1`；本地串行
-  format/check/test/clippy/build 和模拟 tag metadata preflight 已通过。
-- tag 前需重新通过最终候选的本地串行门禁、Linux/Windows/macOS CI 和 main
-  Package 预构建；tag 后需回下载全部公开资产验证 checksum。
+- workspace、RPM、Arch、README 与 release notes 已统一到 `1.2.1`；最终候选
+  `efb64c2` 通过本地门禁、CI run `30987695430` 与 Package 预构建 run
+  `30987695349`。
+- annotated `Build-v1.2.1` tag 解引用到 `efb64c2`；tag Package run
+  `30988342504` 全部成功并发布 17 项产品资产及 `SHA256SUMS`，全量回下载
+  checksum、四个 portable tar 清单及八个 updater/helper ELF 均验证通过。
 
 ### 阶段 7：扩展 Package Manager 生态
 

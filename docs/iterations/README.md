@@ -74,4 +74,4 @@
 | 065 | 已完成 | 阶段 5/7：部分成功刷新与 Updates 渐进加载 | [065-partial-refresh-progressive-updates.md](065-partial-refresh-progressive-updates.md) |
 | 066 | 已完成 | 阶段 5/7：配置差量刷新与缓存保留 | [066-configuration-delta-refresh.md](066-configuration-delta-refresh.md) |
 | 067 | 已完成 | 阶段 5/7：Health 差量失效与定向重检 | [067-health-delta-recheck.md](067-health-delta-recheck.md) |
-| 068 | 进行中 | 阶段 5/6/7：1.2.1 可靠性补丁发布 | [068-1.2.1-reliability-release.md](068-1.2.1-reliability-release.md) |
+| 068 | 已完成 | 阶段 5/6/7：1.2.1 可靠性补丁发布 | [068-1.2.1-reliability-release.md](068-1.2.1-reliability-release.md) |
