@@ -1,7 +1,7 @@
 # Iteration 065：部分成功刷新与 Updates 渐进加载
 
 - 日期：2026-08-05
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 5/7 工作流可靠性与 Package Manager 生态
 
 ## 目标
@@ -26,7 +26,7 @@ package manager 首次初始化或显式刷新时先展示已经完成的来源�
 - [x] 添加全部成功去重刷新、部分失败、全失败/未执行零刷新、初始化错误可见性与
   渐进加载状态回归测试。
 - [x] 完成本地串行门禁和 GUI 冒烟。
-- [ ] 原生 Linux、Windows、macOS CI 通过。
+- [x] 原生 Linux、Windows、macOS CI 通过。
 
 ## 验证
 
@@ -42,6 +42,10 @@ package manager 首次初始化或显式刷新时先展示已经完成的来源�
 - [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
 - [x] `cargo build --workspace --locked --jobs 1`
 - [x] `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --locked --jobs 1`
+- [x] main CI run `30975535963`：Linux format/check/test/Clippy/build、Snap、
+  Portage/XBPS 离线合同及 Gentoo/Void 原生只读 smoke，Windows x86_64
+  workspace 与 manager 合同，以及 macOS arm64 workspace 与跨平台 manager
+  合同全部通过。
 
 ## 边界
 

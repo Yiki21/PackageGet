@@ -354,13 +354,14 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - source picker 将滚动条嵌入布局，为行尾选择框预留间距；1200x800 与 700x800 隔离桌面检查均无重叠。
 - workspace 串行 format、check、test、clippy 与 build 门禁全部通过。
 
-当前进度（Iteration 065进行中）：
+当前进度（Iteration 065已完成）：
 
 - package operation 完成事件不再携带会屏蔽部分成功结果的整体 `reload` 开关；App 始终从 per-manager outcome 中只刷新 `Succeeded` manager。
 - Updates 首次初始化或显式刷新多个来源时，已完成来源立即展示，剩余来源显示加载数量；在全部完成前不再提前报告“无更新”或“无搜索结果”。
 - 已选来源的初始化错误不会被其他来源的零更新空状态遮蔽；失败 section 与重试入口持续可见。
 - 初始化或刷新仍在运行时禁止重复触发 Refresh All 与 Update All，避免同一 manager 的并发重复扫描。
 - Updates 工具栏使用稳定列宽与按钮组换行，700px 窄窗口不再裁切 Refresh All；加载中的 Update All 使用明确禁用态。
+- 实现提交 `be97740` 通过全部本地串行门禁；main CI run `30975535963` 的 Linux、Windows x86_64 与 macOS arm64 原生 job 全部成功。
 
 ### 阶段 7：扩展 Package Manager 生态
 
