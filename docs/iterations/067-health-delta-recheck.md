@@ -1,7 +1,7 @@
 # Iteration 067：Health 差量失效与定向重检
 
 - 日期：2026-08-05
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 5/7 工作流可靠性与 Package Manager 生态
 
 ## 目标
@@ -19,7 +19,7 @@ Unchecked，未变化 manager 的健康结果、扫描进度和在途检查继�
 - [x] 首次打开 Health 或显式检查时，只扫描尚无当前记录的 manager；所有 manager
   均有记录时，Recheck 才恢复全量扫描。
 - [x] 为差量保留、活动扫描隔离、定向扫描与全量 Recheck 添加回归测试。
-- [ ] 完成本地串行门禁和 Linux、Windows、macOS 原生 CI。
+- [x] 完成本地串行门禁和 Linux、Windows、macOS 原生 CI。
 
 ## 验证
 
@@ -31,7 +31,21 @@ Unchecked，未变化 manager 的健康结果、扫描进度和在途检查继�
 - [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
 - [x] `cargo build --workspace --locked --jobs 1`
 - [x] `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --locked --jobs 1`
-- [ ] main CI 的 Linux、Windows x86_64 与 macOS arm64 原生 job 全部通过。
+- [x] Gamescope headless 1200×800 与 640×520：Health 的检查按钮、状态、筛选和
+  manager 行真实渲染，无裁切或重叠；窄屏 Settings segmented control 同样正常。
+- [x] main CI run `30983907799`：Linux format/check/test/Clippy/build、Snap、
+  Portage/XBPS 离线合同及 Gentoo/Void 原生只读 smoke，Windows x86_64
+  workspace 与 manager 合同，以及 macOS arm64 workspace 与跨平台 manager
+  合同全部通过。
+
+## 结果
+
+- 实现提交 `4038d6a` 让 Health 按稳定 `ManagerId` 保留未变化记录；配置变化只把
+  受影响 manager 恢复为 Unchecked。
+- 活动扫描共享受影响 manager 集合并拒绝其排队或晚到结果，同时继续执行未变化
+  manager；重复或扫描完成后的迟到结果也不会重复计数或写回。
+- 首次进入和后续补检只运行缺少当前记录的 manager；全部结果完整时按钮明确显示
+  `Recheck all` 并执行全量只读检查。
 
 ## 边界
 
