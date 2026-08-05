@@ -374,6 +374,15 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 实现提交 `d647e82` 通过全部本地串行门禁；main CI run `30979270678` 的 Linux、
   Windows x86_64 与 macOS arm64 原生 job 全部成功。
 
+当前计划（Iteration 067进行中）：
+
+- 将 Health 状态生命周期与配置差量刷新对齐；保存、添加、移除或修改 manager
+  时只清理受影响 ID 的 availability 记录，未变化 manager 的结果与活动只读扫描
+  继续保留。
+- 配置变化和活动 Health 扫描重叠时，按 manager 隔离排队及晚到结果，不取消未变化
+  manager；首次打开或继续检查时只扫描没有当前记录的 manager，全部记录新鲜时才
+  执行全量 Recheck。
+
 ### 阶段 7：扩展 Package Manager 生态
 
 本阶段在跨平台构建、发布和真实 CLI 验证基线稳定后实施。新增 manager 只广告已经实现并通过 fixture、命令构造和真实只读 smoke test 验证的 capability；不能为了统一界面伪造 manager 原本不存在的搜索、更新或卸载语义。

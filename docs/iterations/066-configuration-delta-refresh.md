@@ -51,6 +51,6 @@
 ## 边界
 
 - 本轮不持久化 package cache；应用重启后仍由页面首次打开触发真实扫描。
-- Health 状态仍在任一 manager 配置变化时整体失效；按 manager 保留和定向重检
-  可在后续独立迭代处理。
+- Health 状态的按 manager 保留和定向重检在 Iteration 067 处理；本轮只负责
+  package-data cache 与请求生命周期。
 - manager 配置变化后不自动重放 Discover 搜索；只清理受影响来源的旧搜索结果。

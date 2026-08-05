@@ -342,9 +342,6 @@ impl App {
                     }
                     content::Action::ReloadPackageData { reload, follow_up } => {
                         let configuration_changed = reload.is_configuration_change();
-                        if configuration_changed {
-                            self.manager_health.invalidate();
-                        }
                         let package_reload = self.reload_package_data(reload);
                         let pending_exit =
                             if configuration_changed && !self.content.settings.is_dirty() {
@@ -444,11 +441,13 @@ impl App {
                 )));
             }
             Message::DiscardPendingSettings => {
-                let manager_config_changed = self.content.settings.has_manager_changes();
+                let manager_changes = content::ManagerConfigChanges::between(
+                    self.content.settings.draft_config(),
+                    &self.pm_config,
+                );
                 self.content.settings.discard_changes();
-                if manager_config_changed {
-                    self.manager_health.invalidate();
-                }
+                self.manager_health
+                    .reconcile_configuration(&self.pm_config, &manager_changes.affected_managers());
                 task = self.complete_pending_settings_exit();
             }
             Message::CancelPendingSettingsExit => self.pending_settings_exit = None,
@@ -782,7 +781,11 @@ impl App {
                     self.package_data_generation,
                 ));
             }
-            content::ActiveContentPage::Health if self.manager_health.should_scan_on_open() => {
+            content::ActiveContentPage::Health
+                if self
+                    .manager_health
+                    .should_scan_on_open(self.content.settings.draft_config()) =>
+            {
                 tasks.push(Task::done(Message::Content(content::Message::Health(
                     content::HealthMessage::StartScan,
                 ))));

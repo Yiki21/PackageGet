@@ -1,7 +1,7 @@
 //! Read-only health checks for configured package managers.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc;
 use iced::{Element, Task};
@@ -26,6 +26,8 @@ pub struct ManagerHealthInfo {
     generation: u64,
     records: HashMap<ManagerId, ManagerHealthRecord>,
     scan_scope: HashSet<ManagerId>,
+    completed_scope: HashSet<ManagerId>,
+    invalidated_managers: Option<Arc<Mutex<HashSet<ManagerId>>>>,
     cancellation: Option<CancellationToken>,
     current_manager: Option<ManagerId>,
     completed: usize,
@@ -45,8 +47,9 @@ impl ManagerHealthInfo {
         !self.records.is_empty()
     }
 
-    pub fn should_scan_on_open(&self) -> bool {
-        !self.is_checking && self.finished_at.is_none() && self.records.is_empty()
+    /// Returns whether opening the page should check managers without current results.
+    pub fn should_scan_on_open(&self, config: &updater_core::Config) -> bool {
+        !self.is_checking && !config.managers.is_empty() && self.pending_manager_count(config) > 0
     }
 
     pub fn result(&self, manager: &ManagerId) -> Option<&Result<ManagerAvailability, String>> {
@@ -60,6 +63,8 @@ impl ManagerHealthInfo {
         self.generation = self.generation.saturating_add(1);
         self.records.clear();
         self.scan_scope.clear();
+        self.completed_scope.clear();
+        self.invalidated_managers = None;
         self.cancellation = None;
         self.current_manager = None;
         self.completed = 0;
@@ -68,6 +73,49 @@ impl ManagerHealthInfo {
         self.is_checking = false;
         self.cancellation_requested = false;
         self.last_scan_cancelled = false;
+    }
+
+    /// Retains unaffected records while invalidating changed manager identities.
+    pub fn reconcile_configuration(
+        &mut self,
+        config: &updater_core::Config,
+        affected: &HashSet<ManagerId>,
+    ) {
+        let configured: HashSet<_> = config
+            .managers
+            .iter()
+            .map(|manager| manager.id.clone())
+            .collect();
+        self.records
+            .retain(|manager, _| configured.contains(manager) && !affected.contains(manager));
+
+        if !self.is_checking {
+            return;
+        }
+
+        if let Some(invalidated_managers) = &self.invalidated_managers
+            && let Ok(mut invalidated) = invalidated_managers.lock()
+        {
+            invalidated.extend(affected.iter().cloned());
+        }
+
+        let invalidated: Vec<_> = self
+            .scan_scope
+            .iter()
+            .filter(|manager| !configured.contains(*manager) || affected.contains(*manager))
+            .cloned()
+            .collect();
+        for manager in invalidated {
+            if self.scan_scope.remove(&manager) {
+                self.total = self.total.saturating_sub(1);
+            }
+            if self.completed_scope.remove(&manager) {
+                self.completed = self.completed.saturating_sub(1);
+            }
+            if self.current_manager.as_ref() == Some(&manager) {
+                self.current_manager = None;
+            }
+        }
     }
 
     pub fn has_issues(
@@ -84,14 +132,18 @@ impl ManagerHealthInfo {
         })
     }
 
-    fn begin_scan(&mut self, managers: &[ManagerConfig]) -> (u64, CancellationToken) {
+    fn begin_scan(
+        &mut self,
+        managers: &[ManagerConfig],
+    ) -> (u64, CancellationToken, Arc<Mutex<HashSet<ManagerId>>>) {
         if let Some(cancellation) = &self.cancellation {
             cancellation.cancel();
         }
         self.generation = self.generation.saturating_add(1);
         self.scan_scope = managers.iter().map(|manager| manager.id.clone()).collect();
-        self.records
-            .retain(|manager, _| self.scan_scope.contains(manager));
+        self.completed_scope.clear();
+        let invalidated_managers = Arc::new(Mutex::new(HashSet::new()));
+        self.invalidated_managers = Some(invalidated_managers.clone());
         self.current_manager = None;
         self.completed = 0;
         self.total = managers.len();
@@ -101,7 +153,7 @@ impl ManagerHealthInfo {
         self.last_scan_cancelled = false;
         let cancellation = CancellationToken::default();
         self.cancellation = Some(cancellation.clone());
-        (self.generation, cancellation)
+        (self.generation, cancellation, invalidated_managers)
     }
 
     fn request_cancellation(&mut self) {
@@ -112,7 +164,7 @@ impl ManagerHealthInfo {
     }
 
     fn apply_started(&mut self, generation: u64, manager: ManagerId) {
-        if generation == self.generation && self.is_checking {
+        if generation == self.generation && self.is_checking && self.scan_scope.contains(&manager) {
             self.current_manager = Some(manager);
         }
     }
@@ -124,12 +176,15 @@ impl ManagerHealthInfo {
         checked_at: String,
         result: Result<ManagerAvailability, String>,
     ) {
-        if generation != self.generation || !self.scan_scope.contains(&manager) {
+        if generation != self.generation || !self.is_checking || !self.scan_scope.contains(&manager)
+        {
             return;
+        }
+        if self.completed_scope.insert(manager.clone()) {
+            self.completed = self.completed.saturating_add(1).min(self.total);
         }
         self.records
             .insert(manager, ManagerHealthRecord { checked_at, result });
-        self.completed = self.completed.saturating_add(1).min(self.total);
     }
 
     fn finish_scan(&mut self, generation: u64, finished_at: String, cancelled: bool) {
@@ -138,6 +193,7 @@ impl ManagerHealthInfo {
         }
         self.current_manager = None;
         self.cancellation = None;
+        self.invalidated_managers = None;
         self.finished_at = Some(finished_at);
         self.is_checking = false;
         self.cancellation_requested = false;
@@ -161,6 +217,28 @@ impl ManagerHealthInfo {
             Some(Ok(_)) => HealthStatus::Unavailable,
             None if runtime_issue => HealthStatus::Degraded,
             None => HealthStatus::Unchecked,
+        }
+    }
+
+    fn pending_manager_count(&self, config: &updater_core::Config) -> usize {
+        config
+            .managers
+            .iter()
+            .filter(|manager| !self.records.contains_key(&manager.id))
+            .count()
+    }
+
+    fn managers_for_scan(&self, config: &updater_core::Config) -> Vec<ManagerConfig> {
+        let pending: Vec<_> = config
+            .managers
+            .iter()
+            .filter(|manager| !self.records.contains_key(&manager.id))
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            config.managers.clone()
+        } else {
+            pending
         }
     }
 }
@@ -232,13 +310,14 @@ impl HealthCenter {
                 if info.is_checking {
                     return Action::None;
                 }
-                let managers = config.managers.clone();
-                let (generation, cancellation) = info.begin_scan(&managers);
+                let managers = info.managers_for_scan(config);
+                let (generation, cancellation, invalidated_managers) = info.begin_scan(&managers);
                 Action::Run(run_health_scan(
                     generation,
                     managers,
                     catalog.registry(),
                     cancellation,
+                    invalidated_managers,
                 ))
             }
             Message::CancelScan => {
@@ -291,18 +370,19 @@ impl HealthCenter {
         use iced::widget::{button, column, row, text};
 
         let summary = HealthSummary::new(config, info, installed, updates);
-        let check = button(
-            text(if info.has_results() {
-                "Recheck"
-            } else {
-                "Check all"
-            })
-            .size(14)
-            .font(theme::FONT_SEMIBOLD),
-        )
-        .padding([8, 12])
-        .style(theme::secondary_button(!info.is_checking))
-        .on_press_maybe((!info.is_checking).then_some(Message::StartScan));
+        let pending_count = info.pending_manager_count(config);
+        let check_label = if pending_count == 0 {
+            "Recheck all".to_owned()
+        } else if !info.has_results() {
+            "Check all".to_owned()
+        } else {
+            format!("Check pending ({pending_count})")
+        };
+        let can_check = !info.is_checking && !config.managers.is_empty();
+        let check = button(text(check_label).size(14).font(theme::FONT_SEMIBOLD))
+            .padding([8, 12])
+            .style(theme::secondary_button(can_check))
+            .on_press_maybe(can_check.then_some(Message::StartScan));
         let cancel = button(
             text(if info.cancellation_requested {
                 "Stopping..."
@@ -333,6 +413,13 @@ impl HealthCenter {
                 .map(|manager| catalog.display_name(manager))
                 .unwrap_or("Preparing checks");
             format!("{current} · {}/{} checked", info.completed, info.total)
+        } else if pending_count > 0 {
+            info.finished_at.as_ref().map_or_else(
+                || format!("{pending_count} manager(s) have not been checked"),
+                |finished_at| {
+                    format!("{pending_count} manager(s) need checking · last scan {finished_at}")
+                },
+            )
         } else if let Some(finished_at) = &info.finished_at {
             if info.last_scan_cancelled {
                 format!(
@@ -547,6 +634,7 @@ fn run_health_scan(
     managers: Vec<ManagerConfig>,
     registry: Arc<ManagerRegistry>,
     cancellation: CancellationToken,
+    invalidated_managers: Arc<Mutex<HashSet<ManagerId>>>,
 ) -> Task<Message> {
     let (sender, receiver) = mpsc::unbounded();
     let stream = Task::run(receiver, move |event| match event {
@@ -579,6 +667,12 @@ fn run_health_scan(
                 break;
             }
             let manager_id = manager_config.id.clone();
+            if invalidated_managers
+                .lock()
+                .is_ok_and(|invalidated| invalidated.contains(&manager_id))
+            {
+                continue;
+            }
             let _ = sender.unbounded_send(ScanEvent::Started(manager_id.clone()));
             let result = match registry.get(&manager_id) {
                 Some(manager) => manager
@@ -615,8 +709,8 @@ mod tests {
     fn stale_scan_result_does_not_replace_current_generation() {
         let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
         let mut info = ManagerHealthInfo::default();
-        let (first, _) = info.begin_scan(std::slice::from_ref(&cargo));
-        let (current, _) = info.begin_scan(std::slice::from_ref(&cargo));
+        let (first, _, _) = info.begin_scan(std::slice::from_ref(&cargo));
+        let (current, _, _) = info.begin_scan(std::slice::from_ref(&cargo));
 
         info.apply_result(
             first,
@@ -635,12 +729,173 @@ mod tests {
     fn cancellation_is_requested_on_the_active_scan_token() {
         let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
         let mut info = ManagerHealthInfo::default();
-        let (_, cancellation) = info.begin_scan(&[cargo]);
+        let (_, cancellation, _) = info.begin_scan(&[cargo]);
 
         info.request_cancellation();
 
         assert!(cancellation.is_cancelled());
         assert!(info.cancellation_requested);
+    }
+
+    #[test]
+    fn configuration_change_preserves_unaffected_health_records() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let npm = ManagerConfig::new(manager_id("builtin:npm"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone().with_executable("/opt/cargo"), npm.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        let (generation, _, _) = info.begin_scan(&[cargo.clone(), npm.clone()]);
+        info.apply_result(
+            generation,
+            cargo.id.clone(),
+            "now".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+        info.apply_result(
+            generation,
+            npm.id.clone(),
+            "now".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+
+        info.reconcile_configuration(&config, &HashSet::from([cargo.id.clone()]));
+
+        assert!(info.result(&cargo.id).is_none());
+        assert!(info.result(&npm.id).is_some());
+    }
+
+    #[test]
+    fn configuration_change_keeps_unaffected_active_scan_running() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let npm = ManagerConfig::new(manager_id("builtin:npm"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone(), npm.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        let (generation, cancellation, _) = info.begin_scan(&[cargo.clone(), npm.clone()]);
+
+        info.reconcile_configuration(&config, &HashSet::from([cargo.id.clone()]));
+        info.apply_result(
+            generation,
+            npm.id.clone(),
+            "now".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+
+        assert!(info.is_checking());
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(info.completed, 1);
+        assert_eq!(info.total, 1);
+        assert!(info.result(&npm.id).is_some());
+    }
+
+    #[test]
+    fn changed_manager_result_from_an_active_scan_is_ignored() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone().with_executable("/opt/cargo")],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        let (generation, _, _) = info.begin_scan(std::slice::from_ref(&cargo));
+
+        info.reconcile_configuration(&config, &HashSet::from([cargo.id.clone()]));
+        info.apply_result(
+            generation,
+            cargo.id.clone(),
+            "stale".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+
+        assert!(info.result(&cargo.id).is_none());
+    }
+
+    #[test]
+    fn next_scan_targets_only_managers_without_records() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let npm = ManagerConfig::new(manager_id("builtin:npm"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone(), npm.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        let (generation, _, _) = info.begin_scan(&[cargo.clone(), npm.clone()]);
+        info.apply_result(
+            generation,
+            cargo.id,
+            "now".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+
+        let managers = info.managers_for_scan(&config);
+
+        assert_eq!(managers, vec![npm]);
+    }
+
+    #[test]
+    fn next_scan_rechecks_all_managers_when_every_record_is_fresh() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let npm = ManagerConfig::new(manager_id("builtin:npm"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone(), npm.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        let (generation, _, _) = info.begin_scan(&[cargo.clone(), npm.clone()]);
+        for manager in [&cargo, &npm] {
+            info.apply_result(
+                generation,
+                manager.id.clone(),
+                "now".to_owned(),
+                Ok(ManagerAvailability::Available { version: None }),
+            );
+        }
+
+        let managers = info.managers_for_scan(&config);
+
+        assert_eq!(managers, vec![cargo, npm]);
+    }
+
+    #[test]
+    fn opening_health_page_only_scans_when_a_configured_manager_is_pending() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut info = ManagerHealthInfo::default();
+        assert!(info.should_scan_on_open(&config));
+
+        let (generation, _, _) = info.begin_scan(std::slice::from_ref(&cargo));
+        info.apply_result(
+            generation,
+            cargo.id,
+            "now".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+        info.finish_scan(generation, "done".to_owned(), false);
+
+        assert!(!info.should_scan_on_open(&config));
+    }
+
+    #[test]
+    fn finished_scan_rejects_late_results() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let mut info = ManagerHealthInfo::default();
+        let (generation, _, _) = info.begin_scan(std::slice::from_ref(&cargo));
+        info.finish_scan(generation, "done".to_owned(), false);
+
+        info.apply_result(
+            generation,
+            cargo.id.clone(),
+            "late".to_owned(),
+            Ok(ManagerAvailability::Available { version: None }),
+        );
+
+        assert!(info.result(&cargo.id).is_none());
     }
 
     #[test]

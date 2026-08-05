@@ -111,7 +111,7 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Apply the successfully saved draft and reload package data.
     ApplySavedConfig(updater_core::Config),
-    /// A manager-owned setting changed, invalidating prior health results.
+    /// A manager-owned draft setting changed, invalidating only its health result.
     ManagerConfigChanged,
 }
 
@@ -126,10 +126,6 @@ impl Settings {
 
     pub fn is_dirty(&self) -> bool {
         self.is_initialized && self.draft != self.baseline
-    }
-
-    pub fn has_manager_changes(&self) -> bool {
-        self.is_initialized && self.draft.managers != self.baseline.managers
     }
 
     pub fn draft_config(&self) -> &updater_core::Config {

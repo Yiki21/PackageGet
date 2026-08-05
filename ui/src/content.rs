@@ -186,6 +186,8 @@ impl Content {
                     setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
                     setting::Action::ApplySavedConfig(config) => {
                         let manager_changes = ManagerConfigChanges::between(pm_config, &config);
+                        health_info
+                            .reconcile_configuration(&config, &manager_changes.affected_managers());
                         *pm_config = config;
                         if !manager_changes.is_empty() {
                             Action::ReloadPackageData {
@@ -197,7 +199,13 @@ impl Content {
                         }
                     }
                     setting::Action::ManagerConfigChanged => {
-                        health_info.invalidate();
+                        let draft_config = self.settings.draft_config();
+                        let manager_changes =
+                            ManagerConfigChanges::between(pm_config, draft_config);
+                        health_info.reconcile_configuration(
+                            draft_config,
+                            &manager_changes.affected_managers(),
+                        );
                         Action::None
                     }
                     setting::Action::None => Action::None,
@@ -558,7 +566,7 @@ mod package_data_reload_tests {
     }
 
     #[test]
-    fn manager_draft_change_invalidates_an_active_health_scan() {
+    fn manager_draft_change_preserves_an_active_health_scan() {
         let mut content = Content::default();
         let mut config = updater_core::Config::default();
         let mut installed = InstalledInfo::default();
@@ -592,7 +600,7 @@ mod package_data_reload_tests {
         );
 
         assert!(matches!(action, Action::None));
-        assert!(!health.is_checking());
+        assert!(health.is_checking());
         assert!(!health.has_results());
     }
 
