@@ -188,6 +188,12 @@ impl UpdatesInfo {
             })
             .count()
     }
+
+    fn selected_sources_have_errors(&self) -> bool {
+        self.selected_managers.iter().any(|manager| {
+            self.init_errors.contains_key(manager) || self.load_errors.contains_key(manager)
+        })
+    }
 }
 
 pub enum Action {
@@ -1029,9 +1035,7 @@ impl Updates {
         }
 
         let total_updates: usize = filtered_managers.iter().map(|(_, (count, _))| *count).sum();
-        let has_visible_errors = filtered_managers
-            .iter()
-            .any(|(pm_type, _)| info.load_errors.contains_key(pm_type));
+        let has_visible_errors = info.selected_sources_have_errors();
 
         if total_updates == 0 && !has_visible_errors && selected_loading_sources == 0 {
             return shared::centered_message("No updates available");
@@ -1732,6 +1736,19 @@ mod tests {
         info.loading_updates.insert(npm, 2);
 
         assert_eq!(info.selected_loading_sources(), 1);
+    }
+
+    #[test]
+    fn selected_sources_have_errors_includes_initialization_failures() {
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        info.selected_managers.insert(cargo.clone());
+        info.updates_by_manager
+            .insert(cargo.clone(), (0, Vec::new()));
+        info.init_errors
+            .insert(cargo, "failed to initialize".to_owned());
+
+        assert!(info.selected_sources_have_errors());
     }
 
     #[test]

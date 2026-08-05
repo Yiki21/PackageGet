@@ -18,17 +18,20 @@ package manager 首次初始化或显式刷新时先展示已经完成的来源�
 - [x] Updates 同时识别首次初始化和显式刷新中的已选来源，展示剩余加载数量并
   保留已有 manager section。
 - [x] 尚有来源加载时不提前展示“无更新”或“无搜索结果”。
+- [x] 已选来源的初始化错误参与空状态判断；即使其他来源返回 0 个更新，也保留
+  失败 manager section 与重试入口。
 - [x] 初始化或刷新未结束时拒绝重复 Refresh Selected、Refresh All 与 Update All。
 - [x] 700px 窄窗口让 Search 与 Actions 稳定换行，Refresh All 不再被裁切，
   Update All 的禁用态与实际行为一致。
-- [x] 添加部分失败与渐进加载状态回归测试。
+- [x] 添加全部成功去重刷新、部分失败、全失败/未执行零刷新、初始化错误可见性与
+  渐进加载状态回归测试。
 - [x] 完成本地串行门禁和 GUI 冒烟。
 - [ ] 原生 Linux、Windows、macOS CI 通过。
 
 ## 验证
 
 - [x] `cargo test -p updater --bin updater --locked --jobs 1 -- --test-threads=1`
-  （76 项通过）。
+  （79 项通过）。
 - [x] 隔离 headless Gamescope 1200x800：13 个已选来源中 5 个已发现更新，
   2 个仍在加载；`uv tool`、DNF 等已完成结果与剩余加载提示同时可见。
 - [x] 隔离 headless Gamescope 700x800：Search/Actions 换行、Refresh 按钮、

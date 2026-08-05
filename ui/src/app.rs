@@ -2161,6 +2161,143 @@ mod tests {
     }
 
     #[test]
+    fn successful_operation_refreshes_each_manager_once() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        app.pm_config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        app.installed_info.has_loading_count = true;
+        app.updates_info.has_loading_count = true;
+        let succeeded = |manager_id: ManagerId| updater_core::ManagerOperationOutcome {
+            manager_id,
+            scope: updater_manager_api::PackageScope::User,
+            requested_packages: 1,
+            completed_packages: 1,
+            status: updater_core::ManagerOperationStatus::Succeeded,
+            error: None,
+        };
+        let outcome = updater_core::OperationOutcome {
+            action: updater_manager_api::PackageAction::Update,
+            completed_packages: 3,
+            total_packages: 3,
+            completed_managers: 3,
+            total_managers: 3,
+            failed_manager: None,
+            error: None,
+            cancelled: false,
+            manager_outcomes: vec![
+                succeeded(cargo.clone()),
+                succeeded(npm.clone()),
+                succeeded(cargo.clone()),
+            ],
+            scope: updater_manager_api::PackageScope::User,
+        };
+
+        let _ = app.refresh_package_managers(&outcome);
+
+        assert_eq!(app.installed_info.request_generation, 2);
+        assert_eq!(app.updates_info.request_generation, 2);
+        assert_eq!(
+            app.installed_info
+                .loading_installed
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from([cargo.clone(), npm.clone()])
+        );
+        assert_eq!(
+            app.updates_info
+                .loading_updates
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from([cargo, npm])
+        );
+    }
+
+    #[test]
+    fn operation_without_success_does_not_refresh_failed_or_unstarted_managers() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        app.pm_config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        app.installed_info.has_loading_count = true;
+        app.updates_info.has_loading_count = true;
+        app.installed_info
+            .installed_packages
+            .insert(cargo.clone(), (1, Vec::new()));
+        app.installed_info
+            .installed_packages
+            .insert(npm.clone(), (2, Vec::new()));
+        app.updates_info
+            .updates_by_manager
+            .insert(cargo.clone(), (1, Vec::new()));
+        app.updates_info
+            .updates_by_manager
+            .insert(npm.clone(), (2, Vec::new()));
+        app.finding_info
+            .search_results
+            .insert(cargo.clone(), Vec::new());
+        app.finding_info
+            .search_results
+            .insert(npm.clone(), Vec::new());
+        let outcome = updater_core::OperationOutcome {
+            action: updater_manager_api::PackageAction::Update,
+            completed_packages: 0,
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 2,
+            failed_manager: Some(cargo.clone()),
+            error: Some("cargo update failed".to_owned()),
+            cancelled: false,
+            manager_outcomes: vec![
+                updater_core::ManagerOperationOutcome {
+                    manager_id: cargo.clone(),
+                    scope: updater_manager_api::PackageScope::User,
+                    requested_packages: 1,
+                    completed_packages: 0,
+                    status: updater_core::ManagerOperationStatus::Failed,
+                    error: Some("cargo update failed".to_owned()),
+                },
+                updater_core::ManagerOperationOutcome {
+                    manager_id: npm.clone(),
+                    scope: updater_manager_api::PackageScope::User,
+                    requested_packages: 1,
+                    completed_packages: 0,
+                    status: updater_core::ManagerOperationStatus::NotStarted,
+                    error: None,
+                },
+            ],
+            scope: updater_manager_api::PackageScope::User,
+        };
+
+        let _ = app.refresh_package_managers(&outcome);
+
+        assert_eq!(app.installed_info.request_generation, 0);
+        assert_eq!(app.updates_info.request_generation, 0);
+        assert!(app.installed_info.loading_installed.is_empty());
+        assert!(app.updates_info.loading_updates.is_empty());
+        assert!(app.installed_info.installed_packages.contains_key(&cargo));
+        assert!(app.installed_info.installed_packages.contains_key(&npm));
+        assert!(app.updates_info.updates_by_manager.contains_key(&cargo));
+        assert!(app.updates_info.updates_by_manager.contains_key(&npm));
+        assert!(app.finding_info.search_results.contains_key(&cargo));
+        assert!(app.finding_info.search_results.contains_key(&npm));
+    }
+
+    #[test]
     fn configuration_reload_invalidates_requests_and_preserves_configured_selection() {
         let mut app = app();
         let manager = manager_id("builtin:cargo");
