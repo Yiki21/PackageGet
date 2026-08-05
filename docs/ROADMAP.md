@@ -363,7 +363,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - Updates 工具栏使用稳定列宽与按钮组换行，700px 窄窗口不再裁切 Refresh All；加载中的 Update All 使用明确禁用态。
 - 实现提交 `be97740` 通过全部本地串行门禁；main CI run `30975535963` 的 Linux、Windows x86_64 与 macOS arm64 原生 job 全部成功。
 
-当前计划（Iteration 066进行中）：
+当前进度（Iteration 066已完成）：
 
 - 将 Package Manager 配置保存后的全量 package-data reload 收敛为按稳定 ID 的
   配置差量刷新；只重新加载新增或配置内容变化的 manager，移除项只清理本地状态。
@@ -371,6 +371,8 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
   懒加载，不因配置保存提前启动 Installed/Updates 扫描。
 - 首次多来源扫描与配置保存重叠时，仅屏蔽受影响 manager 的旧结果，不通过全局
   generation 取消其他来源的有效工作。
+- 实现提交 `d647e82` 通过全部本地串行门禁；main CI run `30979270678` 的 Linux、
+  Windows x86_64 与 macOS arm64 原生 job 全部成功。
 
 ### 阶段 7：扩展 Package Manager 生态
 

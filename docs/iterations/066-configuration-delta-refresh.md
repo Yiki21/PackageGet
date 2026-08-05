@@ -1,7 +1,7 @@
 # Iteration 066：配置差量刷新与缓存保留
 
 - 日期：2026-08-05
-- 状态：进行中
+- 状态：已完成
 - ROADMAP 阶段：阶段 5/7 工作流可靠性与 Package Manager 生态
 
 ## 目标
@@ -22,7 +22,7 @@
 - [x] 未变化 manager 的 cache、source selection、package selection、错误和在途
   request 保持不变；受影响 manager 的冻结确认状态与搜索结果失效。
 - [x] 添加差量计算、缓存隔离、移除零扫描、懒加载与在途结果隔离回归测试。
-- [ ] 完成本地串行门禁和 Linux、Windows、macOS 原生 CI。
+- [x] 完成本地串行门禁和 Linux、Windows、macOS 原生 CI。
 
 ## 验证
 
@@ -34,7 +34,19 @@
 - [x] `cargo clippy --workspace --all-targets --locked --jobs 1 -- -D warnings`
 - [x] `cargo build --workspace --locked --jobs 1`
 - [x] `cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --locked --jobs 1`
-- [ ] main CI 的 Linux、Windows x86_64 与 macOS arm64 原生 job 全部通过。
+- [x] main CI run `30979270678`：Linux format/check/test/Clippy/build、Snap、
+  Portage/XBPS 离线合同及 Gentoo/Void 原生只读 smoke，Windows x86_64
+  workspace 与 manager 合同，以及 macOS arm64 workspace 与跨平台 manager
+  合同全部通过。
+
+## 结果
+
+- 实现提交 `d647e82` 将配置保存事件改为携带按稳定 ID 计算的 manager 差量；
+  未变化 manager 不再因其他 manager 的添加、移除或路径/私有设置变化而重扫。
+- 配置保存不再增加全局 package-data generation。首次扫描中的未变化来源继续
+  合并；受影响来源通过既有 per-manager request 与 refresh override 拒绝旧结果。
+- 已初始化页面对新增/变化 manager 直接启动一次定向 Installed/Updates 加载；
+  未初始化页面保持零请求，移除 manager 在所有情况下都只清理本地状态。
 
 ## 边界
 
