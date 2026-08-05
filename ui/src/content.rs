@@ -7,6 +7,10 @@ mod shared;
 mod updates;
 mod workflows;
 
+use std::collections::{HashMap, HashSet};
+
+use updater_manager_api::{ManagerConfig, ManagerId};
+
 use crate::{
     content::{finding::Finding, health::HealthCenter, setting::Settings},
     shortcut::SelectionDirection,
@@ -83,8 +87,8 @@ pub enum Action {
     CancellableRun(iced::Task<Message>, updater_core::CancellationToken),
     /// Reload package data and run an optional page follow-up task.
     ReloadPackageData {
-        /// Why package data needs to be reloaded.
-        reason: ReloadReason,
+        /// Package-data reload scope.
+        reload: PackageDataReload,
         /// Optional task to run after the reload starts.
         follow_up: iced::Task<Message>,
     },
@@ -95,17 +99,69 @@ pub enum Action {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReloadReason {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageDataReload {
     /// Initial package-data load after configuration startup.
     Startup,
-    /// Configured package managers changed.
-    ConfigurationChanged,
+    /// Reload only package managers whose persisted configuration changed.
+    ManagersChanged(ManagerConfigChanges),
 }
 
-impl ReloadReason {
-    pub fn preserves_page_context(self) -> bool {
+impl PackageDataReload {
+    pub fn preserves_page_context(&self) -> bool {
         !matches!(self, Self::Startup)
+    }
+
+    pub fn is_configuration_change(&self) -> bool {
+        matches!(self, Self::ManagersChanged(_))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagerConfigChanges {
+    reload: HashSet<ManagerId>,
+    removed: HashSet<ManagerId>,
+}
+
+impl ManagerConfigChanges {
+    pub(crate) fn between(previous: &updater_core::Config, current: &updater_core::Config) -> Self {
+        let previous_by_id: HashMap<&ManagerId, &ManagerConfig> = previous
+            .managers
+            .iter()
+            .map(|manager| (&manager.id, manager))
+            .collect();
+        let current_by_id: HashMap<&ManagerId, &ManagerConfig> = current
+            .managers
+            .iter()
+            .map(|manager| (&manager.id, manager))
+            .collect();
+
+        let reload = current
+            .managers
+            .iter()
+            .filter(|manager| previous_by_id.get(&manager.id).copied() != Some(*manager))
+            .map(|manager| manager.id.clone())
+            .collect();
+        let removed = previous
+            .managers
+            .iter()
+            .filter(|manager| !current_by_id.contains_key(&manager.id))
+            .map(|manager| manager.id.clone())
+            .collect();
+
+        Self { reload, removed }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.reload.is_empty() && self.removed.is_empty()
+    }
+
+    pub fn reload_managers(&self) -> &HashSet<ManagerId> {
+        &self.reload
+    }
+
+    pub fn affected_managers(&self) -> HashSet<ManagerId> {
+        self.reload.union(&self.removed).cloned().collect()
     }
 }
 
@@ -129,11 +185,11 @@ impl Content {
                 match action {
                     setting::Action::Run(task) => Action::Run(task.map(Message::Settings)),
                     setting::Action::ApplySavedConfig(config) => {
-                        let manager_config_changed = pm_config.managers != config.managers;
+                        let manager_changes = ManagerConfigChanges::between(pm_config, &config);
                         *pm_config = config;
-                        if manager_config_changed {
+                        if !manager_changes.is_empty() {
                             Action::ReloadPackageData {
-                                reason: ReloadReason::ConfigurationChanged,
+                                reload: PackageDataReload::ManagersChanged(manager_changes),
                                 follow_up: iced::Task::none(),
                             }
                         } else {
@@ -431,7 +487,7 @@ impl Content {
 }
 
 #[cfg(test)]
-mod reload_reason_tests {
+mod package_data_reload_tests {
     use super::*;
 
     fn manager_id(value: &str) -> updater_manager_api::ManagerId {
@@ -440,8 +496,65 @@ mod reload_reason_tests {
 
     #[test]
     fn only_startup_resets_page_context() {
-        assert!(!ReloadReason::Startup.preserves_page_context());
-        assert!(ReloadReason::ConfigurationChanged.preserves_page_context());
+        assert!(!PackageDataReload::Startup.preserves_page_context());
+        assert!(
+            PackageDataReload::ManagersChanged(ManagerConfigChanges::default())
+                .preserves_page_context()
+        );
+    }
+
+    #[test]
+    fn manager_config_changes_track_added_changed_and_removed_ids() {
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let flatpak = manager_id("builtin:flatpak");
+        let previous = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        let current = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()).with_executable("/opt/cargo"),
+                updater_core::ManagerConfig::new(flatpak.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+
+        let changes = ManagerConfigChanges::between(&previous, &current);
+
+        assert_eq!(
+            changes.reload_managers(),
+            &HashSet::from([cargo.clone(), flatpak.clone()])
+        );
+        assert_eq!(
+            changes.affected_managers(),
+            HashSet::from([cargo, npm, flatpak])
+        );
+    }
+
+    #[test]
+    fn manager_order_change_does_not_reload_package_data() {
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let previous = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        let current = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(npm),
+                updater_core::ManagerConfig::new(cargo),
+            ],
+            ..updater_core::Config::default()
+        };
+
+        assert!(ManagerConfigChanges::between(&previous, &current).is_empty());
     }
 
     #[test]
@@ -556,5 +669,50 @@ mod reload_reason_tests {
 
         assert!(matches!(action, Action::None));
         assert!(active_config.notifications_enabled);
+    }
+
+    #[test]
+    fn saving_manager_change_scopes_reload_to_the_changed_id() {
+        let mut content = Content::default();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let mut active_config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm),
+            ],
+            ..updater_core::Config::default()
+        };
+        let mut installed = InstalledInfo::default();
+        let mut updates = UpdatesInfo::default();
+        let mut finding = FindingInfo::default();
+        let mut health = ManagerHealthInfo::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        content.settings.sync_from_config(&active_config);
+        let mut saved_config = active_config.clone();
+        saved_config.manager_mut(&cargo).unwrap().executable = Some("/opt/cargo".into());
+
+        let action = content.update(
+            Message::Settings(setting::Message::SaveConfigResult {
+                config: saved_config,
+                validation: Vec::new(),
+                result: Ok(()),
+            }),
+            &mut active_config,
+            &mut installed,
+            &mut updates,
+            &mut finding,
+            &mut health,
+            &catalog,
+        );
+
+        let Action::ReloadPackageData {
+            reload: PackageDataReload::ManagersChanged(changes),
+            ..
+        } = action
+        else {
+            panic!("manager save should request a scoped package-data reload");
+        };
+        assert_eq!(changes.reload_managers(), &HashSet::from([cargo]));
     }
 }

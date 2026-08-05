@@ -119,7 +119,7 @@
 5. 完整stable仍以阶段4、阶段5和阶段6的跨平台功能、可靠性、artifact与文档标准为准；Windows/macOS产物不存在时，不把Linux preview描述成ROADMAP目标已完成。
 
 复用：core/src/storage.rs 的 ProjectDirs 路径；ui/src/content/setting.rs 的
-draft/baseline、sync_from_config、is_dirty；ui/src/content.rs::ReloadReason::preserves_page_context；ui/src/activity.rs 的 retention/redaction。
+draft/baseline、sync_from_config、is_dirty；ui/src/content.rs::PackageDataReload::preserves_page_context；ui/src/activity.rs 的 retention/redaction。
 
 ### 阶段 4：交付 Linux X11、Windows 和 macOS 首轮原生支持
 
@@ -178,7 +178,7 @@ GUI/桌面层
 
 1.  为 Discover install 和 selected Updates 复用 updates.rs::UpdatePlan、remove confirmation 和 collect_selected_package_groups 模式：冻结 manager/package
     scope，展示需要提权的 manager、package 名称/数量后再确认执行。
-2.  给 Finding search、Updates/Installed refresh 和初始化任务加入 generation/request ID，丢弃晚到的旧结果；保持 ReloadReason 的页面上下文规则。
+2.  给 Finding search、Updates/Installed refresh 和初始化任务加入 generation/request ID，丢弃晚到的旧结果；保持 PackageDataReload 的页面上下文规则。
 3.  失败计划区分 completed/failed/unattempted manager groups，提供重新扫描后仅重试失败/未执行部分的入口，不盲目重放过期 selection。
 4.  在 package model/inspector/确认页展示 manager scope、origin 与安装目标；Go/pipx 的 Discover 明确标注 exact identifier lookup，避免伪装成目录搜索。
 5.  Activity record 增加时间、请求 scope、per-manager outcome 和有界脱敏诊断摘要；状态面板继续保留 partial success 和 bounded log。
@@ -362,6 +362,15 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - 初始化或刷新仍在运行时禁止重复触发 Refresh All 与 Update All，避免同一 manager 的并发重复扫描。
 - Updates 工具栏使用稳定列宽与按钮组换行，700px 窄窗口不再裁切 Refresh All；加载中的 Update All 使用明确禁用态。
 - 实现提交 `be97740` 通过全部本地串行门禁；main CI run `30975535963` 的 Linux、Windows x86_64 与 macOS arm64 原生 job 全部成功。
+
+当前计划（Iteration 066进行中）：
+
+- 将 Package Manager 配置保存后的全量 package-data reload 收敛为按稳定 ID 的
+  配置差量刷新；只重新加载新增或配置内容变化的 manager，移除项只清理本地状态。
+- 未变化 manager 的缓存、选择、错误和在途请求保持有效；页面尚未访问时继续遵循
+  懒加载，不因配置保存提前启动 Installed/Updates 扫描。
+- 首次多来源扫描与配置保存重叠时，仅屏蔽受影响 manager 的旧结果，不通过全局
+  generation 取消其他来源的有效工作。
 
 ### 阶段 7：扩展 Package Manager 生态
 

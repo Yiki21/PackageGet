@@ -72,3 +72,4 @@
 | 063 | 已完成 | 阶段 6/7：1.2.0 功能发布 | [063-1.2.0-release.md](063-1.2.0-release.md) |
 | 064 | 已完成 | 阶段 5/7：启动、定向刷新与 RubyGems 可靠性 | [064-startup-refresh-rubygems-reliability.md](064-startup-refresh-rubygems-reliability.md) |
 | 065 | 已完成 | 阶段 5/7：部分成功刷新与 Updates 渐进加载 | [065-partial-refresh-progressive-updates.md](065-partial-refresh-progressive-updates.md) |
+| 066 | 进行中 | 阶段 5/7：配置差量刷新与缓存保留 | [066-configuration-delta-refresh.md](066-configuration-delta-refresh.md) |
