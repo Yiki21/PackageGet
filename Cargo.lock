@@ -3717,9 +3717,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "simple-icons-pack"
-version = "16.27.1"
+version = "16.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e814b48369acd6b771659a0658ab671fcbcdeb7e1925900c390c53335bcd48ce"
+checksum = "7fecea419d939b83bbffbd7d29a128647a41ee03fd4dc64cdc71aeb64ebc1190"
 
 [[package]]
 name = "simplecss"
