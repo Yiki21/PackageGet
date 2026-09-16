@@ -163,9 +163,31 @@ impl GoManager {
             let file_type = entry.file_type().await.map_err(|error| {
                 fs_error("failed to inspect a Go binary directory entry", error)
             })?;
-            if file_type.is_file() {
-                paths.push(entry.path());
+            if !file_type.is_file() {
+                continue;
             }
+            // GOBIN can also contain lock files and logs left by other tools.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let metadata = entry
+                    .metadata()
+                    .await
+                    .map_err(|error| fs_error("failed to inspect Go binary permissions", error))?;
+                if metadata.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+            }
+            #[cfg(windows)]
+            if !entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            {
+                continue;
+            }
+            paths.push(entry.path());
         }
         paths.sort();
         let go = resolve_executable(config, GO_COMMAND);

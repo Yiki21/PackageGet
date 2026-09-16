@@ -1,3 +1,37 @@
+# Updater 1.2.2
+
+`1.2.2` is an unsigned cross-platform patch release. It fixes Go update discovery when the Go binary directory contains non-executable files such as gup lock files, and keeps the existing RubyGems environment behavior intact.
+
+## Fixes
+
+- Ignores non-executable files in `GOBIN` instead of probing them as Go binaries and failing the entire Go Updates source.
+- Keeps executable Go tools discoverable and preserves their module/package identity for updates.
+- Adds a regression contract for lock files and other non-executable files in `GOBIN`.
+- Refreshes the locked Rust dependency set and removes all currently actionable RustSec vulnerabilities from the release build.
+
+## RubyGems note
+
+RubyGems reports the gems visible to the selected `gem` executable. If the system Ruby and an asdf Ruby are both installed, they have different repositories and can show different update counts. Configure the RubyGems executable explicitly when a specific Ruby installation should be managed.
+
+## Release assets
+
+- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, glibc/musl `.tar.gz`, and glibc `.AppImage` for x86_64/aarch64 as applicable.
+- Windows: x86_64 portable `.zip` and per-user setup `.exe`.
+- macOS: arm64/x86_64 `.app.zip` and `.dmg`.
+- Verify every downloaded asset against the matching `SHA256SUMS` file from this release.
+
+## Compatibility and limits
+
+- Existing configuration and Activity history remain readable. This patch adds no Package Manager or persistent configuration schema.
+- Windows and macOS artifacts are unsigned. SmartScreen or Gatekeeper may warn on first launch.
+- `cargo audit` still reports four non-blocking advisories for unmaintained or unsound transitive crates in the iced font and renderer dependency chain: `paste`, `rustybuzz`, `ttf-parser`, and `lru`. No fixed upstream versions are currently available for this dependency graph.
+
+## Previous release
+
+`1.2.1` remains available under its original immutable tag and release assets. This release does not rewrite that history.
+
+---
+
 # Updater 1.2.1
 
 `1.2.1` is an unsigned cross-platform reliability release of Updater. It reduces startup work, scopes package and health refreshes to the managers that actually changed, improves partial-result visibility, and fixes RubyGems error detection while preserving the existing 17-product-asset bundle and one `SHA256SUMS` manifest.

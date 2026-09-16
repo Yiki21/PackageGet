@@ -66,6 +66,17 @@ fn config(manager: &GoManager, executable: &PathBuf, bin: &std::path::Path) -> M
     config
 }
 
+fn write_binary(path: impl AsRef<std::path::Path>, contents: &[u8]) {
+    fs::write(path.as_ref(), contents).expect("write binary fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path.as_ref(), fs::Permissions::from_mode(0o755))
+            .expect("mark binary fixture executable");
+    }
+}
+
 #[test]
 fn go_descriptor_exposes_the_stable_public_contract() {
     let manager = GoManager::new();
@@ -93,7 +104,9 @@ async fn windows_contract_preserves_logical_identity_and_executable_removal() {
     let workspace = tempdir().expect("create Go Windows contract workspace");
     let bin = workspace.path().join("go-bin");
     fs::create_dir_all(&bin).expect("create GOBIN");
-    fs::write(bin.join("tool.exe"), b"four").expect("write Go Windows binary");
+    write_binary(bin.join("tool.exe"), b"four");
+    fs::write(bin.join(".gup.lock"), b"").expect("write gup lock");
+    fs::write(bin.join("README.txt"), b"installed tools").expect("write non-executable file");
     let log = workspace.path().join("go.log");
     let (_directory, executable) = windows_go(&log);
     let config = config(&manager, &executable, &bin);
@@ -149,8 +162,8 @@ async fn windows_contract_preserves_logical_identity_and_executable_removal() {
 async fn installed_is_sorted_and_preserves_binary_module_and_package_identity() {
     let manager = GoManager::new();
     let bin = tempdir().expect("create GOBIN");
-    fs::write(bin.path().join("ztool"), b"z").expect("write ztool");
-    fs::write(bin.path().join("atool"), b"aaa").expect("write atool");
+    write_binary(bin.path().join("ztool"), b"z");
+    write_binary(bin.path().join("atool"), b"aaa");
     let (_directory, executable) = fake_go(
         r#"#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
@@ -190,7 +203,7 @@ exit 9
 async fn updates_and_exact_search_use_module_versions_without_swallowing_failures() {
     let manager = GoManager::new();
     let bin = tempdir().expect("create GOBIN");
-    fs::write(bin.path().join("tool"), b"tool").expect("write tool");
+    write_binary(bin.path().join("tool"), b"tool");
     let (_directory, executable) = fake_go(
         r#"#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
@@ -286,7 +299,7 @@ exit 12
 async fn legacy_binary_update_resolves_the_installed_package_path() {
     let manager = GoManager::new();
     let bin = tempdir().expect("create GOBIN");
-    fs::write(bin.path().join("tool"), b"tool").expect("write tool");
+    write_binary(bin.path().join("tool"), b"tool");
     let log = bin.path().join("write.log");
     let script = format!(
         r#"#!/bin/sh
@@ -332,7 +345,7 @@ async fn uninstall_only_removes_a_regular_basename_inside_gobin() {
         "#!/bin/sh\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"-m\" ] && [ \"$3\" = \"-json\" ]; then printf '{\"Path\":\"example.com/mod/cmd/tool\",\"Main\":{\"Path\":\"example.com/mod\",\"Version\":\"v1.0.0\"}}\\n'; exit 0; fi\nexit 13\n",
     );
     let config = config(&manager, &executable, bin.path());
-    fs::write(bin.path().join("tool"), b"tool").expect("write tool");
+    write_binary(bin.path().join("tool"), b"tool");
     let mut target = PackageTarget::new(manager.descriptor().id().clone(), "tool");
     target.scope = PackageScope::User;
     target.origin = Some(
@@ -389,7 +402,7 @@ async fn uninstall_only_removes_a_regular_basename_inside_gobin() {
 async fn build_info_probe_failure_is_not_silently_dropped() {
     let manager = GoManager::new();
     let bin = tempdir().expect("create GOBIN");
-    fs::write(bin.path().join("broken"), b"broken").expect("write binary");
+    write_binary(bin.path().join("broken"), b"broken");
     let (_directory, executable) =
         fake_go("#!/bin/sh\nprintf 'unreadable build info\\n' >&2\nexit 17\n");
     let error = manager
@@ -397,6 +410,40 @@ async fn build_info_probe_failure_is_not_silently_dropped() {
         .await
         .expect_err("surface build-info failure");
     assert_ne!(error.kind(), ManagerErrorKind::Protocol);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn updates_ignore_non_executable_files_in_gobin() {
+    let manager = GoManager::new();
+    let bin = tempdir().expect("create GOBIN");
+    fs::write(bin.path().join(".gup.lock"), b"").expect("write gup lock");
+    fs::write(bin.path().join("README.txt"), b"installed tools")
+        .expect("write non-executable file");
+    write_binary(bin.path().join("tool"), b"tool");
+    let (_directory, executable) = fake_go(
+        r#"#!/bin/sh
+if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
+  case "${4##*/}" in
+    tool) printf '{"Path":"example.com/tool","Main":{"Path":"example.com/tool","Version":"v1.0.0"}}\n'; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+if [ "$1" = "list" ] && [ "$4" = "example.com/tool@latest" ]; then
+  printf '{"Path":"example.com/tool","Version":"v1.1.0"}\n'
+  exit 0
+fi
+exit 19
+"#,
+    );
+
+    let updates = manager
+        .updates(&config(&manager, &executable, bin.path()), false)
+        .await
+        .expect("a gup lock must not block Go updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "tool");
+    assert_eq!(updates[0].available_version, "v1.1.0");
 }
 
 #[tokio::test]
