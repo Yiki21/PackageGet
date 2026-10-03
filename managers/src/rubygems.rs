@@ -351,32 +351,21 @@ impl PackageManager for RubyGemsManager {
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
             let mut reported_error = None;
-            let result = timeout(
-                COMMAND_TIMEOUT,
-                run_cancellable_command_with_progress(command, progress, |event| {
-                    let (fraction, message) = event.into_parts();
-                    if let Some(message) = message {
-                        if reported_error.is_none() && is_rubygems_error(&message) {
-                            reported_error = Some(message.clone());
-                        }
-                        progress.emit(ProgressEvent::Message { message });
+            run_cancellable_command_with_progress(command, progress, |event| {
+                let (fraction, message) = event.into_parts();
+                if let Some(message) = message {
+                    if reported_error.is_none() && is_rubygems_error(&message) {
+                        reported_error = Some(message.clone());
                     }
-                    progress.emit(ProgressEvent::Advanced {
-                        completed: index + usize::from(fraction >= 1.0),
-                        total,
-                        current_package: Some(target.name.clone()),
-                    });
-                }),
-            )
-            .await
-            .map_err(|_| {
-                ManagerError::new(
-                    ManagerErrorKind::Timeout,
-                    "RubyGems write command timed out",
-                )
-                .with_detail(command.program().to_string_lossy())
-            })?;
-            result?;
+                    progress.emit(ProgressEvent::Message { message });
+                }
+                progress.emit(ProgressEvent::Advanced {
+                    completed: index + usize::from(fraction >= 1.0),
+                    total,
+                    current_package: Some(target.name.clone()),
+                });
+            })
+            .await?;
             if let Some(detail) = reported_error {
                 return Err(ManagerError::new(
                     ManagerErrorKind::Other,

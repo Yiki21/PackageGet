@@ -104,15 +104,7 @@ impl PipxManager {
     ) -> ManagerResult<()> {
         self.validate_config(config)?;
         let command = self.write_command(config, action, target)?;
-        timeout(
-            COMMAND_TIMEOUT,
-            run_command_with_progress(&command, on_progress),
-        )
-        .await
-        .map_err(|_| {
-            ManagerError::new(ManagerErrorKind::Timeout, "pipx write command timed out")
-                .with_detail(command.program().to_string_lossy())
-        })?
+        run_command_with_progress(&command, on_progress).await
     }
 
     async fn venvs_root(&self, config: &ManagerConfig) -> ManagerResult<PathBuf> {
@@ -367,25 +359,18 @@ impl PackageManager for PipxManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
-            timeout(
-                COMMAND_TIMEOUT,
-                run_cancellable_command_with_progress(command, progress, |event| {
-                    let (fraction, message) = event.into_parts();
-                    if let Some(message) = message {
-                        progress.emit(ProgressEvent::Message { message });
-                    }
-                    progress.emit(ProgressEvent::Advanced {
-                        completed: index + usize::from(fraction >= 1.0),
-                        total,
-                        current_package: Some(target.name.clone()),
-                    });
-                }),
-            )
-            .await
-            .map_err(|_| {
-                ManagerError::new(ManagerErrorKind::Timeout, "pipx write command timed out")
-                    .with_detail(command.program().to_string_lossy())
-            })??;
+            run_cancellable_command_with_progress(command, progress, |event| {
+                let (fraction, message) = event.into_parts();
+                if let Some(message) = message {
+                    progress.emit(ProgressEvent::Message { message });
+                }
+                progress.emit(ProgressEvent::Advanced {
+                    completed: index + usize::from(fraction >= 1.0),
+                    total,
+                    current_package: Some(target.name.clone()),
+                });
+            })
+            .await?;
         }
         progress.emit(ProgressEvent::Finished {
             completed: total,

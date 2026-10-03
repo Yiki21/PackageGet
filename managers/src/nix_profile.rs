@@ -25,7 +25,6 @@ use crate::{
 const NIX_ID: &str = "builtin:nix-profile";
 const NIX_COMMAND: &str = "nix";
 const ORIGIN_NAME: &str = "Nix profile";
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_ELEMENT_NAME_LENGTH: usize = 512;
 const MAX_INSTALLABLE_LENGTH: usize = 2_048;
 
@@ -235,28 +234,18 @@ impl PackageManager for NixProfileManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
-            timeout(
-                COMMAND_TIMEOUT,
-                run_cancellable_command_with_progress(command, progress, |event| {
-                    let (fraction, message) = event.into_parts();
-                    if let Some(message) = message {
-                        progress.emit(ProgressEvent::Message { message });
-                    }
-                    progress.emit(ProgressEvent::Advanced {
-                        completed: index + usize::from(fraction >= 1.0),
-                        total,
-                        current_package: Some(target.name.clone()),
-                    });
-                }),
-            )
-            .await
-            .map_err(|_| {
-                ManagerError::new(
-                    ManagerErrorKind::Timeout,
-                    "Nix profile write command timed out",
-                )
-                .with_detail(command.program().to_string_lossy())
-            })??;
+            run_cancellable_command_with_progress(command, progress, |event| {
+                let (fraction, message) = event.into_parts();
+                if let Some(message) = message {
+                    progress.emit(ProgressEvent::Message { message });
+                }
+                progress.emit(ProgressEvent::Advanced {
+                    completed: index + usize::from(fraction >= 1.0),
+                    total,
+                    current_package: Some(target.name.clone()),
+                });
+            })
+            .await?;
         }
         progress.emit(ProgressEvent::Finished {
             completed: total,

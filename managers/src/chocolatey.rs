@@ -215,23 +215,13 @@ impl PackageManager for ChocolateyManager {
         let total = packages.len();
         progress.emit(ProgressEvent::Started { action, total });
         for (index, (target, command)) in packages.iter().zip(&commands).enumerate() {
-            timeout(
-                COMMAND_TIMEOUT,
-                run_cancellable_command_with_progress(command, progress, |event| {
-                    let (_, message) = event.into_parts();
-                    if let Some(message) = message {
-                        progress.emit(ProgressEvent::Message { message });
-                    }
-                }),
-            )
-            .await
-            .map_err(|_| {
-                ManagerError::new(
-                    ManagerErrorKind::Timeout,
-                    "Chocolatey package command timed out",
-                )
-                .with_detail(command.program().to_string_lossy())
-            })??;
+            run_cancellable_command_with_progress(command, progress, |event| {
+                let (_, message) = event.into_parts();
+                if let Some(message) = message {
+                    progress.emit(ProgressEvent::Message { message });
+                }
+            })
+            .await?;
             progress.emit(ProgressEvent::Advanced {
                 completed: index + 1,
                 total,
