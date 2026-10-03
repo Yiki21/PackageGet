@@ -247,6 +247,10 @@ pub(crate) fn decode_stdout(output: Output, message: &str) -> ManagerResult<Stri
 pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
     command.kill_on_drop(true);
+    // Managed commands run without a terminal: an inherited stdin would let
+    // dpkg or gem prompts block forever or stop on SIGTTIN in the child's
+    // background process group.
+    command.stdin(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

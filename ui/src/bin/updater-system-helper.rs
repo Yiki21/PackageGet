@@ -30,22 +30,28 @@ fn main() -> ExitCode {
 fn execute(plan: CommandPlan) -> ExitCode {
     use std::os::unix::process::CommandExt;
 
-    let error = Command::new(plan.program)
+    let program = plan.program;
+    let error = system_command(plan).exec();
+    eprintln!("updater-system-helper: failed to execute {program}: {error}");
+    ExitCode::from(127)
+}
+
+#[cfg(target_os = "linux")]
+fn system_command(plan: CommandPlan) -> Command {
+    let mut command = Command::new(plan.program);
+    command
         .args(plan.arguments)
         .env_clear()
+        // The helper has no terminal, so debconf must never wait for an answer.
+        .env("DEBIAN_FRONTEND", "noninteractive")
         .env("HOME", "/root")
         .env("LANG", "C")
         .env("LC_ALL", "C")
         .env("LOGNAME", "root")
         .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
         .env("USER", "root")
-        .current_dir("/")
-        .exec();
-    eprintln!(
-        "updater-system-helper: failed to execute {}: {error}",
-        plan.program
-    );
-    ExitCode::from(127)
+        .current_dir("/");
+    command
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -66,9 +72,40 @@ fn command_plan(arguments: &[OsString]) -> Result<CommandPlan, String> {
         .ok_or_else(|| "manager must be valid UTF-8".to_owned())?;
 
     let (program, command_arguments): (&str, &[&str]) = match (action, manager) {
-        ("install", "apt") => ("/usr/bin/apt-get", &["install", "-y"]),
-        ("update", "apt") => ("/usr/bin/apt-get", &["install", "-y", "--only-upgrade"]),
-        ("remove", "apt") => ("/usr/bin/apt-get", &["remove", "-y"]),
+        ("install", "apt") => (
+            "/usr/bin/apt-get",
+            &[
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "install",
+                "-y",
+            ],
+        ),
+        ("update", "apt") => (
+            "/usr/bin/apt-get",
+            &[
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "install",
+                "-y",
+                "--only-upgrade",
+            ],
+        ),
+        ("remove", "apt") => (
+            "/usr/bin/apt-get",
+            &[
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "remove",
+                "-y",
+            ],
+        ),
         ("refresh", "apt") => ("/usr/bin/apt-get", &["update"]),
         ("install", "dnf") => ("/usr/bin/dnf", &["install", "-y"]),
         ("update", "dnf") => ("/usr/bin/dnf", &["upgrade", "-y", "--skip-unavailable"]),
@@ -221,19 +258,44 @@ mod tests {
                 "install",
                 "apt",
                 "/usr/bin/apt-get",
-                vec!["install", "-y", "bash"],
+                vec![
+                    "-o",
+                    "Dpkg::Options::=--force-confdef",
+                    "-o",
+                    "Dpkg::Options::=--force-confold",
+                    "install",
+                    "-y",
+                    "bash",
+                ],
             ),
             (
                 "update",
                 "apt",
                 "/usr/bin/apt-get",
-                vec!["install", "-y", "--only-upgrade", "bash"],
+                vec![
+                    "-o",
+                    "Dpkg::Options::=--force-confdef",
+                    "-o",
+                    "Dpkg::Options::=--force-confold",
+                    "install",
+                    "-y",
+                    "--only-upgrade",
+                    "bash",
+                ],
             ),
             (
                 "remove",
                 "apt",
                 "/usr/bin/apt-get",
-                vec!["remove", "-y", "bash"],
+                vec![
+                    "-o",
+                    "Dpkg::Options::=--force-confdef",
+                    "-o",
+                    "Dpkg::Options::=--force-confold",
+                    "remove",
+                    "-y",
+                    "bash",
+                ],
             ),
             ("refresh", "apt", "/usr/bin/apt-get", vec!["update"]),
             (
@@ -319,6 +381,34 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_commands_run_debconf_noninteractively_in_a_cleared_environment() {
+        let plan = command_plan(&arguments(&["update", "apt", "bash"])).expect("build apt plan");
+        let command = system_command(plan);
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            environment.contains(&(
+                "DEBIAN_FRONTEND".to_owned(),
+                Some("noninteractive".to_owned())
+            )),
+            "{environment:?}"
+        );
+        assert!(environment.contains(&(
+            "PATH".to_owned(),
+            Some("/usr/sbin:/usr/bin:/sbin:/bin".to_owned())
+        )));
+    }
+
     #[test]
     fn accepts_distribution_package_identifiers_without_accepting_paths() {
         let plan = command_plan(&arguments(&[
@@ -329,7 +419,7 @@ mod tests {
             "foo_bar@1%2=3~4",
         ]))
         .expect("accept package identifiers");
-        assert_eq!(plan.arguments.len(), 5);
+        assert_eq!(plan.arguments.len(), 9);
 
         for package in [
             "-oDebug::NoLocking=1",

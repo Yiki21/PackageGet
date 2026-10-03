@@ -565,6 +565,24 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn commands_read_end_of_file_from_a_closed_stdin() {
+        let mut lines = Vec::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_command_with_progress(
+                &CommandSpec::new("sh").args(["-c", "read line; echo \"read exited $?\""]),
+                |progress| lines.extend(progress.into_parts().1),
+            ),
+        )
+        .await
+        .expect("a command reading stdin must not wait for input");
+
+        result.expect("run stdin reader");
+        assert_eq!(lines, ["read exited 1"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn cancellation_terminates_a_silent_command_and_waits_for_exit() {
         struct Cancellation(Arc<AtomicBool>);
 
