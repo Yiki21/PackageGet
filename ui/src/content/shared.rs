@@ -1414,6 +1414,40 @@ pub fn is_installable_search_result(package: &PackageInfo) -> bool {
     package.version.trim() == NOT_INSTALLED
 }
 
+/// Error recorded for a source whose pending read was abandoned by the user.
+pub fn stopped_waiting_error(source: &str) -> String {
+    format!("Stopped waiting for {source}; a late response will be ignored.")
+}
+
+/// Status line for sources still loading, with a control to stop waiting
+/// when at least one of them can be abandoned.
+pub fn pending_sources_notice<'a, Message>(
+    label: String,
+    stop_waiting: Option<Message>,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    let mut notice = row![
+        text(label)
+            .size(13)
+            .style(theme::text_accent)
+            .width(Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph),
+    ]
+    .spacing(theme::spacing::MD)
+    .align_y(Alignment::Center);
+    if let Some(message) = stop_waiting {
+        notice = notice.push(
+            button(text("Stop waiting").size(12).font(theme::FONT_SEMIBOLD))
+                .padding([6, 10])
+                .style(theme::secondary_button(true))
+                .on_press(message),
+        );
+    }
+    notice.into()
+}
+
 /// Segmented button whose label is owned by the caller.
 pub fn segmented_button_owned<'a, Message>(
     label: String,
