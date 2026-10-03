@@ -1,4 +1,9 @@
-use std::{collections::HashSet, ffi::OsString, process::ExitStatus};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    ffi::OsString,
+    process::ExitStatus,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -25,6 +30,8 @@ const RPM_COMMAND: &str = "rpm";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const RPM_QUERY_FORMAT: &str =
     "%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\t%{INSTALLTIME}\t%{URL}\n";
+const RPM_VERSION_FORMAT: &str = "%{VERSION}-%{RELEASE}\n";
+const RPM_VERSION_MAP_FORMAT: &str = "%{NAME}\t%{VERSION}-%{RELEASE}\n";
 
 /// Direct `updater-manager-api` implementation for DNF.
 #[derive(Debug, Clone)]
@@ -61,11 +68,14 @@ impl DnfManager {
 
     /// Returns the installed version of one RPM package.
     ///
+    /// A package with several installed instances (kernel, multilib) reports
+    /// the highest `VERSION-RELEASE` as a single string.
+    ///
     /// # Errors
     ///
-    /// Returns a protocol error when RPM cannot identify the package or emits
-    /// invalid UTF-8. Command startup failures retain their typed command
-    /// classification.
+    /// Returns a protocol error when RPM cannot identify the package, emits
+    /// no version, or emits invalid UTF-8. Command startup failures retain
+    /// their typed command classification.
     pub async fn current_version(
         &self,
         config: &ManagerConfig,
@@ -75,7 +85,7 @@ impl DnfManager {
         let spec = CommandSpec::new(RPM_COMMAND).args([
             OsString::from("-q"),
             OsString::from("--queryformat"),
-            OsString::from("%{VERSION}-%{RELEASE}"),
+            OsString::from(RPM_VERSION_FORMAT),
             OsString::from(package_name),
         ]);
         let output = run_output(&spec).await?;
@@ -87,18 +97,36 @@ impl DnfManager {
             .with_detail(package_name));
         }
 
-        let version = decode_stdout(output, "dnf package version is not valid UTF-8")?
-            .trim()
-            .to_owned();
-        if version.is_empty() {
+        let stdout = decode_stdout(output, "dnf package version is not valid UTF-8")?;
+        let Some(version) = newest_rpm_version(stdout.lines()) else {
             return Err(ManagerError::new(
                 ManagerErrorKind::Protocol,
                 "dnf package version is empty",
             )
             .with_detail(package_name));
+        };
+
+        Ok(version.to_owned())
+    }
+
+    /// Returns one installed version per RPM package name from a single
+    /// `rpm -qa` query.
+    ///
+    /// Any RPM failure yields an empty map so callers keep their per-row
+    /// fallback text instead of failing the whole listing.
+    async fn installed_version_map(&self) -> HashMap<String, String> {
+        let spec =
+            CommandSpec::new(RPM_COMMAND).args(["-qa", "--queryformat", RPM_VERSION_MAP_FORMAT]);
+        let Ok(output) = run_output(&spec).await else {
+            return HashMap::new();
+        };
+        if !output.status.success() {
+            return HashMap::new();
         }
 
-        Ok(version)
+        decode_stdout(output, "dnf installed versions are not valid UTF-8")
+            .map(|stdout| parse_installed_versions(&stdout))
+            .unwrap_or_default()
     }
 
     /// Executes a DNF package group while exposing normalized two-phase
@@ -146,31 +174,28 @@ impl DnfManager {
         }
 
         let stdout = decode_stdout(output, "dnf update listing is not valid UTF-8")?;
-        let mut updates = Vec::new();
         let mut seen_packages = HashSet::new();
-
-        for raw_line in stdout.lines() {
-            let Some((name, available_version)) = parse_check_upgrade_entry(raw_line) else {
-                continue;
-            };
-            if !seen_packages.insert(name.to_owned()) {
-                continue;
-            }
-
-            let current_version = self
-                .current_version(config, name)
-                .await
-                .unwrap_or_else(|_| "unknown".to_owned());
-            let mut target = PackageTarget::new(self.descriptor.id().clone(), name);
-            target.scope = PackageScope::System;
-            updates.push(PackageUpdate::new(
-                target,
-                current_version,
-                available_version,
-            ));
+        let entries = stdout
+            .lines()
+            .filter_map(parse_check_upgrade_entry)
+            .filter(|(name, _)| seen_packages.insert(*name))
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            return Ok(Vec::new());
         }
 
-        Ok(updates)
+        let installed_versions = self.installed_version_map().await;
+        Ok(entries
+            .into_iter()
+            .map(|(name, available_version)| {
+                let current_version = installed_versions
+                    .get(name)
+                    .map_or("unknown", String::as_str);
+                let mut target = PackageTarget::new(self.descriptor.id().clone(), name);
+                target.scope = PackageScope::System;
+                PackageUpdate::new(target, current_version, available_version)
+            })
+            .collect())
     }
 
     fn write_command(
@@ -284,17 +309,24 @@ impl PackageManager for DnfManager {
         }
 
         let stdout = decode_stdout(output, "dnf search output is not valid UTF-8")?;
-        let mut packages = Vec::new();
-        for name in parse_search_names(&stdout) {
-            let version = self
-                .current_version(config, &name)
-                .await
-                .unwrap_or_else(|_| NOT_INSTALLED_VERSION.to_owned());
-            let mut package = PackageInfo::new(self.descriptor.id().clone(), name, version);
-            package.scope = PackageScope::System;
-            packages.push(package);
+        let names = parse_search_names(&stdout);
+        if names.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(packages)
+
+        let installed_versions = self.installed_version_map().await;
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                let version = installed_versions
+                    .get(&name)
+                    .map_or(NOT_INSTALLED_VERSION, String::as_str)
+                    .to_owned();
+                let mut package = PackageInfo::new(self.descriptor.id().clone(), name, version);
+                package.scope = PackageScope::System;
+                package
+            })
+            .collect())
     }
 
     async fn execute(
@@ -389,6 +421,132 @@ fn parse_installed_packages(stdout: &str, manager_id: &ManagerId) -> Vec<Package
             Some(package)
         })
         .collect()
+}
+
+/// Parses `NAME\tVERSION-RELEASE` lines into one version per package name.
+///
+/// Install-only packages (kernel, kernel-core) and multilib packages (i686
+/// plus x86_64) list one line per installed instance. The highest
+/// `VERSION-RELEASE` by RPM version comparison wins, so the result does not
+/// depend on RPM database order.
+fn parse_installed_versions(stdout: &str) -> HashMap<String, String> {
+    let mut versions = HashMap::<String, String>::new();
+    for line in stdout.lines() {
+        let Some((name, version)) = line.split_once('\t') else {
+            continue;
+        };
+        let (name, version) = (name.trim(), version.trim());
+        if name.is_empty() || version.is_empty() {
+            continue;
+        }
+        match versions.get_mut(name) {
+            Some(current) => {
+                if rpm_version_cmp(version, current) == Ordering::Greater {
+                    version.clone_into(current);
+                }
+            }
+            None => {
+                versions.insert(name.to_owned(), version.to_owned());
+            }
+        }
+    }
+    versions
+}
+
+/// Returns the highest of several `VERSION-RELEASE` lines, as printed by
+/// `rpm -q` for a package with more than one installed instance.
+fn newest_rpm_version<'a>(lines: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    lines
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .reduce(|newest, version| {
+            if rpm_version_cmp(version, newest) == Ordering::Greater {
+                version
+            } else {
+                newest
+            }
+        })
+}
+
+/// Compares two `VERSION-RELEASE` strings with RPM's segment rules: digit
+/// runs compare numerically, letter runs lexically, a digit run is newer
+/// than a letter run, `~` sorts before everything (pre-release) and `^`
+/// sorts after the base version but before any further segment.
+fn rpm_version_cmp(left: &str, right: &str) -> Ordering {
+    let (mut left, mut right) = (left.as_bytes(), right.as_bytes());
+    let is_separator = |byte: &u8| !byte.is_ascii_alphanumeric() && *byte != b'~' && *byte != b'^';
+
+    loop {
+        while left.first().is_some_and(is_separator) {
+            left = &left[1..];
+        }
+        while right.first().is_some_and(is_separator) {
+            right = &right[1..];
+        }
+
+        match (left.first(), right.first()) {
+            (Some(b'~'), Some(b'~')) | (Some(b'^'), Some(b'^')) => {
+                left = &left[1..];
+                right = &right[1..];
+                continue;
+            }
+            (Some(b'~'), _) => return Ordering::Less,
+            (_, Some(b'~')) => return Ordering::Greater,
+            (Some(b'^'), None) => return Ordering::Greater,
+            (None, Some(b'^')) => return Ordering::Less,
+            (Some(b'^'), Some(_)) => return Ordering::Less,
+            (Some(_), Some(b'^')) => return Ordering::Greater,
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(_), Some(_)) => {}
+        }
+
+        let numeric = left[0].is_ascii_digit();
+        let segment_end = |value: &[u8]| {
+            value
+                .iter()
+                .position(|byte| {
+                    if numeric {
+                        !byte.is_ascii_digit()
+                    } else {
+                        !byte.is_ascii_alphabetic()
+                    }
+                })
+                .unwrap_or(value.len())
+        };
+        let (left_segment, left_rest) = left.split_at(segment_end(left));
+        let (right_segment, right_rest) = right.split_at(segment_end(right));
+        if right_segment.is_empty() {
+            return if numeric {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+
+        let ordering = if numeric {
+            let trim_zeros = |segment: &[u8]| {
+                let start = segment
+                    .iter()
+                    .position(|byte| *byte != b'0')
+                    .unwrap_or(segment.len());
+                segment[start..].to_vec()
+            };
+            let (left_number, right_number) = (trim_zeros(left_segment), trim_zeros(right_segment));
+            left_number
+                .len()
+                .cmp(&right_number.len())
+                .then_with(|| left_number.cmp(&right_number))
+        } else {
+            left_segment.cmp(right_segment)
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+        left = left_rest;
+        right = right_rest;
+    }
 }
 
 fn optional_rpm_field(value: Option<&str>) -> Option<String> {
@@ -595,6 +753,56 @@ mod tests {
             parse_check_upgrade_entry("    kernel-headers.x86_64 6.18.3-200.fc43 updates")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn installed_version_map_keeps_one_version_per_package() {
+        let versions = parse_installed_versions(
+            "kernel-core\t6.8.5-300.fc40\n\
+             kernel-core\t6.8.10-300.fc40\n\
+             kernel-core\t6.8.7-300.fc40\n\
+             glibc\t2.39-6.fc40\nglibc\t2.39-6.fc40\n\
+             bash\t5.2.26-3.fc40\n\
+             broken\n\n",
+        );
+
+        assert_eq!(versions.len(), 3);
+        assert_eq!(
+            versions.get("kernel-core").map(String::as_str),
+            Some("6.8.10-300.fc40")
+        );
+        assert_eq!(
+            versions.get("glibc").map(String::as_str),
+            Some("2.39-6.fc40")
+        );
+        assert_eq!(
+            versions.get("bash").map(String::as_str),
+            Some("5.2.26-3.fc40")
+        );
+    }
+
+    #[test]
+    fn rpm_version_comparison_follows_rpm_segment_rules() {
+        assert_eq!(rpm_version_cmp("1.0", "1.0"), Ordering::Equal);
+        assert_eq!(rpm_version_cmp("1.0-1", "1.0-1.fc40"), Ordering::Less);
+        assert_eq!(rpm_version_cmp("1.10", "1.9"), Ordering::Greater);
+        assert_eq!(rpm_version_cmp("1.0~rc1", "1.0"), Ordering::Less);
+        assert_eq!(rpm_version_cmp("1.0^git1", "1.0"), Ordering::Greater);
+        assert_eq!(rpm_version_cmp("1.0^git1", "1.0.1"), Ordering::Less);
+        assert_eq!(rpm_version_cmp("1.0a", "1.0.1"), Ordering::Less);
+        assert_eq!(
+            rpm_version_cmp("6.8.5-300.fc40", "6.8.10-300.fc40"),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn newest_installed_version_ignores_blank_lines() {
+        assert_eq!(
+            newest_rpm_version("6.8.5-300.fc40\n6.8.10-300.fc40\n\n".lines()),
+            Some("6.8.10-300.fc40")
+        );
+        assert_eq!(newest_rpm_version("\n  \n".lines()), None);
     }
 
     #[tokio::test]
