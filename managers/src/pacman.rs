@@ -125,15 +125,16 @@ impl PacmanManager {
     async fn list_updates(
         &self,
         config: &ManagerConfig,
-        refresh: bool,
+        _refresh: bool,
     ) -> ManagerResult<Vec<PackageUpdate>> {
         self.validate_config(config)?;
         let pacman_path = resolve_executable(config, PACMAN_COMMAND);
 
-        if refresh {
-            let refresh = refresh_command();
-            run_command_with_progress(&refresh, |_| {}).await?;
-        }
+        // Arch has no partial upgrade, so the live sync database may only be
+        // moved by `-Syu` in the same transaction (see the system helper).
+        // A checkupdates style temporary database would need `fakeroot`, an
+        // added dependency, so a refreshed listing reads the current local
+        // database instead of running a live `pacman -Sy`.
 
         let spec = CommandSpec::new(pacman_path).arg("-Qu");
         let output = run_output(&spec).await?;
@@ -184,13 +185,18 @@ impl PacmanManager {
         self.validate_config(config)?;
         ensure_supported_action(action)?;
         let command = match action {
-            PackageAction::Install => system_helper_command("install", "pacman"),
+            PackageAction::Install => system_helper_command("install", "pacman")
+                .args(package_names.iter().map(OsString::from)),
+            // Pacman updates are one `pacman -Syu` system transaction; naming
+            // a subset would install packages newer than the rest of the
+            // system, which Arch does not support.
             PackageAction::Update => system_helper_command("update", "pacman"),
-            PackageAction::Uninstall => system_helper_command("remove", "pacman"),
+            PackageAction::Uninstall => system_helper_command("remove", "pacman")
+                .args(package_names.iter().map(OsString::from)),
             _ => return Err(unsupported_action_error()),
         };
 
-        Ok(command.args(package_names.iter().map(OsString::from)))
+        Ok(command)
     }
 }
 
@@ -455,10 +461,6 @@ fn parse_search_entries(stdout: &str) -> Vec<SearchEntry> {
     entries
 }
 
-fn refresh_command() -> CommandSpec {
-    system_helper_command("refresh", "pacman")
-}
-
 fn command_output_tail(stdout: &[u8], stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     if !stderr.trim().is_empty() {
@@ -495,29 +497,22 @@ mod tests {
             ManagerConfig::new(manager.descriptor().id().clone()).with_executable("/custom/pacman");
         let names = vec!["bash".to_owned(), "curl".to_owned()];
 
-        for action in [PackageAction::Install, PackageAction::Update] {
-            let command = manager
-                .write_command(&config, action, &names)
-                .expect("build Pacman sync command");
-            assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
-            let action_name = match action {
-                PackageAction::Install => "install",
-                PackageAction::Update => "update",
-                _ => unreachable!(),
-            };
-            assert_eq!(
-                command.arguments(),
-                [
-                    "/usr/lib/updater/updater-system-helper",
-                    action_name,
-                    "pacman",
-                    "bash",
-                    "curl",
-                ]
-                .map(OsString::from)
-                .as_slice()
-            );
-        }
+        let install = manager
+            .write_command(&config, PackageAction::Install, &names)
+            .expect("build Pacman install command");
+        assert_eq!(install.program(), Path::new("/usr/bin/pkexec"));
+        assert_eq!(
+            install.arguments(),
+            [
+                "/usr/lib/updater/updater-system-helper",
+                "install",
+                "pacman",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
+        );
 
         let uninstall = manager
             .write_command(&config, PackageAction::Uninstall, &names)
@@ -537,18 +532,28 @@ mod tests {
     }
 
     #[test]
-    fn refresh_command_preserves_database_sync_semantics() {
-        let command = refresh_command();
-        assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
+    fn update_command_is_one_full_system_transaction_without_a_partial_target_list() {
+        let manager = PacmanManager::new();
+        let config =
+            ManagerConfig::new(manager.descriptor().id().clone()).with_executable("/custom/pacman");
+
+        let update = manager
+            .write_command(
+                &config,
+                PackageAction::Update,
+                &["bash".to_owned(), "curl".to_owned()],
+            )
+            .expect("build Pacman update command");
+        assert_eq!(update.program(), Path::new("/usr/bin/pkexec"));
+        assert!(
+            update.is_privileged(),
+            "pacman updates run through the privileged helper"
+        );
         assert_eq!(
-            command.arguments(),
-            [
-                "/usr/lib/updater/updater-system-helper",
-                "refresh",
-                "pacman",
-            ]
-            .map(OsString::from)
-            .as_slice()
+            update.arguments(),
+            ["/usr/lib/updater/updater-system-helper", "update", "pacman",]
+                .map(OsString::from)
+                .as_slice()
         );
     }
 

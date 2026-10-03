@@ -111,9 +111,12 @@ fn command_plan(arguments: &[OsString]) -> Result<CommandPlan, String> {
         ("update", "dnf") => ("/usr/bin/dnf", &["upgrade", "-y", "--skip-unavailable"]),
         ("remove", "dnf") => ("/usr/bin/dnf", &["remove", "-y"]),
         ("refresh", "dnf") => ("/usr/bin/dnf", &["check-upgrade", "--refresh"]),
-        ("install" | "update", "pacman") => ("/usr/bin/pacman", &["-S", "--needed", "--noconfirm"]),
+        ("install", "pacman") => ("/usr/bin/pacman", &["-S", "--needed", "--noconfirm"]),
+        // Arch does not support partial upgrades, so an update is always the
+        // whole `-Syu` system transaction and the live sync database is never
+        // refreshed on its own.
+        ("update", "pacman") => ("/usr/bin/pacman", &["-Syu", "--noconfirm"]),
         ("remove", "pacman") => ("/usr/bin/pacman", &["-R", "--noconfirm"]),
-        ("refresh", "pacman") => ("/usr/bin/pacman", &["-Sy", "--noconfirm"]),
         ("install", "zypper") => ("/usr/bin/zypper", &["--non-interactive", "install", "-y"]),
         ("update", "zypper") => ("/usr/bin/zypper", &["--non-interactive", "update", "-y"]),
         ("remove", "zypper") => ("/usr/bin/zypper", &["--non-interactive", "remove", "-y"]),
@@ -135,6 +138,13 @@ fn command_plan(arguments: &[OsString]) -> Result<CommandPlan, String> {
     if action == "refresh" {
         if !packages.is_empty() {
             return Err("refresh does not accept package names".to_owned());
+        }
+    } else if (action, manager) == ("update", "pacman") {
+        if !packages.is_empty() {
+            return Err(
+                "pacman update is a full system upgrade and does not accept package names"
+                    .to_owned(),
+            );
         }
     } else if packages.is_empty() {
         return Err(format!("{action} requires at least one package"));
@@ -332,19 +342,13 @@ mod tests {
                 "update",
                 "pacman",
                 "/usr/bin/pacman",
-                vec!["-S", "--needed", "--noconfirm", "bash"],
+                vec!["-Syu", "--noconfirm"],
             ),
             (
                 "remove",
                 "pacman",
                 "/usr/bin/pacman",
                 vec!["-R", "--noconfirm", "bash"],
-            ),
-            (
-                "refresh",
-                "pacman",
-                "/usr/bin/pacman",
-                vec!["-Sy", "--noconfirm"],
             ),
             (
                 "install",
@@ -372,7 +376,7 @@ mod tests {
             ),
         ] {
             let mut input = vec![action, manager];
-            if action != "refresh" {
+            if action != "refresh" && (action, manager) != ("update", "pacman") {
                 input.push("bash");
             }
             let plan = command_plan(&arguments(&input)).expect("build allowed command");
@@ -407,6 +411,24 @@ mod tests {
             "PATH".to_owned(),
             Some("/usr/sbin:/usr/bin:/sbin:/bin".to_owned())
         )));
+    }
+
+    #[test]
+    fn pacman_update_is_a_full_system_transaction_without_package_names() {
+        let plan = command_plan(&arguments(&["update", "pacman"])).expect("build pacman update");
+        assert_eq!(plan.program, "/usr/bin/pacman");
+        assert_eq!(plan.arguments, arguments(&["-Syu", "--noconfirm"]));
+
+        let error = command_plan(&arguments(&["update", "pacman", "bash"]))
+            .expect_err("reject a partial pacman update");
+        assert!(error.contains("full system upgrade"), "{error}");
+    }
+
+    #[test]
+    fn pacman_metadata_refresh_is_rejected_instead_of_syncing_the_live_database() {
+        let error = command_plan(&arguments(&["refresh", "pacman"]))
+            .expect_err("reject a standalone pacman sync");
+        assert!(error.contains("unsupported action"), "{error}");
     }
 
     #[test]

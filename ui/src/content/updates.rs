@@ -20,6 +20,9 @@ use crate::{
     theme,
 };
 
+/// Pacman applies its updates as one `pacman -Syu` system upgrade.
+const FULL_SYSTEM_UPGRADE_MANAGER: &str = "builtin:pacman";
+
 #[derive(Debug, Clone, Default)]
 pub struct Updates {
     /// Search text for filtering updates in UI.
@@ -428,7 +431,7 @@ impl Updates {
                 }
                 info.last_update_error = None;
                 info.failed_update_manager = None;
-                let manager_groups = collect_selected_package_groups(
+                let mut manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
                         info.updates_by_manager
                             .get(manager)
@@ -438,6 +441,18 @@ impl Updates {
                     catalog,
                     |package| package.target.clone(),
                 );
+                // Selecting any Pacman update plans all of them, because
+                // pacman upgrades the whole system in one transaction.
+                for (manager, targets) in &mut manager_groups {
+                    if manager.as_str() == FULL_SYSTEM_UPGRADE_MANAGER
+                        && let Some((_, packages)) = info.updates_by_manager.get(manager)
+                    {
+                        *targets = packages
+                            .iter()
+                            .map(|package| package.target.clone())
+                            .collect();
+                    }
+                }
                 if manager_groups.is_empty() {
                     info.last_update_error =
                         Some("Selected packages are no longer available to update".to_owned());
@@ -1414,6 +1429,23 @@ impl Updates {
                 catalog,
             ));
         }
+        if plan
+            .packages
+            .manager_groups
+            .iter()
+            .any(|(manager, _)| manager.as_str() == FULL_SYSTEM_UPGRADE_MANAGER)
+        {
+            content = content.push(
+                text(
+                    "Pacman updates run as one full system upgrade (pacman -Syu), which also \
+                     applies any newer updates found when it syncs.",
+                )
+                .size(12)
+                .style(theme::text_on_surface_muted)
+                .width(iced::Length::Fill)
+                .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
         if let Some(failed_detail) = failed_detail {
             content = content.push(
                 text(failed_detail)
@@ -1879,6 +1911,53 @@ mod tests {
             .expect("the read path records the failure");
         assert!(stored.contains("E: Could not get lock /var/lib/dpkg/lock"));
         assert!(stored.contains("Another program holds the package database lock"));
+    }
+
+    #[test]
+    fn selecting_one_pacman_update_plans_the_full_system_upgrade() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let pacman = manager_id(FULL_SYSTEM_UPGRADE_MANAGER);
+        let cargo = manager_id("builtin:cargo");
+        info.selected_managers = HashSet::from([pacman.clone(), cargo.clone()]);
+        info.updates_by_manager.insert(
+            pacman.clone(),
+            (2, vec![update(&pacman, "glibc"), update(&pacman, "python")]),
+        );
+        info.updates_by_manager.insert(
+            cargo.clone(),
+            (2, vec![update(&cargo, "alpha"), update(&cargo, "beta")]),
+        );
+        info.selected_packages
+            .insert(shared::selection_key(&pacman, "python"));
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "alpha"));
+
+        updates.update(
+            Message::PrepareSelectedUpdate,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let mut groups = updates.pending_update.unwrap().packages.manager_groups;
+        groups.sort_by(|(left, _), (right, _)| left.cmp(right));
+        assert_eq!(
+            groups,
+            vec![
+                (
+                    cargo.clone(),
+                    vec![PackageTarget::new(cargo.clone(), "alpha")],
+                ),
+                (
+                    pacman.clone(),
+                    vec![
+                        PackageTarget::new(pacman.clone(), "glibc"),
+                        PackageTarget::new(pacman.clone(), "python"),
+                    ],
+                ),
+            ]
+        );
     }
 
     #[test]

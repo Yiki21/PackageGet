@@ -281,3 +281,44 @@ async fn local_pacman_availability_is_structured() {
         other => panic!("unexpected local Pacman availability: {other:?}"),
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn refreshed_update_listing_never_syncs_the_live_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().expect("create logging fake Pacman directory");
+    let log = directory.path().join("pacman.log");
+    let executable = directory.path().join("pacman");
+    fs::write(
+        &executable,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> '{}'
+if [ "$1" = "-Qu" ]; then printf 'curl 8.15.0-1 -> 8.16.0-1\n'; exit 0; fi
+exit 2
+"#,
+            log.display()
+        ),
+    )
+    .expect("write logging fake Pacman executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("mark logging fake Pacman executable");
+
+    let manager = PacmanManager::new();
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+
+    let updates = manager
+        .updates(&config, true)
+        .await
+        .expect("list refreshed Pacman updates");
+
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "curl");
+    let invoked = fs::read_to_string(&log).expect("read fake Pacman invocation log");
+    assert_eq!(
+        invoked.lines().collect::<Vec<_>>(),
+        ["-Qu"],
+        "refreshing Pacman updates must not run a database sync"
+    );
+}
