@@ -306,7 +306,8 @@ impl Content {
             ActiveContentPage::Updates => (!updates_info.is_updating
                 && self.updates.can_select_packages())
             .then_some(Message::Updates(updates::Message::RefreshSelected)),
-            ActiveContentPage::Installed => (!installed_info.is_removing)
+            ActiveContentPage::Installed => (!installed_info.is_removing
+                && !installed_info.is_updating)
                 .then_some(Message::Installed(installed::Message::RefreshInfo)),
             ActiveContentPage::Health => Some(Message::Health(health::Message::StartScan)),
             ActiveContentPage::Settings => None,
@@ -357,11 +358,12 @@ impl Content {
             ActiveContentPage::Updates => (self.updates.can_select_packages()
                 && !updates_info.is_updating)
                 .then_some(Message::Updates(updates::Message::ToggleSelectAll(true))),
-            ActiveContentPage::Installed => {
-                (self.installed.can_select_packages() && !installed_info.is_removing).then_some(
-                    Message::Installed(installed::Message::ToggleSelectAll(true)),
-                )
-            }
+            ActiveContentPage::Installed => (self.installed.can_select_packages()
+                && !installed_info.is_removing
+                && !installed_info.is_updating)
+                .then_some(Message::Installed(installed::Message::ToggleSelectAll(
+                    true,
+                ))),
             ActiveContentPage::Health => None,
             ActiveContentPage::Settings => None,
         }

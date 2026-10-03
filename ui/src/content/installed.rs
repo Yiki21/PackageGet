@@ -93,6 +93,23 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all toggle message.
     ToggleSelectAll(bool),
+    /// Update the package shown in the inspector.
+    UpdateInspectedPackage,
+    /// Inspector update progress message.
+    UpdateProgress {
+        /// Number of finished packages.
+        completed: usize,
+        /// Total packages to update.
+        total: usize,
+        /// Manager currently executing command.
+        manager: ManagerId,
+        /// Current package being processed.
+        current_package: String,
+        /// Optional command output/status line.
+        command_message: Option<String>,
+    },
+    /// Inspector update result message.
+    UpdatePackagesResult(OperationOutcome),
     /// Remove-selected message.
     RemoveSelectedPackages,
     /// Confirm package removal.
@@ -143,6 +160,12 @@ pub struct InstalledInfo {
     pub sort_by: SortOption,
     /// Selected package keys for batch operations.
     pub selected_packages: HashSet<PackageSelectionKey>,
+    /// Whether an inspector-triggered single-package update is in progress.
+    pub is_updating: bool,
+    /// Update progress `(completed, total, manager, package)`.
+    pub update_progress: Option<(usize, usize, ManagerId, String)>,
+    /// Update command logs.
+    pub update_logs: Vec<String>,
     /// Whether remove operation is in progress.
     pub is_removing: bool,
     /// Remove progress `(completed, total, manager, package)`.
@@ -405,6 +428,84 @@ impl Installed {
                 info.pending_remove = None;
                 Action::None
             }
+            Message::UpdateInspectedPackage => {
+                if info.is_removing || info.is_updating || self.inspected_package.is_none() {
+                    return Action::None;
+                }
+                let Some((manager, name)) = self.inspected_package.clone() else {
+                    return Action::None;
+                };
+                let Some(target) = info
+                    .installed_packages
+                    .get(&manager)
+                    .and_then(|(_, packages)| packages.iter().find(|package| package.name == name))
+                    .map(PackageInfo::target)
+                else {
+                    info.inspector_error = Some(format!("{name} is no longer installed"));
+                    return Action::None;
+                };
+                info.is_updating = true;
+                info.update_progress = Some((0, 1, manager.clone(), name.clone()));
+                info.update_logs.clear();
+                info.inspector_error = None;
+                let cancellation = CancellationToken::default();
+                let task = run_grouped_package_action(
+                    catalog.registry(),
+                    pm_config,
+                    PackageAction::Update,
+                    vec![(manager, vec![target])],
+                    cancellation.clone(),
+                    |OperationProgress {
+                         completed,
+                         total,
+                         manager,
+                         current_package,
+                         command_message,
+                     }| Message::UpdateProgress {
+                        completed,
+                        total,
+                        manager,
+                        current_package,
+                        command_message,
+                    },
+                    Message::UpdatePackagesResult,
+                );
+                Action::CancellableRun(task, cancellation)
+            }
+            Message::UpdateProgress {
+                completed,
+                total,
+                manager,
+                current_package,
+                command_message,
+            } => {
+                info.update_progress = Some((completed, total, manager.clone(), current_package));
+                if let Some(command_message) = command_message {
+                    push_command_log(
+                        &mut info.update_logs,
+                        PackageAction::Update,
+                        &manager,
+                        catalog,
+                        info.update_progress
+                            .as_ref()
+                            .map_or("", |(_, _, _, package)| package.as_str()),
+                        command_message,
+                    );
+                }
+                Action::None
+            }
+            Message::UpdatePackagesResult(outcome) => {
+                info.is_updating = false;
+                info.update_progress = None;
+                if outcome.is_success() {
+                    info.inspector_error = None;
+                } else {
+                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
+                    log::error!("Failed to update inspected package: {}", error);
+                    info.inspector_error = Some(error);
+                }
+                Action::PackageOperationFinished { outcome }
+            }
             Message::RemoveSelectedPackages => {
                 if info.selected_packages.is_empty() || info.is_removing {
                     return Action::None;
@@ -628,9 +729,31 @@ impl Installed {
         .map(|(manager, name)| Message::InspectPackage(manager, name))
     }
 
+    /// Whether the inspected package's manager can update an explicit target
+    /// but cannot list updates, so the Updates page can never reach it.
+    fn inspector_update_supported(&self, catalog: &ManagerCatalog) -> bool {
+        self.inspected_package.as_ref().is_some_and(|(manager, _)| {
+            catalog.descriptor(manager).is_some_and(|descriptor| {
+                let capabilities = descriptor.capabilities();
+                capabilities.contains(ManagerCapability::Update)
+                    && !capabilities.contains(ManagerCapability::Updates)
+            })
+        })
+    }
+
+    /// Returns the inspector update action when it is offered and idle.
+    pub fn inspector_update_action(
+        &self,
+        info: &InstalledInfo,
+        catalog: &ManagerCatalog,
+    ) -> Option<Message> {
+        (self.inspector_update_supported(catalog) && !info.is_removing && !info.is_updating)
+            .then_some(Message::UpdateInspectedPackage)
+    }
+
     pub fn toggle_keyboard_selection(&self, info: &InstalledInfo) -> Option<Message> {
         let (manager, name) = self.inspected_package.as_ref()?;
-        if info.is_removing {
+        if info.is_removing || info.is_updating {
             return None;
         }
         let selected = !info
@@ -931,19 +1054,15 @@ impl Installed {
                 .into();
         }
 
-        let inspector = container(self.package_inspector_view(
-            inspected_package,
-            info.inspector_error.as_deref(),
-            catalog,
-        ))
-        .padding(theme::spacing::LG)
-        .width(if inspector_drawer {
-            iced::Length::Fill
-        } else {
-            iced::Length::Fixed(268.0)
-        })
-        .height(iced::Length::Fill)
-        .style(theme::surface_container);
+        let inspector = container(self.package_inspector_view(inspected_package, info, catalog))
+            .padding(theme::spacing::LG)
+            .width(if inspector_drawer {
+                iced::Length::Fill
+            } else {
+                iced::Length::Fixed(268.0)
+            })
+            .height(iced::Length::Fill)
+            .style(theme::surface_container);
         if inspector_drawer {
             return column![container(package_list).width(iced::Length::Fill), inspector]
                 .spacing(theme::spacing::LG)
@@ -1095,11 +1214,14 @@ impl Installed {
     fn package_inspector_view<'a>(
         &'a self,
         inspected: Option<(ManagerId, &'a PackageInfo)>,
-        inspector_error: Option<&'a str>,
+        info: &'a InstalledInfo,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use crate::content::shared::PackageInspector;
-        use iced::widget::{column, text};
+        use iced::widget::{button, column, text};
+
+        let inspector_error = info.inspector_error.as_deref();
+        let has_inspected_package = inspected.is_some();
 
         let retry_info = inspected.as_ref().and_then(|(manager, package)| {
             let key = shared::selection_key(manager, &package.name);
@@ -1134,6 +1256,34 @@ impl Installed {
             retry_info,
         )]
         .height(iced::Length::Fill);
+        if has_inspected_package && self.inspector_update_supported(catalog) {
+            let update_action = self.inspector_update_action(info, catalog);
+            let enabled = update_action.is_some();
+            content = content.push(
+                button(
+                    text(if info.is_updating {
+                        "Updating..."
+                    } else {
+                        "Update"
+                    })
+                    .size(13)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(if enabled {
+                        theme::text_on_primary
+                    } else {
+                        theme::text_on_surface_muted
+                    }),
+                )
+                .padding([8, 14])
+                .style(theme::action_button(
+                    enabled,
+                    theme::colors::UPDATE_ACTION,
+                    theme::colors::UPDATE_ACTION_HOVER,
+                    theme::colors::UPDATE_ACTION_ACTIVE,
+                ))
+                .on_press_maybe(update_action),
+            );
+        }
         if let Some(error) = inspector_error {
             content = content.push(
                 text(error)
@@ -1599,5 +1749,118 @@ mod tests {
             info.load_errors.get(&manager).map(String::as_str),
             Some("current result")
         );
+    }
+
+    fn package(manager: &ManagerId, name: &str) -> PackageInfo {
+        PackageInfo::new(manager.clone(), name, "1.0.0")
+    }
+
+    #[test]
+    fn inspector_update_action_requires_update_without_updates() {
+        let mut installed = Installed::default();
+        let info = InstalledInfo::default();
+        let catalog = ManagerCatalog::builtin();
+        let nix = ManagerId::parse("builtin:nix-profile").unwrap();
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+
+        assert!(installed.inspector_update_action(&info, &catalog).is_none());
+
+        installed.inspected_package = Some(shared::selection_key(&nix, "hello"));
+        assert!(installed.inspector_update_supported(&catalog));
+        assert!(matches!(
+            installed.inspector_update_action(&info, &catalog),
+            Some(Message::UpdateInspectedPackage)
+        ));
+
+        installed.inspected_package = Some(shared::selection_key(&cargo, "cargo-edit"));
+        assert!(!installed.inspector_update_supported(&catalog));
+        assert!(installed.inspector_update_action(&info, &catalog).is_none());
+
+        let busy = InstalledInfo {
+            is_updating: true,
+            ..InstalledInfo::default()
+        };
+        installed.inspected_package = Some(shared::selection_key(&nix, "hello"));
+        assert!(installed.inspector_update_action(&busy, &catalog).is_none());
+        let removing = InstalledInfo {
+            is_removing: true,
+            ..InstalledInfo::default()
+        };
+        assert!(
+            installed
+                .inspector_update_action(&removing, &catalog)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inspector_update_runs_one_grouped_update_for_the_inspected_target() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo::default();
+        let nix = ManagerId::parse("builtin:nix-profile").unwrap();
+        let mut manager_config = updater_core::ManagerConfig::new(nix.clone());
+        manager_config.settings = serde_json::json!({
+            "profile": "/home/test/.local/state/nix/profiles/profile"
+        });
+        let config = updater_core::Config {
+            managers: vec![manager_config],
+            ..updater_core::Config::default()
+        };
+        let target = package(&nix, "hello").target();
+        info.installed_packages
+            .insert(nix.clone(), (1, vec![package(&nix, "hello")]));
+        installed.inspected_package = Some(shared::selection_key(&nix, "hello"));
+
+        let action = installed.update(
+            Message::UpdateInspectedPackage,
+            &config,
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_updating);
+        assert_eq!(
+            info.update_progress,
+            Some((0, 1, nix.clone(), "hello".to_owned()))
+        );
+
+        let _ = installed.update(
+            Message::UpdatePackagesResult(updater_core::OperationOutcome {
+                action: PackageAction::Update,
+                completed_packages: 1,
+                total_packages: 1,
+                completed_managers: 1,
+                total_managers: 1,
+                failed_manager: None,
+                error: None,
+                cancelled: false,
+                manager_outcomes: Vec::new(),
+                scope: updater_manager_api::PackageScope::User,
+            }),
+            &config,
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(!info.is_updating);
+        assert!(info.update_progress.is_none());
+        assert!(info.inspector_error.is_none());
+
+        installed.inspected_package = Some(shared::selection_key(&nix, "gone"));
+        assert!(matches!(
+            installed.update(
+                Message::UpdateInspectedPackage,
+                &config,
+                &mut info,
+                &ManagerCatalog::builtin()
+            ),
+            Action::None
+        ));
+        assert_eq!(
+            info.inspector_error.as_deref(),
+            Some("gone is no longer installed")
+        );
+        assert_eq!(target.name, "hello");
     }
 }

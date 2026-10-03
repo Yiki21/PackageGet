@@ -169,6 +169,79 @@ async fn native_contract_preserves_profile_source_identity_and_write_argv() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn install_target_builds_the_typed_installable_origin_for_the_configured_profile() {
+    let _guard = NIX_CONTRACT_LOCK.lock().await;
+    let manager = NixProfileManager::new();
+    let workspace = tempdir().expect("create Nix install workspace");
+    let profile = workspace.path().join("profiles/current");
+    let log = workspace.path().join("nix.log");
+    let (_directory, executable) = fake_nix(&log);
+    let mut config = config(&manager, &executable, &profile);
+
+    assert_eq!(
+        manager
+            .install_target(&config, "   ")
+            .expect_err("blank installable must fail")
+            .kind(),
+        ManagerErrorKind::Protocol
+    );
+
+    let target = manager
+        .install_target(&config, "  nixpkgs#ripgrep  ")
+        .expect("resolve Nix install target");
+    assert_eq!(target.name, "nixpkgs#ripgrep");
+    assert_eq!(target.scope, PackageScope::User);
+    assert_eq!(target.version, None);
+    let reference: Value = serde_json::from_str(
+        target
+            .origin
+            .as_ref()
+            .and_then(|origin| origin.reference.as_deref())
+            .expect("typed install origin"),
+    )
+    .expect("parse Nix install origin");
+    assert_eq!(reference["kind"], "installable");
+    assert_eq!(reference["profile"], profile.to_string_lossy().as_ref());
+    assert_eq!(reference["installable"], "nixpkgs#ripgrep");
+
+    manager
+        .execute(&config, PackageAction::Install, &[target], &|_| {})
+        .await
+        .expect("install the resolved Nix target");
+    let normalized = fs::read_to_string(&log)
+        .expect("read Nix argv log")
+        .replace('\\', "/");
+    let profile = profile.to_string_lossy().replace('\\', "/");
+    assert!(normalized.contains(&format!(
+        "profile install nixpkgs#ripgrep --profile {profile}"
+    )));
+
+    let resolved = manager
+        .install_target(&config, "nixpkgs#ripgrep")
+        .expect("resolve Nix install target again");
+    let mut forged = resolved.clone();
+    forged.name = "nixpkgs#hello".to_owned();
+    assert_eq!(
+        manager
+            .execute(&config, PackageAction::Install, &[forged], &|_| {})
+            .await
+            .expect_err("installable mismatch must fail")
+            .kind(),
+        ManagerErrorKind::Protocol
+    );
+    config.settings = json!({ "profile": workspace.path().join("profiles/other") });
+    assert_eq!(
+        manager
+            .execute(&config, PackageAction::Install, &[resolved], &|_| {})
+            .await
+            .expect_err("another profile's origin must fail")
+            .kind(),
+        ManagerErrorKind::Protocol
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn rejects_missing_profile_locked_update_and_forged_origin() {
     let _guard = NIX_CONTRACT_LOCK.lock().await;
     let manager = NixProfileManager::new();

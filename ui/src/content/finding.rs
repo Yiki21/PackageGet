@@ -34,6 +34,12 @@ pub struct Finding {
     inspector_error: Option<String>,
     /// Frozen install plan waiting for confirmation.
     pending_install: Option<PackageActionPlan>,
+    /// Manager chosen for the install-by-name affordance.
+    install_name_manager: Option<ManagerId>,
+    /// Exact package name typed into the install-by-name affordance.
+    install_name_query: String,
+    /// Validation or resolution failure for the install-by-name affordance.
+    install_name_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +83,12 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all visible packages toggle message.
     ToggleSelectAll(bool),
+    /// Choose the manager used by the install-by-name affordance.
+    SelectInstallNameManager(ManagerId),
+    /// Install-by-name package-name change message.
+    InstallNameQueryChanged(String),
+    /// Freeze one exact manager package name into an install plan.
+    PrepareNamedInstall,
     /// Freeze the selected packages into an install plan.
     PrepareInstall,
     /// Execute the frozen install plan.
@@ -323,6 +335,33 @@ impl Finding {
                 });
                 if installable {
                     info.selected_packages.insert(key);
+                }
+                Action::None
+            }
+            Message::SelectInstallNameManager(pm_type) => {
+                if info.is_installing || self.pending_install.is_some() {
+                    return Action::None;
+                }
+                self.install_name_manager = Some(pm_type);
+                self.install_name_error = None;
+                Action::None
+            }
+            Message::InstallNameQueryChanged(query) => {
+                self.install_name_query = query;
+                self.install_name_error = None;
+                Action::None
+            }
+            Message::PrepareNamedInstall => {
+                if info.is_installing || self.pending_install.is_some() {
+                    return Action::None;
+                }
+                info.last_install_error = None;
+                match self.named_install_plan(pm_config, catalog) {
+                    Ok(plan) => {
+                        self.install_name_error = None;
+                        self.pending_install = Some(plan);
+                    }
+                    Err(error) => self.install_name_error = Some(error),
                 }
                 Action::None
             }
@@ -752,6 +791,7 @@ impl Finding {
                 ),
             ]),
             toolbar,
+            self.install_by_name_view(info, pm_config, catalog),
             self.batch_actions_view(info, catalog),
             self.install_confirmation_view(catalog),
             self.search_results_view(info, catalog, show_inspector, inspector_drawer),
@@ -1165,6 +1205,133 @@ impl Finding {
         .into()
     }
 
+    /// Builds the frozen install plan for one exact manager package name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a user-facing message when no manager can resolve the typed name.
+    fn named_install_plan(
+        &self,
+        pm_config: &updater_core::Config,
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Result<PackageActionPlan, String> {
+        let name = self.install_name_query.trim().to_owned();
+        if name.is_empty() {
+            return Err("Enter a package name to install".to_owned());
+        }
+        let managers = install_name_managers(pm_config, catalog);
+        let manager = self
+            .install_name_manager
+            .clone()
+            .filter(|manager| managers.contains(manager))
+            .or_else(|| managers.first().cloned())
+            .ok_or_else(|| "No package manager can install by name".to_owned())?;
+        let manager_config = pm_config
+            .manager(&manager)
+            .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+        let runtime = catalog
+            .registry()
+            .get(&manager)
+            .ok_or_else(|| format!("Manager is not registered: {manager}"))?;
+        let target = runtime
+            .install_target(manager_config, &name)
+            .map_err(|error| {
+                error.detail().map_or_else(
+                    || error.message().to_owned(),
+                    |detail| format!("{} ({detail})", error.message()),
+                )
+            })?;
+        Ok(PackageActionPlan {
+            manager_groups: vec![(manager, vec![target])],
+        })
+    }
+
+    fn install_by_name_view<'a>(
+        &'a self,
+        info: &FindingInfo,
+        pm_config: &updater_core::Config,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{button, column, container, row, text, text_input};
+
+        let managers = install_name_managers(pm_config, catalog);
+        if managers.is_empty() {
+            return container("").height(iced::Length::Shrink).into();
+        }
+        let effective_manager = self
+            .install_name_manager
+            .clone()
+            .filter(|manager| managers.contains(manager))
+            .or_else(|| managers.first().cloned());
+        let manager_selector: iced::Element<'_, Message> = if managers.len() == 1 {
+            text(catalog.display_name(&managers[0]).to_owned())
+                .size(13)
+                .style(theme::text_on_surface)
+                .into()
+        } else {
+            shared::segmented_group(
+                row(managers.iter().map(|manager| {
+                    let selected = effective_manager.as_ref() == Some(manager);
+                    shared::segmented_button_owned(
+                        catalog.display_name(manager).to_owned(),
+                        selected,
+                        Message::SelectInstallNameManager(manager.clone()),
+                    )
+                    .into()
+                }))
+                .spacing(2),
+            )
+            .into()
+        };
+
+        let enabled = !self.install_name_query.trim().is_empty()
+            && !info.is_installing
+            && self.pending_install.is_none();
+        let install_button = button(text("Install").size(13).font(theme::FONT_SEMIBOLD).style(
+            if enabled {
+                theme::text_on_primary
+            } else {
+                theme::text_on_surface_muted
+            },
+        ))
+        .padding([8, 14])
+        .style(theme::action_button(
+            enabled,
+            theme::colors::INSTALL_ACTION,
+            theme::colors::INSTALL_ACTION_HOVER,
+            theme::colors::INSTALL_ACTION_ACTIVE,
+        ))
+        .on_press_maybe(enabled.then_some(Message::PrepareNamedInstall));
+
+        let input = text_input("Exact package name", &self.install_name_query)
+            .on_input(Message::InstallNameQueryChanged)
+            .on_submit(Message::PrepareNamedInstall)
+            .padding([8, 10])
+            .size(13)
+            .width(iced::Length::Fill)
+            .style(theme::text_input_style);
+
+        let mut content = column![
+            shared::section_title("Install by name"),
+            text("These sources cannot search; enter an exact package name.")
+                .size(12)
+                .style(theme::text_on_surface_muted),
+            row![manager_selector, input, install_button]
+                .spacing(theme::spacing::MD)
+                .align_y(iced::Alignment::Center),
+        ]
+        .spacing(theme::spacing::SM);
+        if let Some(error) = &self.install_name_error {
+            content = content.push(
+                text(error)
+                    .size(12)
+                    .style(theme::text_error)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+        content.into()
+    }
+
     fn start_search(
         &mut self,
         pm_config: &updater_core::Config,
@@ -1239,6 +1406,31 @@ impl Finding {
 
         Task::batch(tasks)
     }
+}
+
+/// Configured managers that can install an exact name but cannot search.
+fn install_name_managers(
+    pm_config: &updater_core::Config,
+    catalog: &crate::manager_catalog::ManagerCatalog,
+) -> Vec<ManagerId> {
+    let mut managers: Vec<_> =
+        shared::configured_managers_with_capability(pm_config, catalog, ManagerCapability::Install)
+            .into_iter()
+            .filter(|manager| {
+                catalog.descriptor(manager).is_some_and(|descriptor| {
+                    !descriptor
+                        .capabilities()
+                        .contains(ManagerCapability::Search)
+                })
+            })
+            .collect();
+    managers.sort_by(|left, right| {
+        catalog
+            .display_name(left)
+            .cmp(catalog.display_name(right))
+            .then_with(|| left.cmp(right))
+    });
+    managers
 }
 
 #[cfg(test)]
@@ -1448,6 +1640,95 @@ mod tests {
         let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
         assert!(info.selected_packages.is_empty());
         assert!(finding.primary_action(&info).is_none());
+    }
+
+    #[test]
+    fn named_install_plan_resolves_a_search_less_manager() {
+        let mut finding = Finding {
+            install_name_query: "  nixpkgs#ripgrep  ".to_owned(),
+            install_name_manager: Some(manager_id("builtin:nix-profile")),
+            ..Finding::default()
+        };
+        let nix = manager_id("builtin:nix-profile");
+        let mut info = FindingInfo::default();
+        let mut config = updater_core::Config::default();
+        let mut manager_config = updater_core::ManagerConfig::new(nix.clone());
+        manager_config.settings = serde_json::json!({
+            "profile": "/home/test/.local/state/nix/profiles/profile"
+        });
+        config.managers.push(manager_config);
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        let action = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert!(finding.install_name_error.is_none());
+        let plan = finding
+            .pending_install
+            .as_ref()
+            .expect("install by name must reach a frozen plan");
+        assert_eq!(plan.package_count(), 1);
+        let (manager, targets) = &plan.manager_groups[0];
+        assert_eq!(manager, &nix);
+        assert_eq!(targets[0].name, "nixpkgs#ripgrep");
+        assert_eq!(targets[0].scope, PackageScope::User);
+        assert!(targets[0].origin.is_some());
+
+        finding.pending_install = None;
+        finding.install_name_query = "   ".to_owned();
+        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        assert!(finding.pending_install.is_none());
+        assert_eq!(
+            finding.install_name_error.as_deref(),
+            Some("Enter a package name to install")
+        );
+    }
+
+    #[test]
+    fn install_without_search_yields_an_actionable_install_plan() {
+        let bun = manager_id("builtin:bun");
+        let cargo = manager_id("builtin:cargo");
+        let uv = manager_id("builtin:uv");
+        let config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo),
+                updater_core::ManagerConfig::new(uv.clone()),
+                updater_core::ManagerConfig::new(bun.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        assert_eq!(
+            install_name_managers(&config, &catalog),
+            vec![bun.clone(), uv],
+            "only Install-without-Search sources are offered, sorted by display name"
+        );
+
+        let mut finding = Finding {
+            install_name_query: " cowsay ".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+
+        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+
+        assert_eq!(finding.install_name_error, None);
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(
+                bun.clone(),
+                vec![PackageTarget::new(bun.clone(), "cowsay")]
+            )])
+        );
+
+        let action = finding.update(Message::ConfirmInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_installing);
+        assert_eq!(info.install_progress, Some((0, 1, bun, String::new())));
     }
 
     #[test]

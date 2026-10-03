@@ -254,6 +254,7 @@ fn has_active_work(
         || finding_info.is_installing
         || updates_info.is_updating
         || installed_info.is_removing
+        || installed_info.is_updating
 }
 
 fn collect_known_progress(
@@ -316,6 +317,13 @@ fn collect_known_progress(
         known.add(*total, *completed);
     }
 
+    if installed_info.is_updating
+        && let Some((completed, total, _, _)) = &installed_info.update_progress
+        && *total > 0
+    {
+        known.add(*total, *completed);
+    }
+
     known
 }
 
@@ -370,6 +378,9 @@ fn rebuild_command_logs(
     if installed_info.is_removing {
         out.extend(installed_info.remove_logs.iter().cloned());
     }
+    if installed_info.is_updating {
+        out.extend(installed_info.update_logs.iter().cloned());
+    }
 
     const MAX_PANEL_LOGS: usize = 120;
     if out.len() > MAX_PANEL_LOGS {
@@ -412,6 +423,15 @@ fn status_label(
             installed_info.remove_progress.as_ref(),
             catalog,
             "Removing selected packages...",
+        );
+    }
+
+    if installed_info.is_updating {
+        return operation_status_label(
+            "Updating",
+            installed_info.update_progress.as_ref(),
+            catalog,
+            "Updating the inspected package...",
         );
     }
 
