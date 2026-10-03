@@ -669,22 +669,8 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, text, text_input};
 
-        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        for manager in pm_config.managers.iter().filter(|manager| {
-            shared::manager_matches_query(&manager.id, catalog, &self.manager_page.manager_query)
-        }) {
-            let category = catalog
-                .descriptor(&manager.id)
-                .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
-            groups[manager_category_rank(category)].push(manager);
-        }
-
         let mut grouped_lists = Vec::new();
-        for (index, managers) in groups.into_iter().enumerate() {
-            if managers.is_empty() {
-                continue;
-            }
-            let category = category_from_rank(index);
+        for (category, managers) in self.configured_manager_groups(pm_config, catalog) {
             let count = managers.len();
             let rows = column(managers.into_iter().map(|manager| {
                 let item = container(self.view_manager_item(
@@ -700,12 +686,9 @@ impl Settings {
                     .spacing(theme::spacing::MD)
                     .align_y(Alignment::Center)
                     .width(iced::Length::Fill);
-                if category != ManagerCategory::System {
-                    manager_row = manager_row.push(Self::secondary_button(
-                        "Unload",
-                        14.0,
-                        Some(Message::UnloadManager(manager.id.clone())),
-                    ));
+                if let Some((label, message)) = self.configured_manager_action(category, manager) {
+                    manager_row =
+                        manager_row.push(Self::secondary_button(label, 14.0, Some(message)));
                 }
                 manager_row.into()
             }))
@@ -812,19 +795,7 @@ impl Settings {
         use iced::Alignment;
         use iced::widget::{column, container, row, svg, text};
 
-        let available_managers: Vec<ManagerId> = catalog
-            .registry()
-            .managers()
-            .into_iter()
-            .map(|manager| manager.descriptor().id().clone())
-            .filter(|manager| {
-                catalog
-                    .descriptor(manager)
-                    .is_some_and(|descriptor| descriptor.category() != ManagerCategory::System)
-            })
-            .filter(|manager| catalog.supports_current_platform(manager))
-            .filter(|manager| pm_config.manager(manager).is_none())
-            .collect();
+        let available_managers = addable_managers(pm_config, catalog);
 
         let detected_count = available_managers
             .iter()
@@ -842,44 +813,12 @@ impl Settings {
             )
         };
 
-        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        for manager in &available_managers {
-            let descriptor = catalog.descriptor(manager);
-            if !shared::manager_matches_query(manager, catalog, &self.manager_page.manager_query) {
-                continue;
-            }
-            let category =
-                descriptor.map_or(ManagerCategory::Other, |descriptor| descriptor.category());
-            groups[manager_category_rank(category)].push(manager.clone());
-        }
-
         let mut grouped_lists = Vec::new();
-        for (index, managers) in groups.into_iter().enumerate() {
-            if managers.is_empty() {
-                continue;
-            }
-            let category = category_from_rank(index);
-            if category == ManagerCategory::System {
-                continue;
-            }
+        for (category, managers) in self.addable_manager_groups(&available_managers, catalog) {
             let count = managers.len();
             let rows = column(managers.into_iter().map(|manager| {
                 let detected_in_path = self.manager_page.detected_in_path.contains(&manager);
-                let is_nix_profile = manager.as_str() == "builtin:nix-profile";
-                let action_message = if is_nix_profile {
-                    Message::OpenNixProfileDialog
-                } else if detected_in_path {
-                    Message::AddDetectedManager(manager.clone())
-                } else {
-                    Message::OpenDialog(manager.clone())
-                };
-                let action_label = if is_nix_profile {
-                    "Choose Profile"
-                } else if detected_in_path {
-                    "Add"
-                } else {
-                    "Select Path"
-                };
+                let (action_label, action_message) = self.add_manager_action(&manager);
                 let add_btn = Self::icon_button(
                     svg::Svg::new(ADD_ICON.clone()).width(16).height(16),
                     action_label,
@@ -951,6 +890,82 @@ impl Settings {
         .spacing(12)
         .width(iced::Length::Fill)
         .into()
+    }
+
+    /// Groups the configured managers that match the filter by category, in
+    /// display order, omitting empty categories.
+    ///
+    /// System managers are grouped like every other category, so they keep
+    /// their Unload control and their own section.
+    fn configured_manager_groups<'a>(
+        &'a self,
+        pm_config: &'a updater_core::Config,
+        catalog: &ManagerCatalog,
+    ) -> Vec<(ManagerCategory, Vec<&'a ManagerConfig>)> {
+        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for manager in pm_config.managers.iter().filter(|manager| {
+            shared::manager_matches_query(&manager.id, catalog, &self.manager_page.manager_query)
+        }) {
+            let category = catalog
+                .descriptor(&manager.id)
+                .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
+            groups[manager_category_rank(category)].push(manager);
+        }
+
+        groups
+            .into_iter()
+            .enumerate()
+            .filter(|(_, managers)| !managers.is_empty())
+            .map(|(index, managers)| (category_from_rank(index), managers))
+            .collect()
+    }
+
+    /// Groups addable managers that match the filter by category, in display
+    /// order, omitting empty categories.
+    fn addable_manager_groups(
+        &self,
+        available_managers: &[ManagerId],
+        catalog: &ManagerCatalog,
+    ) -> Vec<(ManagerCategory, Vec<ManagerId>)> {
+        let mut groups = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        for manager in available_managers {
+            if !shared::manager_matches_query(manager, catalog, &self.manager_page.manager_query) {
+                continue;
+            }
+            let category = catalog
+                .descriptor(manager)
+                .map_or(ManagerCategory::Other, |descriptor| descriptor.category());
+            groups[manager_category_rank(category)].push(manager.clone());
+        }
+
+        groups
+            .into_iter()
+            .enumerate()
+            .filter(|(_, managers)| !managers.is_empty())
+            .map(|(index, managers)| (category_from_rank(index), managers))
+            .collect()
+    }
+
+    /// Returns the label and message of a configured manager's trailing
+    /// button. The configured section asks this for every row of every
+    /// category group; no category, System included, is denied Unload.
+    fn configured_manager_action(
+        &self,
+        _category: ManagerCategory,
+        manager: &ManagerConfig,
+    ) -> Option<(&'static str, Message)> {
+        Some(("Unload", Message::UnloadManager(manager.id.clone())))
+    }
+
+    /// Returns the label and message of an unconfigured manager's add button.
+    fn add_manager_action(&self, manager: &ManagerId) -> (&'static str, Message) {
+        if manager.as_str() == "builtin:nix-profile" {
+            ("Choose Profile", Message::OpenNixProfileDialog)
+        } else if self.manager_page.detected_in_path.contains(manager) {
+            ("Add", Message::AddDetectedManager(manager.clone()))
+        } else {
+            ("Select Path", Message::OpenDialog(manager.clone()))
+        }
     }
 
     fn view_manager_item(
@@ -1348,6 +1363,20 @@ impl Settings {
     }
 }
 
+/// Unconfigured managers that run on this platform, in registry order. Every
+/// category is offered, so a system manager that was missing at first-launch
+/// detection can still be added later.
+fn addable_managers(pm_config: &updater_core::Config, catalog: &ManagerCatalog) -> Vec<ManagerId> {
+    catalog
+        .registry()
+        .managers()
+        .into_iter()
+        .map(|manager| manager.descriptor().id().clone())
+        .filter(|manager| catalog.supports_current_platform(manager))
+        .filter(|manager| pm_config.manager(manager).is_none())
+        .collect()
+}
+
 const fn manager_category_rank(category: ManagerCategory) -> usize {
     match category {
         ManagerCategory::System => 0,
@@ -1369,6 +1398,8 @@ const fn category_from_rank(rank: usize) -> ManagerCategory {
 
 #[cfg(test)]
 mod tests {
+    use updater_manager_api::ManagerDescriptor;
+
     use super::*;
 
     fn manager_id(value: &str) -> ManagerId {
@@ -1525,6 +1556,122 @@ mod tests {
 
         assert!(matches!(action, Action::None));
         assert!(settings.draft.manager(&manager).is_none());
+    }
+
+    /// The System manager this platform can add: `builtin:apt` on Linux,
+    /// `builtin:winget` on Windows, none elsewhere.
+    fn supported_system_manager(catalog: &ManagerCatalog) -> Option<ManagerId> {
+        ["builtin:apt", "builtin:winget"]
+            .into_iter()
+            .map(manager_id)
+            .find(|manager| catalog.supports_current_platform(manager))
+    }
+
+    #[test]
+    fn unconfigured_system_manager_is_offered_with_add_actions() {
+        let active = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+        let Some(manager) = supported_system_manager(&catalog) else {
+            return;
+        };
+        assert_eq!(
+            catalog
+                .descriptor(&manager)
+                .map(ManagerDescriptor::category),
+            Some(ManagerCategory::System)
+        );
+
+        let available = addable_managers(&settings.draft, &catalog);
+        assert!(available.contains(&manager));
+        let groups = settings.addable_manager_groups(&available, &catalog);
+        assert!(
+            groups.iter().any(|(category, managers)| {
+                *category == ManagerCategory::System && managers.contains(&manager)
+            }),
+            "the System group must be rendered in the add list: {groups:?}"
+        );
+        assert!(matches!(
+            settings.add_manager_action(&manager),
+            ("Select Path", Message::OpenDialog(selected)) if selected == manager
+        ));
+
+        let _ = settings.update(
+            Message::FinishDetect(vec![(
+                manager.clone(),
+                Ok(ManagerAvailability::Available { version: None }),
+            )]),
+            &active,
+            &catalog,
+        );
+        let ("Add", add_message) = settings.add_manager_action(&manager) else {
+            panic!("a detected System manager must offer Add");
+        };
+        let action = settings.update(add_message, &active, &catalog);
+
+        assert!(matches!(action, Action::ManagerConfigChanged));
+        assert!(settings.draft.manager(&manager).is_some());
+        assert!(settings.is_dirty());
+        assert!(!addable_managers(&settings.draft, &catalog).contains(&manager));
+    }
+
+    #[test]
+    fn configured_system_manager_is_grouped_and_can_be_unloaded() {
+        let active = config_with_manager("builtin:apt");
+        let manager = manager_id("builtin:apt");
+        let catalog = ManagerCatalog::builtin();
+        let mut settings = Settings::default();
+        settings.sync_from_config(&active);
+
+        let groups = settings.configured_manager_groups(&settings.draft, &catalog);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, ManagerCategory::System);
+        assert_eq!(groups[0].1[0].id, manager);
+
+        let unload = settings.configured_manager_action(groups[0].0, groups[0].1[0]);
+        assert!(matches!(
+            &unload,
+            Some(("Unload", Message::UnloadManager(id))) if *id == manager
+        ));
+        let Some((_, unload_message)) = unload else {
+            panic!("a configured System manager must offer Unload");
+        };
+        let action = settings.update(unload_message, &active, &catalog);
+
+        assert!(matches!(action, Action::ManagerConfigChanged));
+        assert!(settings.draft.manager(&manager).is_none());
+        assert!(settings.is_dirty());
+    }
+
+    #[test]
+    fn unsupported_system_managers_stay_out_of_the_add_list() {
+        let active = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+        let available = addable_managers(&active, &catalog);
+
+        let system_managers = catalog
+            .registry()
+            .managers()
+            .into_iter()
+            .map(|manager| manager.descriptor().clone())
+            .filter(|descriptor| descriptor.category() == ManagerCategory::System)
+            .collect::<Vec<_>>();
+        assert!(system_managers.len() > 1);
+        for descriptor in system_managers {
+            assert_eq!(
+                available.contains(descriptor.id()),
+                catalog.supports_current_platform(descriptor.id()),
+                "{} must be offered exactly when this platform supports it",
+                descriptor.id()
+            );
+        }
+        let unsupported = if catalog.supports_current_platform(&manager_id("builtin:winget")) {
+            manager_id("builtin:apt")
+        } else {
+            manager_id("builtin:winget")
+        };
+        assert!(!available.contains(&unsupported));
     }
 
     #[test]

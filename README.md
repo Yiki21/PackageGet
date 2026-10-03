@@ -48,7 +48,7 @@ updates.
 - Updates selected packages in batches
 - Lists installed packages with search, sorting, and batch removal support
 - Searches for packages across package managers and installs them in batches
-- Manages enabled package managers from the settings page
+- Adds and unloads package managers, including system package managers, from the Package Managers page
 - Supports custom executable paths for package managers
 - Supports a custom binary installation directory for Go packages
 - Supports one explicitly selected current-user Nix profile on Linux and macOS
@@ -168,20 +168,20 @@ If it is not installed in your `PATH`, run the built binary directly:
 ./target/release/updater
 ```
 
-On first launch, the application automatically detects package managers available in the current environment. The basic workflow is:
+On first launch, the application automatically detects package managers available in the current environment and enables them; when more than one system package manager is found, only the first is enabled. The basic workflow is:
 
 1. Open the updates page to view available updates from each package manager.
 2. Select packages and run a batch update.
 3. Open the installed packages page to browse, search, sort, or remove packages in batches.
 4. Open the search page to find and install new packages across package managers.
-5. Open the settings page to enable or disable package managers, configure custom executable paths, and select a Nix user profile when needed.
+5. Open the Package Managers page (**Managers** in the sidebar) to add or unload package managers of any category, configure custom executable paths, and select a Nix user profile when needed.
 
 Additional notes:
 
 - System package changes run through Updater's restricted helper and request authorization through `pkexec`; Updater never reads or stores the administrator password
 - Configuration is stored in `updater/config.json` under the user configuration directory
 - See [Configuration](docs/configuration.md) for the file schema and reset instructions
-- If a package manager is not detected, you can specify its executable path manually from the settings page
+- If a package manager was not detected, add it later from the Package Managers page: **Scan $PATH** and then **Add**, or **Select Path** to choose its executable manually
 
 ## System package authorization
 
