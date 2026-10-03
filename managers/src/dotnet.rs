@@ -1,4 +1,9 @@
-use std::{collections::HashSet, path::Path, process::Output, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    process::Output,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use semver::Version;
@@ -22,6 +27,7 @@ const DOTNET_ID: &str = "builtin:dotnet-tool";
 const DOTNET_COMMAND: &str = "dotnet";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 const SEARCH_LIMIT: &str = "50";
+const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct `updater-manager-api` implementation for current-user .NET global tools.
 #[derive(Debug, Clone)]
@@ -238,6 +244,12 @@ impl PackageManager for DotnetToolManager {
             return Ok(Vec::new());
         }
         validate_search_term(query)?;
+        let installed_versions = self
+            .installed_tools(config)
+            .await?
+            .into_iter()
+            .map(|tool| (tool.package_id.to_ascii_lowercase(), tool.version))
+            .collect::<HashMap<_, _>>();
         let dotnet = resolve_executable(config, DOTNET_COMMAND);
         let output = run_success(
             &dotnet_command(&dotnet).args([
@@ -252,7 +264,7 @@ impl PackageManager for DotnetToolManager {
         )
         .await?;
         let value = decode_utf8(&output.stdout, ".NET tool search is not valid UTF-8")?;
-        parse_tool_search(&value, self.descriptor.id())
+        parse_tool_search(&value, self.descriptor.id(), &installed_versions)
     }
 
     async fn execute(
@@ -453,7 +465,11 @@ fn parse_latest_version(value: &str, package_id: &str) -> ManagerResult<String> 
     })
 }
 
-fn parse_tool_search(value: &str, manager_id: &ManagerId) -> ManagerResult<Vec<PackageInfo>> {
+fn parse_tool_search(
+    value: &str,
+    manager_id: &ManagerId,
+    installed_versions: &HashMap<String, String>,
+) -> ManagerResult<Vec<PackageInfo>> {
     if value.trim() == "Could not find any results." {
         return Ok(Vec::new());
     }
@@ -480,16 +496,22 @@ fn parse_tool_search(value: &str, manager_id: &ManagerId) -> ManagerResult<Vec<P
             .lines()
             .find_map(|line| line.trim().strip_prefix("Description: "))
             .filter(|description| !description.is_empty())
-            .map(ToOwned::to_owned);
+            .map_or_else(
+                || format!("Latest version: {version}"),
+                |description| format!("{description} (latest version: {version})"),
+            );
         let identity = package_id.to_ascii_lowercase();
+        let installed_version = installed_versions
+            .get(&identity)
+            .map_or(NOT_INSTALLED_VERSION, String::as_str);
         if !identities.insert(identity) {
             return Err(protocol(
                 ".NET tool search contains a duplicate package ID",
                 package_id,
             ));
         }
-        let mut info = PackageInfo::new(manager_id.clone(), package_id, version);
-        info.description = description;
+        let mut info = PackageInfo::new(manager_id.clone(), package_id, installed_version);
+        info.description = Some(description);
         info.scope = PackageScope::User;
         info.origin = Some(tool_origin(package_id));
         packages.push(info);
@@ -621,19 +643,30 @@ mod tests {
     }
 
     #[test]
-    fn tool_search_preserves_package_identity_and_description() {
+    fn tool_search_preserves_package_identity_and_reports_install_state() {
         let manager = DotnetToolManager::new();
+        let installed = HashMap::from([("example.tool".to_owned(), "1.0.0".to_owned())]);
         let packages = parse_tool_search(
-            "----------------\nexample.tool\nLatest Version: 2.1.0\nAuthors: Example\nDownloads: 10\nVerified: False\nDescription: Example tool\nVersions:\n\t2.1.0 Downloads: 10\n",
+            "----------------\nexample.tool\nLatest Version: 2.1.0\nAuthors: Example\nDownloads: 10\nVerified: False\nDescription: Example tool\nVersions:\n\t2.1.0 Downloads: 10\n----------------\nother.tool\nLatest Version: 3.0.0\nAuthors: Example\nDownloads: 5\nVerified: False\nDescription: Other tool\nVersions:\n\t3.0.0 Downloads: 5\n",
             manager.descriptor().id(),
+            &installed,
         )
         .expect("valid tool search");
 
-        assert_eq!(packages.len(), 1);
+        assert_eq!(packages.len(), 2);
         assert_eq!(packages[0].name, "example.tool");
-        assert_eq!(packages[0].version, "2.1.0");
-        assert_eq!(packages[0].description.as_deref(), Some("Example tool"));
+        assert_eq!(packages[0].version, "1.0.0");
+        assert_eq!(
+            packages[0].description.as_deref(),
+            Some("Example tool (latest version: 2.1.0)")
+        );
         assert_eq!(packages[0].scope, PackageScope::User);
+        assert_eq!(packages[1].name, "other.tool");
+        assert_eq!(packages[1].version, "Not Installed");
+        assert_eq!(
+            packages[1].description.as_deref(),
+            Some("Other tool (latest version: 3.0.0)")
+        );
     }
 
     #[test]
@@ -641,9 +674,13 @@ mod tests {
         let manager = DotnetToolManager::new();
 
         assert!(
-            parse_tool_search("Could not find any results.\n", manager.descriptor().id())
-                .expect("valid empty search")
-                .is_empty()
+            parse_tool_search(
+                "Could not find any results.\n",
+                manager.descriptor().id(),
+                &HashMap::new()
+            )
+            .expect("valid empty search")
+            .is_empty()
         );
     }
 }

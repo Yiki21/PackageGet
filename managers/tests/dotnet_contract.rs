@@ -37,7 +37,7 @@ if [ "$1" = "package" ] && [ "$2" = "search" ]; then
 fi
 if [ "$1" = "tool" ] && [ "$2" = "search" ]; then
   printf '%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> '{}'
-  printf '%s\n' '----------------' 'example.tool' 'Latest Version: 2.0.0' 'Authors: Example' 'Downloads: 20' 'Verified: False' 'Description: Example global tool' 'Versions:' '  2.0.0 Downloads: 20'
+  printf '%s\n' '----------------' 'example.tool' 'Latest Version: 2.0.0' 'Authors: Example' 'Downloads: 20' 'Verified: False' 'Description: Example global tool' 'Versions:' '  2.0.0 Downloads: 20' '----------------' 'other.tool' 'Latest Version: 3.0.0' 'Authors: Example' 'Downloads: 5' 'Verified: False' 'Description: Other global tool' 'Versions:' '  3.0.0 Downloads: 5'
   exit 0
 fi
 if [ "$1" = "tool" ]; then printf '%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> '{}'; exit 0; fi
@@ -94,6 +94,15 @@ echo Verified: False
 echo Description: Example global tool
 echo Versions:
 echo   2.0.0 Downloads: 20
+echo ----------------
+echo other.tool
+echo Latest Version: 3.0.0
+echo Authors: Example
+echo Downloads: 5
+echo Verified: False
+echo Description: Other global tool
+echo Versions:
+echo   3.0.0 Downloads: 5
 exit /b 0
 
 :write
@@ -169,12 +178,18 @@ async fn native_contract_preserves_global_identity_updates_search_and_writes() {
         .search(&config, "example")
         .await
         .expect("dotnet search");
-    assert_eq!(search.len(), 1);
+    assert_eq!(search.len(), 2);
     assert_eq!(search[0].name, "example.tool");
-    assert_eq!(search[0].version, "2.0.0");
+    assert_eq!(search[0].version, "1.0.0");
     assert_eq!(
         search[0].description.as_deref(),
-        Some("Example global tool")
+        Some("Example global tool (latest version: 2.0.0)")
+    );
+    assert_eq!(search[1].name, "other.tool");
+    assert_eq!(search[1].version, "Not Installed");
+    assert_eq!(
+        search[1].description.as_deref(),
+        Some("Other global tool (latest version: 3.0.0)")
     );
 
     let mut install = PackageTarget::new(manager.descriptor().id().clone(), "example.tool");
@@ -221,6 +236,7 @@ async fn native_contract_preserves_global_identity_updates_search_and_writes() {
             "tool|list|--global|--format|json|",
             "tool|list|--global|--format|json|",
             "package|search|example.tool|--exact-match|--format|json",
+            "tool|list|--global|--format|json|",
             "tool|search|example|--detail|--take|50",
             "tool|install|example.tool|--global|--version|2.1.0",
             "tool|update|example.tool|--global||",

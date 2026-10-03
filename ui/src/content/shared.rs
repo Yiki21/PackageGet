@@ -1406,6 +1406,14 @@ where
         .into()
 }
 
+/// Search-contract version reported for packages that are not installed.
+pub const NOT_INSTALLED: &str = "Not Installed";
+
+/// Returns whether a search result may be selected for installation.
+pub fn is_installable_search_result(package: &PackageInfo) -> bool {
+    package.version.trim() == NOT_INSTALLED
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};

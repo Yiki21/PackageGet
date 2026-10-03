@@ -311,10 +311,18 @@ impl Finding {
                     return Action::None;
                 }
                 let key = shared::selection_key(&pm_type, &package_name);
-                if selected {
-                    info.selected_packages.insert(key);
-                } else {
+                if !selected {
                     info.selected_packages.remove(&key);
+                    return Action::None;
+                }
+                let installable = info.search_results.get(&pm_type).is_some_and(|packages| {
+                    packages.iter().any(|package| {
+                        package.name == package_name
+                            && shared::is_installable_search_result(package)
+                    })
+                });
+                if installable {
+                    info.selected_packages.insert(key);
                 }
                 Action::None
             }
@@ -330,7 +338,7 @@ impl Finding {
                     .flat_map(|(manager, packages)| {
                         packages
                             .iter()
-                            .filter(|package| package.version.trim() == "Not Installed")
+                            .filter(|package| shared::is_installable_search_result(package))
                             .map(move |package| shared::selection_key(manager, &package.name))
                     });
                 if select_all {
@@ -529,7 +537,7 @@ impl Finding {
             .find(|package| package.name == *name)?;
         if info.is_installing
             || self.pending_install.is_some()
-            || package.version.trim() != "Not Installed"
+            || !shared::is_installable_search_result(package)
         {
             return None;
         }
@@ -952,7 +960,7 @@ impl Finding {
         let is_selected = info
             .selected_packages
             .contains(&shared::selection_key(&manager_id, &package.name));
-        let is_not_installed = package.version.trim() == "Not Installed";
+        let is_not_installed = shared::is_installable_search_result(package);
 
         let enable_install =
             !info.is_installing && self.pending_install.is_none() && is_not_installed;
@@ -985,9 +993,12 @@ impl Finding {
             .is_some_and(|(manager, name)| manager == &manager_id && name == &package.name);
         let mut summary = row![shared::package_summary(package)];
         if is_not_installed {
-            summary = summary.push(shared::muted_badge("Not Installed"));
-        } else if !version_text.is_empty() && version_text != "unknown" {
-            summary = summary.push(shared::muted_badge(version_text));
+            summary = summary.push(shared::muted_badge(shared::NOT_INSTALLED));
+        } else {
+            summary = summary.push(shared::muted_badge("Installed"));
+            if !version_text.is_empty() && version_text != "unknown" {
+                summary = summary.push(shared::muted_badge(version_text));
+            }
         }
         let details = button(summary.spacing(16).align_y(iced::Alignment::Center))
             .padding([8, 10])
@@ -1014,7 +1025,7 @@ impl Finding {
             .iter()
             .filter_map(|manager| info.search_results.get(manager))
             .flatten()
-            .filter(|package| package.version.trim() == "Not Installed")
+            .filter(|package| shared::is_installable_search_result(package))
             .count();
         let all_selected = selectable_count > 0 && selected_count == selectable_count;
         let is_enabled = selected_count > 0
@@ -1239,7 +1250,7 @@ mod tests {
     }
 
     fn package(manager: &ManagerId, name: &str) -> PackageInfo {
-        PackageInfo::new(manager.clone(), name, "Not Installed")
+        PackageInfo::new(manager.clone(), name, shared::NOT_INSTALLED)
     }
 
     #[test]
@@ -1356,6 +1367,87 @@ mod tests {
         assert!(finding.inspected_package.is_some());
         assert!(finding.dismiss_transient());
         assert!(finding.inspected_package.is_none());
+    }
+
+    fn snap_store_result(snap: &ManagerId, name: &str, version: &str) -> PackageInfo {
+        let mut result = PackageInfo::new(snap.clone(), name, version);
+        result.description = Some(format!(
+            "{name} summary (Publisher: example✓; latest version: 2.0.0)"
+        ));
+        result.scope = PackageScope::System;
+        result.origin = Some(PackageOrigin::new("Snap").with_reference(format!(
+            "snap:{name};channel:latest/stable;confinement:strict;refresh:store;notes:-"
+        )));
+        result
+    }
+
+    #[test]
+    fn advertised_version_search_result_is_installable() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let snap = manager_id("builtin:snap");
+        info.selected_managers.insert(snap.clone());
+        let code = snap_store_result(&snap, "code", shared::NOT_INSTALLED);
+        info.search_results.insert(snap.clone(), vec![code.clone()]);
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let key = shared::selection_key(&snap, "code");
+
+        assert!(finding.toggle_keyboard_selection(&info).is_none());
+        finding.inspected_package = Some(key.clone());
+        assert!(matches!(
+            finding.toggle_keyboard_selection(&info),
+            Some(Message::TogglePackageSelection(_, _, true))
+        ));
+        let _ = finding.update(
+            Message::TogglePackageSelection(snap.clone(), "code".to_owned(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(info.selected_packages.contains(&key));
+
+        info.selected_packages.clear();
+        let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        assert_eq!(info.selected_packages, HashSet::from([key]));
+
+        let action = finding.update(Message::PrepareInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(snap, vec![code.target()])])
+        );
+    }
+
+    #[test]
+    fn installed_search_result_cannot_be_selected_for_install() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let snap = manager_id("builtin:snap");
+        info.selected_managers.insert(snap.clone());
+        info.search_results.insert(
+            snap.clone(),
+            vec![snap_store_result(&snap, "firefox", "128.0")],
+        );
+        finding.inspected_package = Some(shared::selection_key(&snap, "firefox"));
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        assert!(finding.toggle_keyboard_selection(&info).is_none());
+        let _ = finding.update(
+            Message::TogglePackageSelection(snap.clone(), "firefox".to_owned(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(info.selected_packages.is_empty());
+        let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        assert!(info.selected_packages.is_empty());
+        assert!(finding.primary_action(&info).is_none());
     }
 
     #[test]

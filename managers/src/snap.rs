@@ -21,6 +21,7 @@ const SNAP_COMMAND: &str = "snap";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 const ORIGIN_NAME: &str = "Snap";
 const STABLE_CHANNEL: &str = "latest/stable";
+const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct `updater-manager-api` implementation for Linux Snap packages.
 #[derive(Debug, Clone)]
@@ -218,6 +219,11 @@ impl PackageManager for SnapManager {
             return Ok(Vec::new());
         }
         validate_search_term(query)?;
+        let installed = self.installed_entries(config).await?;
+        let installed_versions = installed
+            .iter()
+            .map(|entry| (entry.identity.name.as_str(), entry.version.as_str()))
+            .collect::<HashMap<_, _>>();
         let snap = resolve_executable(config, SNAP_COMMAND);
         let output = run_success(
             &snap_command(&snap).args(["find", "--narrow", query]),
@@ -227,6 +233,7 @@ impl PackageManager for SnapManager {
         parse_search(
             &decode_utf8(&output.stdout, "Snap store search is not valid UTF-8")?,
             self.descriptor.id(),
+            &installed_versions,
         )
     }
 
@@ -452,7 +459,11 @@ fn parse_updates(value: &str) -> ManagerResult<Vec<UpdateCandidate>> {
     Ok(updates)
 }
 
-fn parse_search(value: &str, manager_id: &ManagerId) -> ManagerResult<Vec<PackageInfo>> {
+fn parse_search(
+    value: &str,
+    manager_id: &ManagerId,
+    installed_versions: &HashMap<&str, &str>,
+) -> ManagerResult<Vec<PackageInfo>> {
     if value.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -466,8 +477,15 @@ fn parse_search(value: &str, manager_id: &ManagerId) -> ManagerResult<Vec<Packag
         if columns[4].trim().is_empty() {
             return Err(protocol("Snap search summary is empty", columns[0]));
         }
-        let mut info = PackageInfo::new(manager_id.clone(), columns[0], columns[1]);
-        info.description = Some(format!("{} (Publisher: {})", columns[4], columns[2]));
+        let version = installed_versions
+            .get(columns[0])
+            .copied()
+            .unwrap_or(NOT_INSTALLED_VERSION);
+        let mut info = PackageInfo::new(manager_id.clone(), columns[0], version);
+        info.description = Some(format!(
+            "{} (Publisher: {}; latest version: {})",
+            columns[4], columns[2], columns[1]
+        ));
         info.scope = PackageScope::System;
         info.origin = Some(identity.origin());
         packages.push(info);

@@ -36,7 +36,7 @@ fi
 command="$(tail -n 1 '{}')"
 case "$command" in
   'refresh|--list') printf '%s\n' 'Name Version Rev Size Publisher Notes' 'firefox 129.0 5001 120MB mozilla✓ classic'; exit 0 ;;
-  'find|--narrow|editor') printf '%s\n' 'Name Version Publisher Notes Summary' 'code 1.99 vscode✓ classic Code editing redefined' 'strict-app 2.0 example✓ - Strict confined application'; exit 0 ;;
+  'find|--narrow|editor') printf '%s\n' 'Name Version Publisher Notes Summary' 'code 1.99 vscode✓ classic Code editing redefined' 'firefox 129.5 mozilla✓ classic Fast browser' 'strict-app 2.0 example✓ - Strict confined application'; exit 0 ;;
   install*|refresh*|remove*) exit 0 ;;
 esac
 exit 30
@@ -129,11 +129,18 @@ async fn native_contract_preserves_state_search_and_direct_snapd_writes() {
         .search(&config, "editor")
         .await
         .expect("Snap search");
-    assert_eq!(search.len(), 2);
+    assert_eq!(search.len(), 3);
     assert_eq!(search[0].name, "code");
+    assert_eq!(search[0].version, "Not Installed");
     assert_eq!(
         search[0].description.as_deref(),
-        Some("Code editing redefined (Publisher: vscode✓)")
+        Some("Code editing redefined (Publisher: vscode✓; latest version: 1.99)")
+    );
+    assert_eq!(search[1].name, "firefox");
+    assert_eq!(search[1].version, "128.0");
+    assert_eq!(
+        search[1].description.as_deref(),
+        Some("Fast browser (Publisher: mozilla✓; latest version: 129.5)")
     );
     assert_eq!(
         search[0].origin,
@@ -190,6 +197,7 @@ async fn native_contract_preserves_state_search_and_direct_snapd_writes() {
             "list",
             "list",
             "refresh|--list",
+            "list",
             "find|--narrow|editor",
             "install|code|--classic",
             "install|edge-app|--channel|latest/edge|--devmode",

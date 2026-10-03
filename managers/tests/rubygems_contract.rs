@@ -287,9 +287,19 @@ async fn native_contract_preserves_repositories_versions_updates_search_and_writ
         .expect("RubyGems search");
     assert_eq!(search.len(), 2);
     assert_eq!(search[0].name, "rake");
-    assert_eq!(search[0].version, "13.3.0");
+    assert_eq!(search[0].version, "12.3.3, 13.0.6");
+    assert_eq!(
+        search[0].description.as_deref(),
+        Some("Latest version: 13.3.0")
+    );
     assert_eq!(search[0].scope, PackageScope::System);
     assert_eq!(origin_value(&search[0])["version"], serde_json::Value::Null);
+    assert_eq!(search[1].name, "rake-compiler");
+    assert_eq!(search[1].version, "Not Installed");
+    assert_eq!(
+        search[1].description.as_deref(),
+        Some("Latest version: 1.3.0")
+    );
 
     let sink = |_| {};
     let mut install = search[0].target();
