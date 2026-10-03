@@ -284,7 +284,7 @@ async fn local_pacman_availability_is_structured() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn refreshed_update_listing_never_syncs_the_live_database() {
+async fn update_listing_never_syncs_the_live_database() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempdir().expect("create logging fake Pacman directory");
@@ -308,17 +308,26 @@ exit 2
     let manager = PacmanManager::new();
     let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
 
+    // A refreshed listing would run the privileged helper, which the test
+    // host cannot authorise, so this pins the query half of the contract:
+    // pacman is only ever asked to list, never to sync, without a temporary
+    // database path.
     let updates = manager
-        .updates(&config, true)
+        .updates(&config, false)
         .await
-        .expect("list refreshed Pacman updates");
+        .expect("list Pacman updates");
 
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].target.name, "curl");
     let invoked = fs::read_to_string(&log).expect("read fake Pacman invocation log");
-    assert_eq!(
-        invoked.lines().collect::<Vec<_>>(),
-        ["-Qu"],
-        "refreshing Pacman updates must not run a database sync"
-    );
+    for invocation in invoked.lines() {
+        assert!(
+            !invocation
+                .split_whitespace()
+                .any(|word| word.starts_with("-S")),
+            "Pacman must never sync the live database from a listing: {invocation}"
+        );
+    }
+    assert_eq!(invoked.lines().count(), 1, "{invoked}");
+    assert!(invoked.starts_with("-Qu"), "{invoked}");
 }
