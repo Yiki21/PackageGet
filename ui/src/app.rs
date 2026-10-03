@@ -1508,7 +1508,7 @@ impl App {
                 self.installed_info.init_logs.clear();
                 self.installed_info.has_loading_count = false;
                 self.installed_info.is_loading_count = false;
-                self.installed_info.confirming_remove = false;
+                self.installed_info.pending_remove = None;
                 self.installed_refresh_overrides.clear();
 
                 self.updates_info.updates_by_manager.clear();
@@ -1561,7 +1561,7 @@ impl App {
         self.installed_info
             .init_errors
             .retain(|manager, _| !affected.contains(manager));
-        self.installed_info.confirming_remove = false;
+        self.installed_info.pending_remove = None;
 
         self.updates_info
             .updates_by_manager
@@ -1773,7 +1773,7 @@ impl App {
                         runtime
                             .count_installed(manager_config)
                             .await
-                            .map_err(|error| error.to_string())
+                            .map_err(|error| content::describe_manager_error(&error))
                     }
                 },
                 item_message: move |manager, result| Message::InitInstalledCount {
@@ -1844,7 +1844,7 @@ impl App {
                         runtime
                             .updates(manager_config, false)
                             .await
-                            .map_err(|error| error.to_string())
+                            .map_err(|error| content::describe_manager_error(&error))
                     }
                 },
                 item_message: move |manager, result| Message::InitUpdatesCount {

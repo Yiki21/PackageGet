@@ -1205,6 +1205,7 @@ impl Updates {
                 .or_else(|| info.init_errors.get(&manager))
                 .map(String::as_str),
             || Message::RetryLoad(manager),
+            Message::CopyInspectorText,
             body,
         )
     }
@@ -1591,7 +1592,6 @@ impl Updates {
         info.loading_updates.insert(manager.clone(), request_id);
 
         let pm_config = pm_config.clone();
-        let manager_name = catalog.display_name(&manager).to_owned();
         let registry = catalog.registry();
         let result_manager = manager.clone();
 
@@ -1605,7 +1605,7 @@ impl Updates {
             runtime
                 .updates(manager_config, force_refresh)
                 .await
-                .map_err(|e| format!("Failed to load updates for {manager_name}: {e}"))
+                .map_err(|error| Self::describe_load_error(&error))
         })
         .then(move |result| {
             Task::done(Message::LoadUpdatesResult {
@@ -1614,6 +1614,11 @@ impl Updates {
                 result,
             })
         })
+    }
+
+    /// Renders an Updates load failure into the error string kept in state.
+    fn describe_load_error(error: &updater_manager_api::ManagerError) -> String {
+        shared::describe_manager_error(error)
     }
 
     fn build_update_plan(
@@ -1841,6 +1846,39 @@ mod tests {
         assert!(info.is_updating);
         assert_eq!(info.update_progress, Some((0, 1, manager, String::new())));
         assert!(updates.pending_update.is_none());
+    }
+
+    #[test]
+    fn updates_load_failure_keeps_manager_error_detail() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let manager = manager_id("builtin:apt");
+        info.loading_updates.insert(manager.clone(), 1);
+
+        let error = updater_manager_api::ManagerError::new(
+            updater_manager_api::ManagerErrorKind::Busy,
+            "package manager command failed",
+        )
+        .with_detail("apt-get update failed:\nE: Could not get lock /var/lib/dpkg/lock");
+        let result = Err(Updates::describe_load_error(&error));
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 1,
+                manager: manager.clone(),
+                result,
+            },
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let stored = info
+            .load_errors
+            .get(&manager)
+            .expect("the read path records the failure");
+        assert!(stored.contains("E: Could not get lock /var/lib/dpkg/lock"));
+        assert!(stored.contains("Another program holds the package database lock"));
     }
 
     #[test]

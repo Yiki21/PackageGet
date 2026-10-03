@@ -880,6 +880,7 @@ impl Finding {
                 format!("Search failed in {display_name}"),
                 error,
                 Message::RetrySearch(manager_id),
+                Message::CopyInspectorText,
             )
         ]
         .spacing(12)
@@ -1210,9 +1211,7 @@ impl Finding {
                         manager
                             .search(manager_config, &query)
                             .await
-                            .map_err(|error| {
-                                format!("Failed to search in {}: {error}", manager_id.as_str())
-                            })
+                            .map_err(|error| shared::describe_manager_error(&error))
                     }
                     .await;
                     (manager_id, result)

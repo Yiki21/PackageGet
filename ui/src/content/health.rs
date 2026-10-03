@@ -206,7 +206,7 @@ impl ManagerHealthInfo {
         installed: &InstalledInfo,
         updates: &UpdatesInfo,
     ) -> HealthStatus {
-        let runtime_issue = runtime_issue_detail(manager, installed, updates).is_some();
+        let runtime_issue = !runtime_issues(manager, installed, updates).is_empty();
         match self.records.get(manager).map(|record| &record.result) {
             Some(Err(_)) => HealthStatus::Error,
             Some(Ok(ManagerAvailability::Unavailable { .. })) => HealthStatus::Unavailable,
@@ -540,11 +540,11 @@ fn availability_reason_detail(reason: &AvailabilityReason) -> String {
     }
 }
 
-fn runtime_issue_detail(
+fn runtime_issues(
     manager: &ManagerId,
     installed: &InstalledInfo,
     updates: &UpdatesInfo,
-) -> Option<String> {
+) -> Vec<String> {
     let mut issues = Vec::new();
     if let Some(error) = installed.init_errors.get(manager) {
         issues.push(format!("Installed initialization: {error}"));
@@ -558,7 +558,20 @@ fn runtime_issue_detail(
     if let Some(error) = updates.load_errors.get(manager) {
         issues.push(format!("Update discovery: {error}"));
     }
-    (!issues.is_empty()).then(|| issues.join(" | "))
+    issues
+}
+
+/// Appends a possibly multi-line value as one report line plus continuation lines.
+///
+/// Each physical line stays separate so the per-line redaction and length bound
+/// cannot drop the diagnostic tail of a described manager error.
+fn push_report_field(report: &mut Vec<String>, label: &str, value: &str) {
+    let mut lines = value.lines();
+    let first = lines.next().unwrap_or_default().trim();
+    report.push(format!("{label}: {first}"));
+    for line in lines.map(str::trim).filter(|line| !line.is_empty()) {
+        report.push(format!("  {line}"));
+    }
 }
 
 fn diagnostics_report(
@@ -600,10 +613,10 @@ fn diagnostics_report(
                 "Last checked: {}",
                 record.map_or("never", |record| record.checked_at.as_str())
             ),
-            format!("Detail: {detail}"),
         ]);
-        if let Some(runtime_detail) = runtime_issue_detail(&manager.id, installed, updates) {
-            report.push(format!("Runtime: {runtime_detail}"));
+        push_report_field(&mut report, "Detail", &detail);
+        for issue in runtime_issues(&manager.id, installed, updates) {
+            push_report_field(&mut report, "Runtime", &issue);
         }
         report.push(String::new());
     }
@@ -922,6 +935,40 @@ mod tests {
             info.status_for(&cargo, &installed, &updates),
             HealthStatus::Degraded
         );
+    }
+
+    #[test]
+    fn diagnostics_report_includes_read_error_detail() {
+        let cargo = ManagerConfig::new(manager_id("builtin:cargo"));
+        let config = updater_core::Config {
+            managers: vec![cargo.clone()],
+            ..updater_core::Config::default()
+        };
+        let mut installed = InstalledInfo::default();
+        installed.load_errors.insert(
+            cargo.id.clone(),
+            shared::describe_manager_error(
+                &updater_manager_api::ManagerError::new(
+                    updater_manager_api::ManagerErrorKind::Busy,
+                    "package manager command failed",
+                )
+                .with_detail(concat!(
+                    "dpkg-query --show --showformat=${binary:Package}\\t${Version}\\n failed:\n",
+                    "E: Could not get lock, another process is holding the dpkg frontend"
+                )),
+            ),
+        );
+
+        let report = diagnostics_report(
+            &config,
+            &ManagerHealthInfo::default(),
+            &ManagerCatalog::builtin(),
+            &installed,
+            &UpdatesInfo::default(),
+        );
+
+        assert!(report.contains("Another program holds the package database lock"));
+        assert!(report.contains("E: Could not get lock, another process is holding"));
     }
 
     #[test]

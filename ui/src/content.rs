@@ -22,7 +22,9 @@ pub(crate) use health::Message as HealthMessage;
 pub(crate) use installed::Installed;
 pub use installed::InstalledInfo;
 pub use setting::Message as SettingsMessage;
-pub(crate) use shared::{configured_managers_with_capability, open_directory, search_input_id};
+pub(crate) use shared::{
+    configured_managers_with_capability, describe_manager_error, open_directory, search_input_id,
+};
 pub(crate) use updater_core::CancellationToken;
 pub use updater_core::OperationOutcome;
 pub(crate) use updates::Updates;

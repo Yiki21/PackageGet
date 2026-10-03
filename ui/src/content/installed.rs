@@ -16,13 +16,16 @@ use std::collections::{HashMap, HashSet};
 
 use iced::Task;
 use updater_core::{CancellationToken, OperationOutcome, OperationProgress};
-use updater_manager_api::{ManagerCapability, ManagerId, PackageAction, PackageInfo};
+use updater_manager_api::{
+    ManagerCapability, ManagerId, PackageAction, PackageInfo, PackageTarget,
+};
 
 use crate::{
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
     content::workflows::{
-        collect_selected_package_groups, push_command_log, run_grouped_package_action,
+        PackageActionPlan, collect_selected_package_groups, push_command_log,
+        run_grouped_package_action,
     },
     manager_catalog::ManagerCatalog,
     theme,
@@ -146,8 +149,8 @@ pub struct InstalledInfo {
     pub remove_progress: Option<(usize, usize, ManagerId, String)>,
     /// Remove command logs.
     pub remove_logs: Vec<String>,
-    /// Whether the removal confirmation is visible.
-    pub confirming_remove: bool,
+    /// Removal plan frozen when the confirmation opened; Confirm executes exactly this.
+    pub pending_remove: Option<PackageActionPlan>,
     /// Last removal error shown in UI.
     pub last_remove_error: Option<String>,
     /// Last inspector action error shown in UI.
@@ -366,7 +369,7 @@ impl Installed {
                 } else {
                     info.selected_packages.remove(&key);
                 }
-                info.confirming_remove = false;
+                info.pending_remove = None;
                 Action::None
             }
             Message::ToggleSelectAll(select_all) => {
@@ -399,42 +402,14 @@ impl Installed {
                         info.selected_packages.remove(&key);
                     });
                 }
-                info.confirming_remove = false;
+                info.pending_remove = None;
                 Action::None
             }
             Message::RemoveSelectedPackages => {
-                if info.selected_packages.is_empty() {
-                    return Action::None;
-                }
-                info.confirming_remove = true;
-                info.last_remove_error = None;
-                Action::None
-            }
-            Message::ConfirmRemovePackages => {
                 if info.selected_packages.is_empty() || info.is_removing {
                     return Action::None;
                 }
-                info.confirming_remove = false;
-                info.is_removing = true;
                 info.last_remove_error = None;
-                info.remove_logs.clear();
-                let Some(initial_manager) = info
-                    .selected_packages
-                    .iter()
-                    .next()
-                    .map(|(manager, _)| manager.clone())
-                else {
-                    info.is_removing = false;
-                    info.last_remove_error =
-                        Some("No package manager was selected for removal".to_owned());
-                    return Action::None;
-                };
-                info.remove_progress = Some((
-                    0,
-                    info.selected_packages.len(),
-                    initial_manager,
-                    String::new(),
-                ));
                 let manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
                         info.installed_packages
@@ -445,6 +420,19 @@ impl Installed {
                     catalog,
                     PackageInfo::target,
                 );
+                if manager_groups.is_empty() {
+                    info.pending_remove = None;
+                    info.last_remove_error =
+                        Some("Selected packages are no longer available to remove".to_owned());
+                    return Action::None;
+                }
+                info.pending_remove = Some(PackageActionPlan { manager_groups });
+                Action::None
+            }
+            Message::ConfirmRemovePackages => {
+                let Some(manager_groups) = Self::begin_frozen_remove(info) else {
+                    return Action::None;
+                };
                 let cancellation = CancellationToken::default();
                 let task = run_grouped_package_action(
                     catalog.registry(),
@@ -470,7 +458,7 @@ impl Installed {
                 Action::CancellableRun(task, cancellation)
             }
             Message::CancelRemovePackages => {
-                info.confirming_remove = false;
+                info.pending_remove = None;
                 Action::None
             }
             Message::RemoveProgress {
@@ -531,7 +519,7 @@ impl Installed {
             {
                 self.inspected_package = None;
             }
-            info.confirming_remove = false;
+            info.pending_remove = None;
             return Action::None;
         }
 
@@ -565,18 +553,58 @@ impl Installed {
     }
 
     pub fn dismiss_transient(&mut self, info: &mut InstalledInfo) -> bool {
-        if info.confirming_remove {
-            info.confirming_remove = false;
+        if info.pending_remove.take().is_some() {
             true
         } else {
             self.inspected_package.take().is_some()
         }
     }
 
+    /// Consumes the frozen removal plan and seeds progress from it.
+    ///
+    /// Returns the exact manager groups to uninstall, independent of the live selection.
+    fn begin_frozen_remove(
+        info: &mut InstalledInfo,
+    ) -> Option<Vec<(ManagerId, Vec<PackageTarget>)>> {
+        if info.is_removing {
+            return None;
+        }
+        let plan = info.pending_remove.take()?;
+        let Some((initial_manager, _)) = plan.manager_groups.first() else {
+            info.last_remove_error =
+                Some("The removal plan does not contain any packages".to_owned());
+            return None;
+        };
+        info.is_removing = true;
+        info.last_remove_error = None;
+        info.remove_logs.clear();
+        info.remove_progress = Some((
+            0,
+            plan.package_count(),
+            initial_manager.clone(),
+            String::new(),
+        ));
+        Some(plan.manager_groups)
+    }
+
+    /// Counts frozen removal targets that the current search filter hides.
+    fn hidden_remove_count(&self, plan: &PackageActionPlan) -> usize {
+        let query = self.search_query.trim().to_lowercase();
+        if query.is_empty() {
+            return 0;
+        }
+        plan.manager_groups
+            .iter()
+            .flat_map(|(_, targets)| targets)
+            .filter(|target| !target.name.to_lowercase().contains(query.as_str()))
+            .count()
+    }
+
     pub fn primary_action(&self, info: &InstalledInfo) -> Option<Message> {
-        if info.confirming_remove {
-            return (!info.is_removing && !info.selected_packages.is_empty())
-                .then_some(Message::ConfirmRemovePackages);
+        if info.pending_remove.is_some() {
+            // Removal is irreversible: the keyboard default dismisses the plan;
+            // only the explicit Remove button confirms it.
+            return Some(Message::CancelRemovePackages);
         }
         (!info.is_removing && !info.selected_packages.is_empty())
             .then_some(Message::RemoveSelectedPackages)
@@ -972,6 +1000,7 @@ impl Installed {
                 .or_else(|| info.init_errors.get(manager))
                 .map(String::as_str),
             || Message::RetryLoad(manager.clone()),
+            Message::CopyInspectorText,
             body,
         )
     }
@@ -1204,34 +1233,8 @@ impl Installed {
             .align_y(iced::Alignment::Center);
 
         let mut content = column![actions_row].spacing(8);
-        if info.confirming_remove {
-            content = content.push(
-                row![
-                    text(format!("Remove {selected_count} selected package(s)?"))
-                        .size(13)
-                        .style(theme::text_on_surface),
-                    button(text("Cancel").size(13))
-                        .padding([7, 12])
-                        .style(theme::secondary_button(true))
-                        .on_press(Message::CancelRemovePackages),
-                    button(
-                        text(format!("Remove {selected_count} Packages"))
-                            .size(13)
-                            .font(theme::FONT_SEMIBOLD)
-                            .style(theme::text_on_primary)
-                    )
-                    .padding([7, 12])
-                    .style(theme::action_button(
-                        true,
-                        theme::colors::REMOVE_ACTION,
-                        theme::colors::REMOVE_ACTION_HOVER,
-                        theme::colors::REMOVE_ACTION_ACTIVE,
-                    ))
-                    .on_press(Message::ConfirmRemovePackages),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-            );
+        if info.pending_remove.is_some() {
+            content = content.push(self.remove_confirmation_view(info, catalog));
         }
         if let Some(error) = &info.last_remove_error {
             content = content.push(
@@ -1242,6 +1245,88 @@ impl Installed {
         }
 
         content.into()
+    }
+
+    fn remove_confirmation_view<'a>(
+        &self,
+        info: &'a InstalledInfo,
+        catalog: &'a ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{button, column, container, row, text};
+
+        let Some(plan) = &info.pending_remove else {
+            return container("").height(iced::Length::Shrink).into();
+        };
+        let package_count = plan.package_count();
+        let manager_count = plan.manager_groups.len();
+        let hidden_count = self.hidden_remove_count(plan);
+
+        let hidden_detail = (hidden_count > 0).then(|| {
+            format!(
+                "{hidden_count} package(s) are hidden by the current filter and will also be removed"
+            )
+        });
+
+        let mut content = column![
+            row![
+                column![
+                    text(format!(
+                        "Remove {package_count} package{} from {manager_count} source{}",
+                        if package_count == 1 { "" } else { "s" },
+                        if manager_count == 1 { "" } else { "s" },
+                    ))
+                    .size(14)
+                    .font(theme::FONT_SEMIBOLD)
+                    .style(theme::text_on_surface),
+                    text("This cannot be undone")
+                        .size(13)
+                        .style(theme::text_error),
+                ]
+                .spacing(theme::spacing::XS)
+                .width(iced::Length::Fill),
+                button(text("Cancel").size(13))
+                    .padding([8, 12])
+                    .style(theme::secondary_button(true))
+                    .on_press(Message::CancelRemovePackages),
+                button(
+                    text(format!("Remove {package_count} Packages"))
+                        .size(13)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(theme::text_on_primary)
+                )
+                .padding([8, 14])
+                .style(theme::action_button(
+                    true,
+                    theme::colors::REMOVE_ACTION,
+                    theme::colors::REMOVE_ACTION_HOVER,
+                    theme::colors::REMOVE_ACTION_ACTIVE,
+                ))
+                .on_press(Message::ConfirmRemovePackages),
+            ]
+            .spacing(theme::spacing::MD)
+            .align_y(iced::Alignment::Center)
+            .wrap(),
+        ]
+        .spacing(theme::spacing::MD);
+        content = content.push(shared::package_action_plan_view(
+            &plan.manager_groups,
+            catalog,
+        ));
+        if let Some(hidden_detail) = hidden_detail {
+            content = content.push(
+                text(hidden_detail)
+                    .size(12)
+                    .style(theme::text_warning)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+
+        container(content)
+            .padding(theme::spacing::MD)
+            .width(iced::Length::Fill)
+            .style(theme::surface_container)
+            .into()
     }
 
     pub(crate) fn start_load(
@@ -1268,7 +1353,7 @@ impl Installed {
             runtime
                 .installed(manager_config)
                 .await
-                .map_err(|e| format!("Failed to load installed packages for {}: {}", manager, e))
+                .map_err(|error| shared::describe_manager_error(&error))
         })
         .then(move |result| {
             Task::done(Message::LoadInstalledResult {
@@ -1283,6 +1368,162 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn installed_with_packages(manager: &ManagerId, names: &[&str]) -> (Installed, InstalledInfo) {
+        let mut info = InstalledInfo::default();
+        info.selected_managers.insert(manager.clone());
+        info.installed_packages.insert(
+            manager.clone(),
+            (
+                names.len(),
+                names
+                    .iter()
+                    .map(|name| PackageInfo::new(manager.clone(), *name, "1.0"))
+                    .collect(),
+            ),
+        );
+        (Installed::default(), info)
+    }
+
+    #[test]
+    fn remove_confirmation_freezes_plan_including_hidden_selection() {
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+        let (mut installed, mut info) =
+            installed_with_packages(&cargo, &["alpha", "python-one", "python-two"]);
+        let config = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+
+        let _ = installed.update(
+            Message::TogglePackageSelection(cargo.clone(), "alpha".to_owned(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        let _ = installed.update(
+            Message::SearchQueryChanged("python".to_owned()),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        let _ = installed.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        let action = installed.update(
+            Message::RemoveSelectedPackages,
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(!info.is_removing);
+        let plan = info
+            .pending_remove
+            .as_ref()
+            .expect("removal plan is frozen");
+        assert_eq!(
+            plan.manager_groups,
+            vec![(
+                cargo.clone(),
+                vec![
+                    PackageTarget::new(cargo.clone(), "alpha"),
+                    PackageTarget::new(cargo.clone(), "python-one"),
+                    PackageTarget::new(cargo, "python-two"),
+                ],
+            )]
+        );
+        assert_eq!(plan.package_count(), 3);
+        assert_eq!(installed.hidden_remove_count(plan), 1);
+
+        let _ = installed.update(Message::CancelRemovePackages, &config, &mut info, &catalog);
+        assert!(info.pending_remove.is_none());
+    }
+
+    #[test]
+    fn confirm_remove_executes_frozen_plan() {
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+        let (mut installed, mut info) =
+            installed_with_packages(&cargo, &["alpha", "beta", "gamma"]);
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "alpha"));
+        let config = updater_core::Config::default();
+        let catalog = ManagerCatalog::builtin();
+
+        let _ = installed.update(
+            Message::RemoveSelectedPackages,
+            &config,
+            &mut info,
+            &catalog,
+        );
+        let frozen = info.pending_remove.clone().expect("removal plan is frozen");
+
+        // The live selection drifts after Prepare; the frozen plan must win.
+        info.selected_packages.clear();
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "beta"));
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "gamma"));
+
+        let mut probe = info.clone();
+        let executed = Installed::begin_frozen_remove(&mut probe);
+        assert_eq!(executed, Some(frozen.manager_groups.clone()));
+        assert_eq!(
+            executed,
+            Some(vec![(
+                cargo.clone(),
+                vec![PackageTarget::new(cargo.clone(), "alpha")]
+            )])
+        );
+
+        let action = installed.update(Message::ConfirmRemovePackages, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_removing);
+        assert!(info.pending_remove.is_none());
+        assert_eq!(
+            info.remove_progress,
+            Some((0, frozen.package_count(), cargo, String::new()))
+        );
+    }
+
+    #[test]
+    fn remove_confirmation_keyboard_default_cancels() {
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+        let (installed, mut info) = installed_with_packages(&cargo, &["alpha"]);
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "alpha"));
+
+        assert!(matches!(
+            installed.primary_action(&info),
+            Some(Message::RemoveSelectedPackages)
+        ));
+
+        info.pending_remove = Some(PackageActionPlan {
+            manager_groups: vec![(cargo.clone(), vec![PackageTarget::new(cargo, "alpha")])],
+        });
+
+        assert!(matches!(
+            installed.primary_action(&info),
+            Some(Message::CancelRemovePackages)
+        ));
+    }
+
+    #[test]
+    fn confirm_remove_without_plan_does_nothing() {
+        let cargo = ManagerId::parse("builtin:cargo").unwrap();
+        let (mut installed, mut info) = installed_with_packages(&cargo, &["alpha"]);
+        info.selected_packages
+            .insert(shared::selection_key(&cargo, "alpha"));
+
+        let action = installed.update(
+            Message::ConfirmRemovePackages,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(action, Action::None));
+        assert!(!info.is_removing);
+        assert!(info.remove_progress.is_none());
+    }
 
     #[test]
     fn clearing_visible_sources_preserves_hidden_selection_and_inspector() {
