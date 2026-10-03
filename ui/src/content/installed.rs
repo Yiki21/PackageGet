@@ -1000,6 +1000,7 @@ impl Installed {
                 .or_else(|| info.init_errors.get(manager))
                 .map(String::as_str),
             || Message::RetryLoad(manager.clone()),
+            Message::CopyInspectorText,
             body,
         )
     }
@@ -1352,7 +1353,7 @@ impl Installed {
             runtime
                 .installed(manager_config)
                 .await
-                .map_err(|e| format!("Failed to load installed packages for {}: {}", manager, e))
+                .map_err(|error| shared::describe_manager_error(&error))
         })
         .then(move |result| {
             Task::done(Message::LoadInstalledResult {

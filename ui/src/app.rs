@@ -1773,7 +1773,7 @@ impl App {
                         runtime
                             .count_installed(manager_config)
                             .await
-                            .map_err(|error| error.to_string())
+                            .map_err(|error| content::describe_manager_error(&error))
                     }
                 },
                 item_message: move |manager, result| Message::InitInstalledCount {
@@ -1844,7 +1844,7 @@ impl App {
                         runtime
                             .updates(manager_config, false)
                             .await
-                            .map_err(|error| error.to_string())
+                            .map_err(|error| content::describe_manager_error(&error))
                     }
                 },
                 item_message: move |manager, result| Message::InitUpdatesCount {

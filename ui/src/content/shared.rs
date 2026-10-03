@@ -9,8 +9,8 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Alignment, Border, Element, Length};
 use updater_core::{Config, ManagerRegistry};
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerId, PackageInfo,
-    PackageOrigin, PackageScope, PackageTarget, Platform,
+    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerError,
+    ManagerErrorKind, ManagerId, PackageInfo, PackageOrigin, PackageScope, PackageTarget, Platform,
 };
 
 use crate::{icon, manager_catalog::ManagerCatalog, theme};
@@ -1165,14 +1165,94 @@ where
         .into()
 }
 
+/// Separates the readable summary of a described error from its diagnostic detail.
+const ERROR_DETAIL_SEPARATOR: &str = "\n\n";
+
+/// Height cap for diagnostic detail inside an error card.
+const ERROR_DETAIL_MAX_HEIGHT: f32 = 140.0;
+
+/// Describes a read-path [`ManagerError`] for the user.
+///
+/// The text leads with an actionable sentence for the error kind, follows with the
+/// manager message, and ends with the bounded detail (command and stderr tail)
+/// after [`ERROR_DETAIL_SEPARATOR`], which [`error_card`] renders as monospace.
+pub fn describe_manager_error(error: &ManagerError) -> String {
+    let lead = match error.kind() {
+        ManagerErrorKind::Cancelled => "Authorization was cancelled.",
+        ManagerErrorKind::Permission => "Administrator permission was denied.",
+        ManagerErrorKind::Network => "The network is unavailable; check the connection and retry.",
+        ManagerErrorKind::Busy => {
+            "Another program holds the package database lock; try again when it finishes."
+        }
+        ManagerErrorKind::Timeout => "The package manager did not finish in time; try again.",
+        ManagerErrorKind::CommandMissing => {
+            "Command not found; check the path on the Package Managers page."
+        }
+        _ => "The package manager reported an error.",
+    };
+    let mut description = format!("{lead}\n{}", error.message());
+    if let Some(detail) = error
+        .detail()
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty())
+    {
+        description.push_str(ERROR_DETAIL_SEPARATOR);
+        description.push_str(detail);
+    }
+    description
+}
+
+fn split_error_detail(error: &str) -> (&str, Option<&str>) {
+    match error.split_once(ERROR_DETAIL_SEPARATOR) {
+        Some((summary, detail)) if !detail.trim().is_empty() => (summary, Some(detail)),
+        _ => (error, None),
+    }
+}
+
 pub fn error_card<'a, Message>(
     title: impl Into<String>,
     detail: &'a str,
     retry: Message,
+    copy: impl FnOnce(String) -> Message,
 ) -> Element<'a, Message>
 where
     Message: 'a + Clone,
 {
+    let title = title.into();
+    let copy = copy(format!("{title}\n{detail}"));
+    let (summary, diagnostics) = split_error_detail(detail);
+    let mut body = column![
+        text(title)
+            .size(14)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface),
+        text(summary)
+            .size(13)
+            .style(theme::text_on_surface_muted)
+            .wrapping(text::Wrapping::WordOrGlyph),
+    ]
+    .spacing(theme::spacing::XS)
+    .width(iced::Length::Fill);
+    if let Some(diagnostics) = diagnostics {
+        body = body.push(
+            container(
+                scrollable(
+                    text(diagnostics)
+                        .size(12)
+                        .font(theme::FONT_MONO)
+                        .style(theme::text_on_surface_alt)
+                        .width(iced::Length::Fill)
+                        .wrapping(text::Wrapping::WordOrGlyph),
+                )
+                .width(iced::Length::Fill),
+            )
+            .padding(theme::spacing::SM)
+            .width(iced::Length::Fill)
+            .max_height(ERROR_DETAIL_MAX_HEIGHT)
+            .style(theme::surface_container),
+        );
+    }
+
     let content = row![
         container(
             text("!")
@@ -1192,25 +1272,21 @@ where
             },
             ..Default::default()
         }),
+        body,
         column![
-            text(title.into())
-                .size(14)
-                .font(theme::FONT_SEMIBOLD)
-                .style(theme::text_on_surface),
-            text(detail)
-                .size(13)
-                .style(theme::text_on_surface_muted)
-                .wrapping(text::Wrapping::WordOrGlyph),
+            button(text("Retry").size(13).font(theme::FONT_SEMIBOLD))
+                .padding([7, 12])
+                .style(theme::secondary_button(true))
+                .on_press(retry),
+            button(text("Copy").size(13))
+                .padding([7, 12])
+                .style(theme::secondary_button(true))
+                .on_press(copy),
         ]
-        .spacing(theme::spacing::XS)
-        .width(iced::Length::Fill),
-        button(text("Retry").size(13).font(theme::FONT_SEMIBOLD))
-            .padding([7, 12])
-            .style(theme::secondary_button(true))
-            .on_press(retry),
+        .spacing(theme::spacing::XS),
     ]
     .spacing(theme::spacing::MD)
-    .align_y(iced::Alignment::Center);
+    .align_y(iced::Alignment::Start);
 
     container(content)
         .padding(theme::spacing::MD)
@@ -1226,6 +1302,8 @@ where
         .into()
 }
 
+// Retry and copy are per-section message constructors for the error card.
+#[allow(clippy::too_many_arguments)]
 pub fn manager_section<'a, Message>(
     manager: ManagerId,
     catalog: &'a ManagerCatalog,
@@ -1233,6 +1311,7 @@ pub fn manager_section<'a, Message>(
     style: ManagerSectionStyle,
     error: Option<&'a str>,
     retry: impl FnOnce() -> Message,
+    copy_error: impl FnOnce(String) -> Message,
     body: Option<Element<'a, Message>>,
 ) -> Element<'a, Message>
 where
@@ -1261,7 +1340,8 @@ where
             error_card(
                 format!("{}: {}", error_prefix, manager_name),
                 error,
-                retry()
+                retry(),
+                copy_error,
             ),
         ]
         .spacing(12)
@@ -1334,10 +1414,81 @@ mod tests {
         DesktopOpenCommand, DesktopTargetKind, PackageDetailState, desktop_open_commands,
         selection_key, validate_http_url,
     };
-    use updater_manager_api::{ManagerCapability, ManagerConfig, ManagerId, PackageInfo, Platform};
+    use updater_manager_api::{
+        ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageInfo,
+        Platform,
+    };
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn describe_manager_error_includes_kind_lead_and_detail() {
+        let busy = ManagerError::new(ManagerErrorKind::Busy, "package manager command failed")
+            .with_detail(
+                "apt-get install failed:\nE: Could not get lock /var/lib/dpkg/lock - open\nE: Unable to lock",
+            );
+        let described = super::describe_manager_error(&busy);
+        assert!(
+            described.contains("Another program holds the package database lock"),
+            "expected the lock-specific lead sentence, got: {described}"
+        );
+        assert!(described.contains("E: Could not get lock /var/lib/dpkg/lock"));
+        assert!(described.contains("package manager command failed"));
+
+        let (summary, detail) = super::split_error_detail(&described);
+        assert!(summary.contains("Another program holds the package database lock"));
+        assert_eq!(
+            detail,
+            Some(
+                "apt-get install failed:\nE: Could not get lock /var/lib/dpkg/lock - open\nE: Unable to lock"
+            )
+        );
+
+        let command_missing = ManagerError::new(
+            ManagerErrorKind::CommandMissing,
+            "package manager command failed",
+        );
+        assert!(
+            super::describe_manager_error(&command_missing)
+                .contains("check the path on the Package Managers page")
+        );
+    }
+
+    #[test]
+    fn describe_manager_error_leads_each_classification() {
+        let cases = [
+            (ManagerErrorKind::Cancelled, "Authorization was cancelled"),
+            (
+                ManagerErrorKind::Permission,
+                "Administrator permission was denied",
+            ),
+            (ManagerErrorKind::Network, "The network is unavailable"),
+            (
+                ManagerErrorKind::Busy,
+                "Another program holds the package database lock",
+            ),
+            (
+                ManagerErrorKind::Timeout,
+                "The package manager did not finish in time",
+            ),
+            (
+                ManagerErrorKind::CommandMissing,
+                "Command not found; check the path on the Package Managers page",
+            ),
+        ];
+
+        for (kind, lead) in cases {
+            let error = ManagerError::new(kind, "boom");
+            let described = super::describe_manager_error(&error);
+            assert!(
+                described.starts_with(lead),
+                "{kind:?} should lead with {lead:?}, got {described:?}"
+            );
+            assert!(described.contains("boom"));
+            assert_eq!(super::split_error_detail(&described).1, None);
+        }
     }
 
     #[test]
