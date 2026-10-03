@@ -722,15 +722,7 @@ async fn run_npm_command_with_progress(
     command: &CommandSpec,
     on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
-    timeout(
-        COMMAND_TIMEOUT,
-        run_command_with_progress(command, on_progress),
-    )
-    .await
-    .map_err(|_| {
-        ManagerError::new(ManagerErrorKind::Timeout, "npm package command timed out")
-            .with_detail(command.program().to_string_lossy())
-    })?
+    run_command_with_progress(command, on_progress).await
 }
 
 async fn run_cancellable_npm_command_with_progress(
@@ -738,15 +730,7 @@ async fn run_cancellable_npm_command_with_progress(
     cancellation: &dyn ProgressSink,
     on_progress: impl FnMut(CommandProgress),
 ) -> ManagerResult<()> {
-    timeout(
-        COMMAND_TIMEOUT,
-        run_cancellable_command_with_progress(command, cancellation, on_progress),
-    )
-    .await
-    .map_err(|_| {
-        ManagerError::new(ManagerErrorKind::Timeout, "npm package command timed out")
-            .with_detail(command.program().to_string_lossy())
-    })?
+    run_cancellable_command_with_progress(command, cancellation, on_progress).await
 }
 
 fn global_origin(name: &str) -> PackageOrigin {

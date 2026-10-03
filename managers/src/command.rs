@@ -29,6 +29,7 @@ pub(crate) struct CommandSpec {
     args: Vec<OsString>,
     environment: Vec<(OsString, OsString)>,
     removed_environment: Vec<OsString>,
+    privileged: bool,
 }
 
 impl CommandSpec {
@@ -38,7 +39,17 @@ impl CommandSpec {
             args: Vec::new(),
             environment: Vec::new(),
             removed_environment: Vec::new(),
+            privileged: false,
         }
+    }
+
+    /// Marks a command that the system helper runs as root.
+    ///
+    /// Cancelling such a command cannot signal its process group from an
+    /// unprivileged GUI process, so it must never be signalled.
+    pub(crate) fn privileged(mut self) -> Self {
+        self.privileged = true;
+        self
     }
 
     pub(crate) fn arg(mut self, arg: impl Into<OsString>) -> Self {
@@ -80,10 +91,16 @@ impl CommandSpec {
     pub(crate) fn removed_environment(&self) -> &[OsString] {
         &self.removed_environment
     }
+
+    pub(crate) fn is_privileged(&self) -> bool {
+        self.privileged
+    }
 }
 
 pub(crate) fn system_helper_command(action: &str, manager: &str) -> CommandSpec {
-    CommandSpec::new(PKEXEC_PATH).args([SYSTEM_HELPER_PATH, action, manager])
+    CommandSpec::new(PKEXEC_PATH)
+        .args([SYSTEM_HELPER_PATH, action, manager])
+        .privileged()
 }
 
 pub(crate) async fn manager_availability(
@@ -247,6 +264,10 @@ pub(crate) fn decode_stdout(output: Output, message: &str) -> ManagerResult<Stri
 pub(crate) fn build_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(spec.program());
     command.kill_on_drop(true);
+    // Managed commands run without a terminal: an inherited stdin would let
+    // dpkg or gem prompts block forever or stop on SIGTTIN in the child's
+    // background process group.
+    command.stdin(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -790,6 +811,22 @@ mod tests {
             [SYSTEM_HELPER_PATH, "install", "apt", "bash", "curl",]
                 .map(OsString::from)
                 .as_slice()
+        );
+    }
+
+    #[test]
+    fn only_system_helper_commands_are_marked_privileged() {
+        assert!(system_helper_command("update", "pacman").is_privileged());
+        assert!(
+            CommandSpec::new("sh")
+                .args(["-c", "true"])
+                .privileged()
+                .is_privileged()
+        );
+        assert!(
+            !CommandSpec::new("npm")
+                .args(["install", "-g", "tool"])
+                .is_privileged()
         );
     }
 

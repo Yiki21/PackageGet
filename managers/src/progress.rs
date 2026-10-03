@@ -196,6 +196,11 @@ async fn run_command_with_parser(
     let mut termination_error = None;
     let mut force_at = None;
     let mut forced = false;
+    // A privileged transaction runs as root behind `pkexec`. An unprivileged
+    // sender cannot signal that process group, and if the GUI runs as root,
+    // signalling it would interrupt a package database transaction, so the
+    // cancellation is recorded and the transaction is allowed to finish.
+    let privileged = spec.is_privileged();
     let mut poll = interval(CANCELLATION_POLL_INTERVAL);
     poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     on_progress(CommandProgress::new(0.0, None));
@@ -230,11 +235,13 @@ async fn run_command_with_parser(
 
                 if !cancellation_requested && is_cancelled() {
                     cancellation_requested = true;
-                    force_at = Some(Instant::now() + TERMINATION_GRACE_PERIOD);
-                    if let Err(error) = terminate_process_tree(&mut child, false).await {
-                        termination_error = Some(error);
+                    if !privileged {
+                        force_at = Some(Instant::now() + TERMINATION_GRACE_PERIOD);
+                        if let Err(error) = terminate_process_tree(&mut child, false).await {
+                            termination_error = Some(error);
+                        }
                     }
-                } else if cancellation_requested
+                } else if !privileged
                     && !forced
                     && force_at.is_some_and(|deadline| Instant::now() >= deadline)
                 {
@@ -249,7 +256,9 @@ async fn run_command_with_parser(
 
     let stdout_result = stdout_task.await;
     let stderr_result = stderr_task.await;
-    if !cancellation_requested {
+    let cancellation_delivered =
+        cancellation_requested && !privileged && termination_error.is_none();
+    if !cancellation_delivered {
         join_reader(stdout_result)?;
         join_reader(stderr_result)?;
     }
@@ -261,17 +270,8 @@ async fn run_command_with_parser(
             .await
             .map_err(|error| io_error("failed to wait for package manager command", error))?,
     };
-    if cancellation_requested {
-        return termination_error.map_or_else(
-            || Err(cancelled_error()),
-            |error| {
-                Err(ManagerError::new(
-                    ManagerErrorKind::Other,
-                    "package manager command exited after cancellation could not be delivered",
-                )
-                .with_detail(error.to_string()))
-            },
-        );
+    if cancellation_delivered {
+        return Err(cancelled_error());
     }
     if !status.success() {
         let tail = tail_logs.into_iter().collect::<Vec<_>>().join("\n");
@@ -565,6 +565,24 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn commands_read_end_of_file_from_a_closed_stdin() {
+        let mut lines = Vec::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_command_with_progress(
+                &CommandSpec::new("sh").args(["-c", "read line; echo \"read exited $?\""]),
+                |progress| lines.extend(progress.into_parts().1),
+            ),
+        )
+        .await
+        .expect("a command reading stdin must not wait for input");
+
+        result.expect("run stdin reader");
+        assert_eq!(lines, ["read exited 1"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn cancellation_terminates_a_silent_command_and_waits_for_exit() {
         struct Cancellation(Arc<AtomicBool>);
 
@@ -594,5 +612,122 @@ mod tests {
         let error = result.expect_err("command should be cancelled");
         assert_eq!(error.kind(), ManagerErrorKind::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn privileged_cancellation_is_recorded_and_reports_the_real_result() {
+        struct Cancellation(Arc<AtomicBool>);
+
+        impl ProgressSink for Cancellation {
+            fn emit(&self, _event: ProgressEvent) {}
+
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+        }
+
+        let directory = tempfile::tempdir().expect("create marker directory");
+        let marker = directory.path().join("transaction-finished");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            request.store(true, Ordering::Release);
+        });
+
+        let result = run_cancellable_command_with_progress(
+            &CommandSpec::new("sh")
+                .arg("-c")
+                .arg(format!("sleep 0.4; printf done > '{}'", marker.display()))
+                .privileged(),
+            &Cancellation(cancelled),
+            |_| {},
+        )
+        .await;
+
+        result.expect("a privileged transaction that exits 0 succeeds");
+        assert!(
+            marker.exists(),
+            "the privileged transaction must not be signalled"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unprivileged_cancellation_still_terminates_the_command() {
+        struct Cancellation(Arc<AtomicBool>);
+
+        impl ProgressSink for Cancellation {
+            fn emit(&self, _event: ProgressEvent) {}
+
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+        }
+
+        let directory = tempfile::tempdir().expect("create marker directory");
+        let marker = directory.path().join("command-finished");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            request.store(true, Ordering::Release);
+        });
+
+        let error = run_cancellable_command_with_progress(
+            &CommandSpec::new("sh")
+                .arg("-c")
+                .arg(format!("sleep 0.4; printf done > '{}'", marker.display())),
+            &Cancellation(cancelled),
+            |_| {},
+        )
+        .await
+        .expect_err("an unprivileged command is cancelled");
+
+        assert_eq!(error.kind(), ManagerErrorKind::Cancelled);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            !marker.exists(),
+            "the unprivileged command must be terminated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn privileged_cancellation_reports_a_failing_transaction_as_a_status_error() {
+        struct Cancellation(Arc<AtomicBool>);
+
+        impl ProgressSink for Cancellation {
+            fn emit(&self, _event: ProgressEvent) {}
+
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            request.store(true, Ordering::Release);
+        });
+
+        let error = run_cancellable_command_with_progress(
+            &CommandSpec::new("sh")
+                .args(["-c", "sleep 0.4; exit 7"])
+                .privileged(),
+            &Cancellation(cancelled),
+            |_| {},
+        )
+        .await
+        .expect_err("a failing privileged transaction reports its status");
+
+        assert_ne!(error.kind(), ManagerErrorKind::Cancelled);
+        assert_eq!(error.message(), "package manager command failed");
+        assert!(
+            error.detail().is_some_and(|detail| detail.contains("exit")),
+            "{error:?}"
+        );
     }
 }

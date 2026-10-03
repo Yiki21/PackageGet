@@ -281,3 +281,53 @@ async fn local_pacman_availability_is_structured() {
         other => panic!("unexpected local Pacman availability: {other:?}"),
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn update_listing_never_syncs_the_live_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().expect("create logging fake Pacman directory");
+    let log = directory.path().join("pacman.log");
+    let executable = directory.path().join("pacman");
+    fs::write(
+        &executable,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> '{}'
+if [ "$1" = "-Qu" ]; then printf 'curl 8.15.0-1 -> 8.16.0-1\n'; exit 0; fi
+exit 2
+"#,
+            log.display()
+        ),
+    )
+    .expect("write logging fake Pacman executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("mark logging fake Pacman executable");
+
+    let manager = PacmanManager::new();
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+
+    // A refreshed listing would run the privileged helper, which the test
+    // host cannot authorise, so this pins the query half of the contract:
+    // pacman is only ever asked to list, never to sync, without a temporary
+    // database path.
+    let updates = manager
+        .updates(&config, false)
+        .await
+        .expect("list Pacman updates");
+
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "curl");
+    let invoked = fs::read_to_string(&log).expect("read fake Pacman invocation log");
+    for invocation in invoked.lines() {
+        assert!(
+            !invocation
+                .split_whitespace()
+                .any(|word| word.starts_with("-S")),
+            "Pacman must never sync the live database from a listing: {invocation}"
+        );
+    }
+    assert_eq!(invoked.lines().count(), 1, "{invoked}");
+    assert!(invoked.starts_with("-Qu"), "{invoked}");
+}

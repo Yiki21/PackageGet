@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
+    path::Path,
     process::Output,
 };
 
@@ -23,6 +24,10 @@ use crate::{
 const PACMAN_ID: &str = "builtin:pacman";
 const PACMAN_COMMAND: &str = "pacman";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
+/// Temporary sync database the privileged helper mirrors and this manager
+/// reads. The helper binary in `ui/src/bin/updater-system-helper.rs` defines
+/// the same fixed path; the two crates share no constants module.
+const PACMAN_SYNC_DATABASE: &str = "/var/lib/updater/pacman-sync";
 
 /// Direct `updater-manager-api` implementation for Pacman.
 #[derive(Debug, Clone)]
@@ -130,12 +135,17 @@ impl PacmanManager {
         self.validate_config(config)?;
         let pacman_path = resolve_executable(config, PACMAN_COMMAND);
 
-        if refresh {
-            let refresh = refresh_command();
-            run_command_with_progress(&refresh, |_| {}).await?;
+        // Arch has no partial upgrade, so the live sync database may only move
+        // together with `-u`. Discovery therefore mirrors the sync databases
+        // into a fixed temporary database through the privileged helper and
+        // reads that, the way the pacman-contrib `checkupdates` script does.
+        // A cancelled or failed authorisation is reported as the refresh
+        // failure and never retried against the live database.
+        let (refresh_command, spec) =
+            update_commands(&pacman_path, refresh, Path::new(PACMAN_SYNC_DATABASE));
+        if let Some(refresh_command) = refresh_command {
+            run_command_with_progress(&refresh_command, |_| {}).await?;
         }
-
-        let spec = CommandSpec::new(pacman_path).arg("-Qu");
         let output = run_output(&spec).await?;
         if !output.status.success() {
             if output.stdout.iter().all(u8::is_ascii_whitespace)
@@ -184,13 +194,18 @@ impl PacmanManager {
         self.validate_config(config)?;
         ensure_supported_action(action)?;
         let command = match action {
-            PackageAction::Install => system_helper_command("install", "pacman"),
+            PackageAction::Install => system_helper_command("install", "pacman")
+                .args(package_names.iter().map(OsString::from)),
+            // Pacman updates are one `pacman -Syu` system transaction; naming
+            // a subset would install packages newer than the rest of the
+            // system, which Arch does not support.
             PackageAction::Update => system_helper_command("update", "pacman"),
-            PackageAction::Uninstall => system_helper_command("remove", "pacman"),
+            PackageAction::Uninstall => system_helper_command("remove", "pacman")
+                .args(package_names.iter().map(OsString::from)),
             _ => return Err(unsupported_action_error()),
         };
 
-        Ok(command.args(package_names.iter().map(OsString::from)))
+        Ok(command)
     }
 }
 
@@ -455,8 +470,26 @@ fn parse_search_entries(stdout: &str) -> Vec<SearchEntry> {
     entries
 }
 
-fn refresh_command() -> CommandSpec {
-    system_helper_command("refresh", "pacman")
+/// Builds the privileged refresh command, when one was requested, and the
+/// `-Qu` query that reads the result.
+///
+/// `sync_database` is a parameter so that both branches can be tested against
+/// a temporary path; every caller passes [`PACMAN_SYNC_DATABASE`].
+fn update_commands(
+    pacman: &Path,
+    refresh: bool,
+    sync_database: &Path,
+) -> (Option<CommandSpec>, CommandSpec) {
+    let refresh_command = refresh.then(|| system_helper_command("refresh", "pacman"));
+    // Without a refresh the mirror is only read once the helper has created
+    // it; until then the live database still answers the query.
+    let mirror_exists = refresh || sync_database.join("sync").is_dir();
+    let mut query = CommandSpec::new(pacman).arg("-Qu");
+    if mirror_exists {
+        query = query.arg("--dbpath").arg(sync_database.as_os_str());
+    }
+
+    (refresh_command, query)
 }
 
 fn command_output_tail(stdout: &[u8], stderr: &[u8]) -> String {
@@ -495,29 +528,22 @@ mod tests {
             ManagerConfig::new(manager.descriptor().id().clone()).with_executable("/custom/pacman");
         let names = vec!["bash".to_owned(), "curl".to_owned()];
 
-        for action in [PackageAction::Install, PackageAction::Update] {
-            let command = manager
-                .write_command(&config, action, &names)
-                .expect("build Pacman sync command");
-            assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
-            let action_name = match action {
-                PackageAction::Install => "install",
-                PackageAction::Update => "update",
-                _ => unreachable!(),
-            };
-            assert_eq!(
-                command.arguments(),
-                [
-                    "/usr/lib/updater/updater-system-helper",
-                    action_name,
-                    "pacman",
-                    "bash",
-                    "curl",
-                ]
-                .map(OsString::from)
-                .as_slice()
-            );
-        }
+        let install = manager
+            .write_command(&config, PackageAction::Install, &names)
+            .expect("build Pacman install command");
+        assert_eq!(install.program(), Path::new("/usr/bin/pkexec"));
+        assert_eq!(
+            install.arguments(),
+            [
+                "/usr/lib/updater/updater-system-helper",
+                "install",
+                "pacman",
+                "bash",
+                "curl",
+            ]
+            .map(OsString::from)
+            .as_slice()
+        );
 
         let uninstall = manager
             .write_command(&config, PackageAction::Uninstall, &names)
@@ -537,17 +563,79 @@ mod tests {
     }
 
     #[test]
-    fn refresh_command_preserves_database_sync_semantics() {
-        let command = refresh_command();
-        assert_eq!(command.program(), Path::new("/usr/bin/pkexec"));
+    fn update_command_is_one_full_system_transaction_without_a_partial_target_list() {
+        let manager = PacmanManager::new();
+        let config =
+            ManagerConfig::new(manager.descriptor().id().clone()).with_executable("/custom/pacman");
+
+        let update = manager
+            .write_command(
+                &config,
+                PackageAction::Update,
+                &["bash".to_owned(), "curl".to_owned()],
+            )
+            .expect("build Pacman update command");
+        assert_eq!(update.program(), Path::new("/usr/bin/pkexec"));
+        assert!(
+            update.is_privileged(),
+            "pacman updates run through the privileged helper"
+        );
         assert_eq!(
-            command.arguments(),
+            update.arguments(),
+            ["/usr/lib/updater/updater-system-helper", "update", "pacman",]
+                .map(OsString::from)
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn refreshed_update_listing_queries_the_mirrored_database() {
+        let sync_database = Path::new("/var/lib/updater/pacman-sync");
+        let (refresh, query) = update_commands(Path::new("/custom/pacman"), true, sync_database);
+
+        let refresh = refresh.expect("a refreshed listing asks the helper to sync");
+        assert_eq!(refresh.program(), Path::new("/usr/bin/pkexec"));
+        assert!(refresh.is_privileged());
+        assert_eq!(
+            refresh.arguments(),
             [
                 "/usr/lib/updater/updater-system-helper",
                 "refresh",
                 "pacman",
             ]
             .map(OsString::from)
+            .as_slice()
+        );
+
+        assert_eq!(query.program(), Path::new("/custom/pacman"));
+        assert_eq!(
+            query.arguments(),
+            ["-Qu", "--dbpath", "/var/lib/updater/pacman-sync"]
+                .map(OsString::from)
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn unrefreshed_update_listing_uses_the_mirror_only_once_it_exists() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let missing = directory.path().join("pacman-sync");
+        let (refresh, query) = update_commands(Path::new("/custom/pacman"), false, &missing);
+
+        assert!(refresh.is_none(), "an unrefreshed listing must not sync");
+        assert_eq!(query.arguments(), [OsString::from("-Qu")].as_slice());
+
+        std::fs::create_dir_all(missing.join("sync")).expect("create mirrored sync database");
+        let (refresh, query) = update_commands(Path::new("/custom/pacman"), false, &missing);
+
+        assert!(refresh.is_none());
+        assert_eq!(
+            query.arguments(),
+            [
+                OsString::from("-Qu"),
+                OsString::from("--dbpath"),
+                missing.as_os_str().to_owned(),
+            ]
             .as_slice()
         );
     }
