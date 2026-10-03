@@ -116,6 +116,8 @@ UI catalog与执行任务共享同一个`ManagerRegistry`。已注册且已配�
 - Config要求`ManagerConfig.settings`为JSON object；manager拥有其内部schema并负责typed解析与运行时校验。带一等Settings UI的built-in可以在core额外冻结必填持久化不变量，例如Nix的单一绝对user profile；其他manager-private字段仍由core不透明保存。
 - manager settings升级必须由manager自身保持兼容；不要把manager私有字段提升为Config顶层字段。
 - `PackageInfo.name`与`PackageTarget.name`使用manager真实write identity；展示别名放在metadata/origin中。
+- `search`返回的`PackageInfo.version`表示安装状态：已安装包返回本地版本，未安装包返回`"Not Installed"`；商店里可安装的版本放在`description`。UI据此决定Discover结果能否加入安装计划。
+- 只广告`Install`但不广告`Search`的manager必须实现`install_target`，把用户输入的精确包名解析成自己的typed `PackageTarget`（scope、origin等由manager负责）；默认实现只做trim与非空校验并返回bare target。
 - `package_info`是可选的按需只读详情扩展点；只有能以低副作用、稳定结构化输出提供 richer metadata 的 manager 才实现它，不能在 installed/updates 列表加载时顺带执行单包详情命令。
 - 所有write target先整组验证，再开始命令与progress，防止部分写入。
 - manager内部可以批处理或逐项串行，但不能改变core的跨manager串行语义。

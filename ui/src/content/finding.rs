@@ -34,6 +34,14 @@ pub struct Finding {
     inspector_error: Option<String>,
     /// Frozen install plan waiting for confirmation.
     pending_install: Option<PackageActionPlan>,
+    /// Whether the frozen plan came from the install-by-name affordance.
+    plan_from_install_by_name: bool,
+    /// Manager chosen for the install-by-name affordance.
+    install_name_manager: Option<ManagerId>,
+    /// Exact package name typed into the install-by-name affordance.
+    install_name_query: String,
+    /// Validation or resolution failure for the install-by-name affordance.
+    install_name_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +85,14 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all visible packages toggle message.
     ToggleSelectAll(bool),
+    /// Choose the manager used by the install-by-name affordance.
+    SelectInstallNameManager(ManagerId),
+    /// Install-by-name package-name change message.
+    InstallNameQueryChanged(String),
+    /// Freeze one exact manager package name into an install plan.
+    PrepareNamedInstall,
+    /// Abandon pending per-source searches and keep results already received.
+    StopWaiting,
     /// Freeze the selected packages into an install plan.
     PrepareInstall,
     /// Execute the frozen install plan.
@@ -311,10 +327,58 @@ impl Finding {
                     return Action::None;
                 }
                 let key = shared::selection_key(&pm_type, &package_name);
-                if selected {
-                    info.selected_packages.insert(key);
-                } else {
+                if !selected {
                     info.selected_packages.remove(&key);
+                    return Action::None;
+                }
+                let installable = info.search_results.get(&pm_type).is_some_and(|packages| {
+                    packages.iter().any(|package| {
+                        package.name == package_name
+                            && shared::is_installable_search_result(package)
+                    })
+                });
+                if installable {
+                    info.selected_packages.insert(key);
+                }
+                Action::None
+            }
+            Message::SelectInstallNameManager(pm_type) => {
+                if info.is_installing || self.pending_install.is_some() {
+                    return Action::None;
+                }
+                self.install_name_manager = Some(pm_type);
+                self.install_name_error = None;
+                Action::None
+            }
+            Message::InstallNameQueryChanged(query) => {
+                self.install_name_query = query;
+                self.install_name_error = None;
+                Action::None
+            }
+            Message::PrepareNamedInstall => {
+                if info.is_installing || self.pending_install.is_some() {
+                    return Action::None;
+                }
+                info.last_install_error = None;
+                match self.named_install_plan(pm_config, catalog) {
+                    Ok(plan) => {
+                        self.install_name_error = None;
+                        self.pending_install = Some(plan);
+                        self.plan_from_install_by_name = true;
+                    }
+                    Err(error) => self.install_name_error = Some(error),
+                }
+                Action::None
+            }
+            Message::StopWaiting => {
+                let waiting: Vec<ManagerId> = info.searching_managers.keys().cloned().collect();
+                for manager in waiting {
+                    info.searching_managers.remove(&manager);
+                    info.search_results.remove(&manager);
+                    info.search_errors.insert(
+                        manager.clone(),
+                        shared::stopped_waiting_error(catalog.display_name(&manager)),
+                    );
                 }
                 Action::None
             }
@@ -330,7 +394,7 @@ impl Finding {
                     .flat_map(|(manager, packages)| {
                         packages
                             .iter()
-                            .filter(|package| package.version.trim() == "Not Installed")
+                            .filter(|package| shared::is_installable_search_result(package))
                             .map(move |package| shared::selection_key(manager, &package.name))
                     });
                 if select_all {
@@ -346,7 +410,6 @@ impl Finding {
                 if info.selected_packages.is_empty()
                     || info.is_installing
                     || self.pending_install.is_some()
-                    || !info.searching_managers.is_empty()
                 {
                     return Action::None;
                 }
@@ -365,6 +428,7 @@ impl Finding {
                     return Action::None;
                 }
                 self.pending_install = Some(PackageActionPlan { manager_groups });
+                self.plan_from_install_by_name = false;
                 Action::None
             }
             Message::ConfirmInstall => {
@@ -415,6 +479,7 @@ impl Finding {
             }
             Message::CancelInstall => {
                 self.pending_install = None;
+                self.plan_from_install_by_name = false;
                 Action::None
             }
             Message::InstallProgress {
@@ -445,6 +510,11 @@ impl Finding {
                 if outcome.is_success() {
                     info.selected_packages.clear();
                     info.last_install_error = None;
+                    if self.plan_from_install_by_name {
+                        self.install_name_query.clear();
+                        self.install_name_error = None;
+                    }
+                    self.plan_from_install_by_name = false;
                     let follow_up = if self.last_search_query.is_empty() {
                         Task::none()
                     } else {
@@ -470,10 +540,12 @@ impl Finding {
 
     pub(crate) fn reset_pending_install(&mut self) {
         self.pending_install = None;
+        self.plan_from_install_by_name = false;
     }
 
     pub fn dismiss_transient(&mut self) -> bool {
         if self.pending_install.take().is_some() {
+            self.plan_from_install_by_name = false;
             true
         } else if self.inspected_package.take().is_some() {
             self.inspector_error = None;
@@ -495,10 +567,8 @@ impl Finding {
         if self.pending_install.is_some() {
             return (!info.is_installing).then_some(Message::ConfirmInstall);
         }
-        (!info.selected_packages.is_empty()
-            && !info.is_installing
-            && info.searching_managers.is_empty())
-        .then_some(Message::PrepareInstall)
+        (!info.selected_packages.is_empty() && !info.is_installing)
+            .then_some(Message::PrepareInstall)
     }
 
     pub fn can_select_packages(&self, info: &FindingInfo) -> bool {
@@ -529,7 +599,7 @@ impl Finding {
             .find(|package| package.name == *name)?;
         if info.is_installing
             || self.pending_install.is_some()
-            || package.version.trim() != "Not Installed"
+            || !shared::is_installable_search_result(package)
         {
             return None;
         }
@@ -744,6 +814,7 @@ impl Finding {
                 ),
             ]),
             toolbar,
+            self.install_by_name_view(info, pm_config, catalog),
             self.batch_actions_view(info, catalog),
             self.install_confirmation_view(catalog),
             self.search_results_view(info, catalog, show_inspector, inspector_drawer),
@@ -770,26 +841,24 @@ impl Finding {
             return shared::centered_message("Enter a package name and click Search");
         }
 
-        if !info.searching_managers.is_empty() {
-            return shared::centered_message("Searching...");
+        let mut results_sections: Vec<iced::Element<'_, Message>> = Vec::new();
+        if let Some(label) = still_searching_label(info, catalog) {
+            results_sections.push(shared::pending_sources_notice(
+                label,
+                Some(Message::StopWaiting),
+            ));
         }
-
-        let results_sections: Vec<iced::Element<'_, Message>> = info
-            .selected_managers
-            .iter()
-            .filter_map(|pm_type| {
-                if let Some(error) = info.search_errors.get(pm_type) {
-                    Some(self.error_section(pm_type.clone(), error, catalog))
-                } else {
-                    info.search_results
-                        .get(pm_type)
-                        .filter(|packages| !packages.is_empty())
-                        .map(|packages| {
-                            self.package_manager_section(pm_type.clone(), packages, info, catalog)
-                        })
-                }
-            })
-            .collect();
+        results_sections.extend(arrived_result_managers(info).into_iter().map(|pm_type| {
+            if let Some(error) = info.search_errors.get(pm_type) {
+                self.error_section(pm_type.clone(), error, catalog)
+            } else {
+                let packages = info
+                    .search_results
+                    .get(pm_type)
+                    .map_or(&[][..], Vec::as_slice);
+                self.package_manager_section(pm_type.clone(), packages, info, catalog)
+            }
+        }));
 
         if results_sections.is_empty() {
             return shared::centered_message("No packages found");
@@ -872,12 +941,17 @@ impl Finding {
         use iced::widget::{column, text};
 
         let display_name = catalog.display_name(&manager_id).to_owned();
+        let title = if shared::is_stopped_waiting_error(error) {
+            format!("Search stopped in {display_name}")
+        } else {
+            format!("Search failed in {display_name}")
+        };
         column![
             text(display_name.clone())
                 .size(18)
                 .color(theme::colors::DISCOVER),
             shared::error_card(
-                format!("Search failed in {display_name}"),
+                title,
                 error,
                 Message::RetrySearch(manager_id),
                 Message::CopyInspectorText,
@@ -952,7 +1026,7 @@ impl Finding {
         let is_selected = info
             .selected_packages
             .contains(&shared::selection_key(&manager_id, &package.name));
-        let is_not_installed = package.version.trim() == "Not Installed";
+        let is_not_installed = shared::is_installable_search_result(package);
 
         let enable_install =
             !info.is_installing && self.pending_install.is_none() && is_not_installed;
@@ -985,9 +1059,12 @@ impl Finding {
             .is_some_and(|(manager, name)| manager == &manager_id && name == &package.name);
         let mut summary = row![shared::package_summary(package)];
         if is_not_installed {
-            summary = summary.push(shared::muted_badge("Not Installed"));
-        } else if !version_text.is_empty() && version_text != "unknown" {
-            summary = summary.push(shared::muted_badge(version_text));
+            summary = summary.push(shared::muted_badge(shared::NOT_INSTALLED));
+        } else {
+            summary = summary.push(shared::muted_badge("Installed"));
+            if !version_text.is_empty() && version_text != "unknown" {
+                summary = summary.push(shared::muted_badge(version_text));
+            }
         }
         let details = button(summary.spacing(16).align_y(iced::Alignment::Center))
             .padding([8, 10])
@@ -1014,13 +1091,11 @@ impl Finding {
             .iter()
             .filter_map(|manager| info.search_results.get(manager))
             .flatten()
-            .filter(|package| package.version.trim() == "Not Installed")
+            .filter(|package| shared::is_installable_search_result(package))
             .count();
         let all_selected = selectable_count > 0 && selected_count == selectable_count;
-        let is_enabled = selected_count > 0
-            && !info.is_installing
-            && self.pending_install.is_none()
-            && info.searching_managers.is_empty();
+        let is_enabled =
+            selected_count > 0 && !info.is_installing && self.pending_install.is_none();
 
         let button_text = if info.is_installing {
             if let Some((completed, total, manager, package)) = &info.install_progress {
@@ -1154,6 +1229,133 @@ impl Finding {
         .into()
     }
 
+    /// Builds the frozen install plan for one exact manager package name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a user-facing message when no manager can resolve the typed name.
+    fn named_install_plan(
+        &self,
+        pm_config: &updater_core::Config,
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Result<PackageActionPlan, String> {
+        let name = self.install_name_query.trim().to_owned();
+        if name.is_empty() {
+            return Err("Enter a package name to install".to_owned());
+        }
+        let managers = install_name_managers(pm_config, catalog);
+        let manager = self
+            .install_name_manager
+            .clone()
+            .filter(|manager| managers.contains(manager))
+            .or_else(|| managers.first().cloned())
+            .ok_or_else(|| "No package manager can install by name".to_owned())?;
+        let manager_config = pm_config
+            .manager(&manager)
+            .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
+        let runtime = catalog
+            .registry()
+            .get(&manager)
+            .ok_or_else(|| format!("Manager is not registered: {manager}"))?;
+        let target = runtime
+            .install_target(manager_config, &name)
+            .map_err(|error| {
+                error.detail().map_or_else(
+                    || error.message().to_owned(),
+                    |detail| format!("{} ({detail})", error.message()),
+                )
+            })?;
+        Ok(PackageActionPlan {
+            manager_groups: vec![(manager, vec![target])],
+        })
+    }
+
+    fn install_by_name_view<'a>(
+        &'a self,
+        info: &FindingInfo,
+        pm_config: &updater_core::Config,
+        catalog: &'a crate::manager_catalog::ManagerCatalog,
+    ) -> iced::Element<'a, Message> {
+        use iced::widget::{button, column, container, row, text, text_input};
+
+        let managers = install_name_managers(pm_config, catalog);
+        if managers.is_empty() {
+            return container("").height(iced::Length::Shrink).into();
+        }
+        let effective_manager = self
+            .install_name_manager
+            .clone()
+            .filter(|manager| managers.contains(manager))
+            .or_else(|| managers.first().cloned());
+        let manager_selector: iced::Element<'_, Message> = if managers.len() == 1 {
+            text(catalog.display_name(&managers[0]).to_owned())
+                .size(13)
+                .style(theme::text_on_surface)
+                .into()
+        } else {
+            shared::segmented_group(
+                row(managers.iter().map(|manager| {
+                    let selected = effective_manager.as_ref() == Some(manager);
+                    shared::segmented_button_owned(
+                        catalog.display_name(manager).to_owned(),
+                        selected,
+                        Message::SelectInstallNameManager(manager.clone()),
+                    )
+                    .into()
+                }))
+                .spacing(2),
+            )
+            .into()
+        };
+
+        let enabled = !self.install_name_query.trim().is_empty()
+            && !info.is_installing
+            && self.pending_install.is_none();
+        let install_button = button(text("Install").size(13).font(theme::FONT_SEMIBOLD).style(
+            if enabled {
+                theme::text_on_primary
+            } else {
+                theme::text_on_surface_muted
+            },
+        ))
+        .padding([8, 14])
+        .style(theme::action_button(
+            enabled,
+            theme::colors::INSTALL_ACTION,
+            theme::colors::INSTALL_ACTION_HOVER,
+            theme::colors::INSTALL_ACTION_ACTIVE,
+        ))
+        .on_press_maybe(enabled.then_some(Message::PrepareNamedInstall));
+
+        let input = text_input("Exact package name", &self.install_name_query)
+            .on_input(Message::InstallNameQueryChanged)
+            .on_submit(Message::PrepareNamedInstall)
+            .padding([8, 10])
+            .size(13)
+            .width(iced::Length::Fill)
+            .style(theme::text_input_style);
+
+        let mut content = column![
+            shared::section_title("Install by name"),
+            text("These sources cannot search; enter an exact package name.")
+                .size(12)
+                .style(theme::text_on_surface_muted),
+            row![manager_selector, input, install_button]
+                .spacing(theme::spacing::MD)
+                .align_y(iced::Alignment::Center),
+        ]
+        .spacing(theme::spacing::SM);
+        if let Some(error) = &self.install_name_error {
+            content = content.push(
+                text(error)
+                    .size(12)
+                    .style(theme::text_error)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            );
+        }
+        content.into()
+    }
+
     fn start_search(
         &mut self,
         pm_config: &updater_core::Config,
@@ -1162,6 +1364,7 @@ impl Finding {
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
         self.pending_install = None;
+        self.plan_from_install_by_name = false;
         info.search_results.clear();
         info.selected_packages.clear();
         info.searching_managers.clear();
@@ -1230,6 +1433,63 @@ impl Finding {
     }
 }
 
+/// Configured managers that can install an exact name but cannot search.
+fn install_name_managers(
+    pm_config: &updater_core::Config,
+    catalog: &crate::manager_catalog::ManagerCatalog,
+) -> Vec<ManagerId> {
+    let mut managers: Vec<_> =
+        shared::configured_managers_with_capability(pm_config, catalog, ManagerCapability::Install)
+            .into_iter()
+            .filter(|manager| {
+                catalog.descriptor(manager).is_some_and(|descriptor| {
+                    !descriptor
+                        .capabilities()
+                        .contains(ManagerCapability::Search)
+                })
+            })
+            .collect();
+    managers.sort_by(|left, right| {
+        catalog
+            .display_name(left)
+            .cmp(catalog.display_name(right))
+            .then_with(|| left.cmp(right))
+    });
+    managers
+}
+
+/// Selected sources whose search answered with results or an error.
+fn arrived_result_managers(info: &FindingInfo) -> Vec<&ManagerId> {
+    info.selected_managers
+        .iter()
+        .filter(|manager| !info.searching_managers.contains_key(*manager))
+        .filter(|manager| {
+            info.search_errors.contains_key(*manager)
+                || info
+                    .search_results
+                    .get(*manager)
+                    .is_some_and(|packages| !packages.is_empty())
+        })
+        .collect()
+}
+
+/// Status line naming the selected sources whose search is still pending.
+fn still_searching_label(
+    info: &FindingInfo,
+    catalog: &crate::manager_catalog::ManagerCatalog,
+) -> Option<String> {
+    let mut names: Vec<_> = info
+        .searching_managers
+        .keys()
+        .map(|manager| catalog.display_name(manager))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort_unstable();
+    Some(format!("Still searching: {}", names.join(", ")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,7 +1499,7 @@ mod tests {
     }
 
     fn package(manager: &ManagerId, name: &str) -> PackageInfo {
-        PackageInfo::new(manager.clone(), name, "Not Installed")
+        PackageInfo::new(manager.clone(), name, shared::NOT_INSTALLED)
     }
 
     #[test]
@@ -1356,6 +1616,374 @@ mod tests {
         assert!(finding.inspected_package.is_some());
         assert!(finding.dismiss_transient());
         assert!(finding.inspected_package.is_none());
+    }
+
+    fn snap_store_result(snap: &ManagerId, name: &str, version: &str) -> PackageInfo {
+        let mut result = PackageInfo::new(snap.clone(), name, version);
+        result.description = Some(format!(
+            "{name} summary (Publisher: example✓; latest version: 2.0.0)"
+        ));
+        result.scope = PackageScope::System;
+        result.origin = Some(PackageOrigin::new("Snap").with_reference(format!(
+            "snap:{name};channel:latest/stable;confinement:strict;refresh:store;notes:-"
+        )));
+        result
+    }
+
+    #[test]
+    fn advertised_version_search_result_is_installable() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let snap = manager_id("builtin:snap");
+        info.selected_managers.insert(snap.clone());
+        let code = snap_store_result(&snap, "code", shared::NOT_INSTALLED);
+        info.search_results.insert(snap.clone(), vec![code.clone()]);
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let key = shared::selection_key(&snap, "code");
+
+        assert!(finding.toggle_keyboard_selection(&info).is_none());
+        finding.inspected_package = Some(key.clone());
+        assert!(matches!(
+            finding.toggle_keyboard_selection(&info),
+            Some(Message::TogglePackageSelection(_, _, true))
+        ));
+        let _ = finding.update(
+            Message::TogglePackageSelection(snap.clone(), "code".to_owned(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(info.selected_packages.contains(&key));
+
+        info.selected_packages.clear();
+        let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        assert_eq!(info.selected_packages, HashSet::from([key]));
+
+        let action = finding.update(Message::PrepareInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(snap, vec![code.target()])])
+        );
+    }
+
+    #[test]
+    fn installed_search_result_cannot_be_selected_for_install() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let snap = manager_id("builtin:snap");
+        info.selected_managers.insert(snap.clone());
+        info.search_results.insert(
+            snap.clone(),
+            vec![snap_store_result(&snap, "firefox", "128.0")],
+        );
+        finding.inspected_package = Some(shared::selection_key(&snap, "firefox"));
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        assert!(finding.toggle_keyboard_selection(&info).is_none());
+        let _ = finding.update(
+            Message::TogglePackageSelection(snap.clone(), "firefox".to_owned(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(info.selected_packages.is_empty());
+        let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        assert!(info.selected_packages.is_empty());
+        assert!(finding.primary_action(&info).is_none());
+    }
+
+    #[test]
+    fn partial_results_show_while_one_source_is_searching() {
+        let mut info = FindingInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let dnf = manager_id("builtin:dnf");
+        let snap = manager_id("builtin:snap");
+        info.selected_managers = HashSet::from([cargo.clone(), dnf.clone(), snap.clone()]);
+        info.search_results
+            .insert(cargo.clone(), vec![package(&cargo, "cargo-edit")]);
+        info.search_errors
+            .insert(dnf.clone(), "dnf metadata lock is busy".to_owned());
+        info.searching_managers.insert(snap.clone(), 7);
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        let arrived: HashSet<_> = arrived_result_managers(&info).into_iter().collect();
+        assert_eq!(arrived, HashSet::from([&cargo, &dnf]));
+        assert_eq!(
+            still_searching_label(&info, &catalog).as_deref(),
+            Some("Still searching: Snap")
+        );
+
+        info.searching_managers.clear();
+        info.search_results
+            .insert(snap.clone(), vec![package(&snap, "code")]);
+        assert_eq!(still_searching_label(&info, &catalog), None);
+        assert_eq!(arrived_result_managers(&info).len(), 3);
+    }
+
+    #[test]
+    fn primary_install_gate_ignores_an_in_flight_source() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let snap = manager_id("builtin:snap");
+        info.selected_managers = HashSet::from([cargo.clone(), snap.clone()]);
+        info.search_results
+            .insert(cargo.clone(), vec![package(&cargo, "cargo-edit")]);
+        info.searching_managers.insert(snap.clone(), 8);
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        let _ = finding.update(Message::ToggleSelectAll(true), &config, &mut info, &catalog);
+        assert!(
+            info.selected_packages
+                .contains(&shared::selection_key(&cargo, "cargo-edit")),
+            "Select All must include arrived results while another source is searching"
+        );
+        assert!(matches!(
+            finding.primary_action(&info),
+            Some(Message::PrepareInstall)
+        ));
+
+        let _ = finding.update(Message::PrepareInstall, &config, &mut info, &catalog);
+
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn stop_waiting_releases_search_and_ignores_late_result() {
+        let mut finding = Finding {
+            last_search_query: "code".to_owned(),
+            ..Finding::default()
+        };
+        let snap = manager_id("builtin:snap");
+        let mut info = FindingInfo::default();
+        info.selected_managers.insert(snap.clone());
+        info.search_results
+            .insert(snap.clone(), vec![package(&snap, "code")]);
+        info.searching_managers.insert(snap.clone(), 4);
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        assert!(finding.primary_action(&info).is_none());
+        assert!(
+            finding.refresh(&info).is_none(),
+            "Refresh stays blocked while a selected source is searching"
+        );
+
+        let action = finding.update(Message::StopWaiting, &config, &mut info, &catalog);
+        assert!(matches!(action, Action::None));
+        assert!(info.searching_managers.is_empty());
+        assert_eq!(
+            info.search_errors.get(&snap).map(String::as_str),
+            Some("Stopped waiting for Snap; a late response will be ignored.")
+        );
+        assert!(
+            matches!(finding.refresh(&info), Some(Message::ExecuteSearch)),
+            "Stop waiting releases the Refresh gate"
+        );
+
+        info.selected_packages
+            .insert(shared::selection_key(&snap, "code"));
+        assert!(matches!(
+            finding.primary_action(&info),
+            Some(Message::PrepareInstall)
+        ));
+
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: 4,
+                manager: snap.clone(),
+                result: Ok(vec![package(&snap, "late")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(
+            info.search_results
+                .get(&snap)
+                .is_none_or(|packages| { packages.iter().all(|package| package.name != "late") })
+        );
+        assert_eq!(
+            info.search_errors.get(&snap).map(String::as_str),
+            Some("Stopped waiting for Snap; a late response will be ignored.")
+        );
+    }
+
+    #[test]
+    fn named_install_plan_resolves_a_search_less_manager() {
+        let mut finding = Finding {
+            install_name_query: "  nixpkgs#ripgrep  ".to_owned(),
+            install_name_manager: Some(manager_id("builtin:nix-profile")),
+            ..Finding::default()
+        };
+        let nix = manager_id("builtin:nix-profile");
+        let mut info = FindingInfo::default();
+        let mut config = updater_core::Config::default();
+        let mut manager_config = updater_core::ManagerConfig::new(nix.clone());
+        manager_config.settings = serde_json::json!({
+            "profile": "/home/test/.local/state/nix/profiles/profile"
+        });
+        config.managers.push(manager_config);
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        let action = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert!(finding.install_name_error.is_none());
+        let plan = finding
+            .pending_install
+            .as_ref()
+            .expect("install by name must reach a frozen plan");
+        assert_eq!(plan.package_count(), 1);
+        let (manager, targets) = &plan.manager_groups[0];
+        assert_eq!(manager, &nix);
+        assert_eq!(targets[0].name, "nixpkgs#ripgrep");
+        assert_eq!(targets[0].scope, PackageScope::User);
+        assert!(targets[0].origin.is_some());
+
+        finding.pending_install = None;
+        finding.install_name_query = "   ".to_owned();
+        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        assert!(finding.pending_install.is_none());
+        assert_eq!(
+            finding.install_name_error.as_deref(),
+            Some("Enter a package name to install")
+        );
+    }
+
+    #[test]
+    fn install_without_search_yields_an_actionable_install_plan() {
+        let bun = manager_id("builtin:bun");
+        let cargo = manager_id("builtin:cargo");
+        let uv = manager_id("builtin:uv");
+        let config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo),
+                updater_core::ManagerConfig::new(uv.clone()),
+                updater_core::ManagerConfig::new(bun.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        assert_eq!(
+            install_name_managers(&config, &catalog),
+            vec![bun.clone(), uv],
+            "only Install-without-Search sources are offered, sorted by display name"
+        );
+
+        let mut finding = Finding {
+            install_name_query: " cowsay ".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+
+        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+
+        assert_eq!(finding.install_name_error, None);
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(
+                bun.clone(),
+                vec![PackageTarget::new(bun.clone(), "cowsay")]
+            )])
+        );
+
+        let action = finding.update(Message::ConfirmInstall, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::CancellableRun(_, _)));
+        assert!(info.is_installing);
+        assert_eq!(info.install_progress, Some((0, 1, bun, String::new())));
+    }
+
+    #[test]
+    fn successful_named_install_clears_the_by_name_field() {
+        let bun = manager_id("builtin:bun");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(bun.clone())],
+            ..updater_core::Config::default()
+        };
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            install_name_query: "cowsay".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        assert!(finding.pending_install.is_some());
+
+        let _ = finding.update(Message::ConfirmInstall, &config, &mut info, &catalog);
+        assert!(info.is_installing);
+        let _ = finding.update(
+            Message::InstallPackagesResult(updater_core::OperationOutcome {
+                action: PackageAction::Install,
+                completed_packages: 1,
+                total_packages: 1,
+                completed_managers: 1,
+                total_managers: 1,
+                failed_manager: None,
+                error: None,
+                cancelled: false,
+                manager_outcomes: Vec::new(),
+                scope: PackageScope::User,
+            }),
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert!(finding.install_name_query.is_empty());
+
+        let mut search_install = Finding {
+            install_name_query: "kept".to_owned(),
+            ..Finding::default()
+        };
+        let snap = manager_id("builtin:snap");
+        let mut info = FindingInfo::default();
+        info.selected_packages
+            .insert(shared::selection_key(&snap, "code"));
+        info.search_results
+            .insert(snap.clone(), vec![package(&snap, "code")]);
+        let _ = search_install.update(Message::PrepareInstall, &config, &mut info, &catalog);
+        let _ = search_install.update(Message::ConfirmInstall, &config, &mut info, &catalog);
+        let _ = search_install.update(
+            Message::InstallPackagesResult(updater_core::OperationOutcome {
+                action: PackageAction::Install,
+                completed_packages: 1,
+                total_packages: 1,
+                completed_managers: 1,
+                total_managers: 1,
+                failed_manager: None,
+                error: None,
+                cancelled: false,
+                manager_outcomes: Vec::new(),
+                scope: PackageScope::System,
+            }),
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert_eq!(
+            search_install.install_name_query, "kept",
+            "a search-result install must not clear the by-name field"
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@ const SCOOP_ID: &str = "builtin:scoop";
 const SCOOP_COMMAND: &str = "scoop";
 const ORIGIN_NAME: &str = "Scoop";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct implementation for Windows Scoop user and global applications.
 #[derive(Debug, Clone)]
@@ -199,6 +200,11 @@ impl PackageManager for ScoopManager {
             return Ok(Vec::new());
         }
         validate_search_query(query)?;
+        let installed = self.installed_packages(config).await?;
+        let installed_versions = installed
+            .into_iter()
+            .map(|package| (package.name, package.version))
+            .collect::<HashMap<_, _>>();
         let scoop = resolve_executable(config, SCOOP_COMMAND);
         let spec = scoop_command(&scoop).args(["search", query]);
         let output = run_output(&spec).await?;
@@ -210,7 +216,7 @@ impl PackageManager for ScoopManager {
             return Err(command_status_error(&spec, output.status, &detail));
         }
         let stdout = decode_stdout(output, "Scoop search is not valid UTF-8")?;
-        parse_search(&stdout, self.descriptor.id())
+        parse_search(&stdout, self.descriptor.id(), &installed_versions)
     }
 
     async fn execute(
@@ -368,7 +374,11 @@ fn parse_status(
     Ok(updates)
 }
 
-fn parse_search(stdout: &str, manager_id: &ManagerId) -> ManagerResult<Vec<PackageInfo>> {
+fn parse_search(
+    stdout: &str,
+    manager_id: &ManagerId,
+    installed_versions: &HashMap<String, String>,
+) -> ManagerResult<Vec<PackageInfo>> {
     let rows = table_rows(stdout, 3, |line| {
         line.starts_with("Name") && line.contains("Version") && line.contains("Source")
     });
@@ -381,7 +391,11 @@ fn parse_search(stdout: &str, manager_id: &ManagerId) -> ManagerResult<Vec<Packa
         if version.is_empty() || source.is_empty() {
             continue;
         }
-        let mut package = PackageInfo::new(manager_id.clone(), name, version);
+        let installed_version = installed_versions
+            .get(name)
+            .map_or(NOT_INSTALLED_VERSION, String::as_str);
+        let mut package = PackageInfo::new(manager_id.clone(), name, installed_version);
+        package.description = Some(format!("Latest version: {version}"));
         package.scope = PackageScope::User;
         package.origin =
             Some(PackageOrigin::new(ORIGIN_NAME).with_reference(format!("bucket:{source}")));
@@ -538,17 +552,31 @@ mod tests {
     }
 
     #[test]
-    fn search_parser_preserves_bucket_origin() {
+    fn search_parser_preserves_bucket_origin_and_reports_install_state() {
+        let installed = HashMap::from([("7zip".to_owned(), "24.08".to_owned())]);
         let packages = parse_search(
-            "Results from local buckets...\nName Version Source Binaries\n---- ------- ------ --------\n7zip 24.09 main\n",
+            "Results from local buckets...\nName Version Source Binaries\n---- ------- ------ --------\n7zip 24.09 main\nripgrep 14.1 main\n",
             &manager_id(),
+            &installed,
         )
         .expect("parse Scoop search");
 
-        assert_eq!(packages.len(), 1);
+        assert_eq!(packages.len(), 2);
         assert_eq!(
             packages[0].origin.as_ref().unwrap().reference.as_deref(),
             Some("bucket:main")
+        );
+        assert_eq!(packages[0].name, "7zip");
+        assert_eq!(packages[0].version, "24.08");
+        assert_eq!(
+            packages[0].description.as_deref(),
+            Some("Latest version: 24.09")
+        );
+        assert_eq!(packages[1].name, "ripgrep");
+        assert_eq!(packages[1].version, "Not Installed");
+        assert_eq!(
+            packages[1].description.as_deref(),
+            Some("Latest version: 14.1")
         );
     }
 

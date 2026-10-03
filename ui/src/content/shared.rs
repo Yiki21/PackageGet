@@ -1406,13 +1406,89 @@ where
         .into()
 }
 
+/// Search-contract version reported for packages that are not installed.
+pub const NOT_INSTALLED: &str = "Not Installed";
+
+/// Returns whether a search result may be selected for installation.
+pub fn is_installable_search_result(package: &PackageInfo) -> bool {
+    package.version.trim() == NOT_INSTALLED
+}
+
+/// Error recorded for a source whose pending read was abandoned by the user.
+pub fn stopped_waiting_error(source: &str) -> String {
+    format!("{STOPPED_WAITING_PREFIX}{source}; a late response will be ignored.")
+}
+
+/// Prefix shared by every abandoned-source error.
+pub const STOPPED_WAITING_PREFIX: &str = "Stopped waiting for ";
+
+/// Returns whether `error` records a source the user stopped waiting for.
+pub fn is_stopped_waiting_error(error: &str) -> bool {
+    error.starts_with(STOPPED_WAITING_PREFIX)
+}
+
+/// Status line for sources still loading, with a control to stop waiting
+/// when at least one of them can be abandoned.
+pub fn pending_sources_notice<'a, Message>(
+    label: String,
+    stop_waiting: Option<Message>,
+) -> Element<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    let mut notice = row![
+        text(label)
+            .size(13)
+            .style(theme::text_accent)
+            .width(Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph),
+    ]
+    .spacing(theme::spacing::MD)
+    .align_y(Alignment::Center);
+    if let Some(message) = stop_waiting {
+        notice = notice.push(
+            button(text("Stop waiting").size(12).font(theme::FONT_SEMIBOLD))
+                .padding([6, 10])
+                .style(theme::secondary_button(true))
+                .on_press(message),
+        );
+    }
+    notice.into()
+}
+
+/// Segmented button whose label is owned by the caller.
+pub fn segmented_button_owned<'a, Message>(
+    label: String,
+    selected: bool,
+    message: Message,
+) -> iced::widget::Button<'a, Message>
+where
+    Message: 'a + Clone,
+{
+    button(
+        text(label)
+            .size(12)
+            .font(if selected {
+                theme::FONT_SEMIBOLD
+            } else {
+                theme::FONT_REGULAR
+            })
+            .align_x(Alignment::Center),
+    )
+    .padding([7, 10])
+    .width(Length::Fill)
+    .style(theme::segmented_button(selected))
+    .on_press(message)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
 
     use super::{
         DesktopOpenCommand, DesktopTargetKind, PackageDetailState, desktop_open_commands,
-        selection_key, validate_http_url,
+        is_installable_search_result, is_stopped_waiting_error, selection_key,
+        stopped_waiting_error, validate_http_url,
     };
     use updater_manager_api::{
         ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageInfo,
@@ -1650,5 +1726,25 @@ mod tests {
                 arguments: vec![directory.to_os_string()],
             }]
         );
+    }
+
+    #[test]
+    fn installability_follows_the_sentinel_contract() {
+        let manager = manager_id("builtin:snap");
+        let mut not_installed = PackageInfo::new(manager.clone(), "code", "  Not Installed  ");
+        assert!(is_installable_search_result(&not_installed));
+
+        not_installed.version = "1.99".to_owned();
+        assert!(!is_installable_search_result(&not_installed));
+
+        not_installed.version = "unknown".to_owned();
+        assert!(!is_installable_search_result(&not_installed));
+    }
+
+    #[test]
+    fn only_abandoned_source_errors_are_recognized() {
+        assert!(is_stopped_waiting_error(&stopped_waiting_error("Snap")));
+        assert!(!is_stopped_waiting_error("network unreachable"));
+        assert!(!is_stopped_waiting_error("Failed to search in Snap"));
     }
 }

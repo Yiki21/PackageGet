@@ -27,6 +27,7 @@ const RUBYGEMS_ID: &str = "builtin:rubygems";
 const GEM_COMMAND: &str = "gem";
 const ORIGIN_NAME: &str = "RubyGems";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+const NOT_INSTALLED_VERSION: &str = "Not Installed";
 
 /// Direct `updater-manager-api` implementation for RubyGems repositories.
 #[derive(Debug, Clone)]
@@ -318,7 +319,7 @@ impl PackageManager for RubyGemsManager {
             return Ok(Vec::new());
         }
         validate_search_term(query)?;
-        let environment = self.environment(config).await?;
+        let (environment, installed) = self.installed_entries(config).await?;
         let gem = resolve_executable(config, GEM_COMMAND);
         let output = run_success(
             &repository_command(&gem, &environment.home)
@@ -330,7 +331,7 @@ impl PackageManager for RubyGemsManager {
             &output.stdout,
             "RubyGems remote search response is not valid UTF-8",
         )?;
-        parse_search(&value, self.descriptor.id(), &environment)
+        parse_search(&value, self.descriptor.id(), &environment, &installed)
     }
 
     async fn execute(
@@ -691,6 +692,7 @@ fn parse_search(
     value: &str,
     manager_id: &ManagerId,
     environment: &GemEnvironment,
+    installed: &[InstalledGem],
 ) -> ManagerResult<Vec<PackageInfo>> {
     let mut packages = Vec::new();
     for line in value
@@ -709,7 +711,22 @@ fn parse_search(
             .and_then(|version| version.split_whitespace().next())
             .ok_or_else(|| protocol("RubyGems search result has no latest version", line))?;
         validate_version(latest)?;
-        let mut info = PackageInfo::new(manager_id.clone(), name, latest);
+        let mut installed_versions = Vec::new();
+        for gem in installed
+            .iter()
+            .filter(|gem| gem.name.eq_ignore_ascii_case(name))
+        {
+            if !installed_versions.contains(&gem.version.as_str()) {
+                installed_versions.push(gem.version.as_str());
+            }
+        }
+        let version = if installed_versions.is_empty() {
+            NOT_INSTALLED_VERSION.to_owned()
+        } else {
+            installed_versions.join(", ")
+        };
+        let mut info = PackageInfo::new(manager_id.clone(), name, version);
+        info.description = Some(format!("Latest version: {latest}"));
         info.scope = environment.scope(&environment.home);
         info.origin = Some(GemReference::remote(&environment.home).origin());
         packages.push(info);
@@ -959,7 +976,8 @@ mod tests {
             parse_search(
                 "rake (2.0)\nRAKE (1.0)\n",
                 &manager_id,
-                &environment(repository, user)
+                &environment(repository, user),
+                &[]
             )
             .is_err()
         );
@@ -978,9 +996,14 @@ mod tests {
             "nokogiri (1.18.10 ruby, 1.18.10 x86_64-linux-gnu)\n",
             &manager_id,
             &environment(repository, user),
+            &[],
         )
         .expect("platform-qualified search output");
-        assert_eq!(parsed[0].version, "1.18.10");
+        assert_eq!(parsed[0].version, NOT_INSTALLED_VERSION);
+        assert_eq!(
+            parsed[0].description.as_deref(),
+            Some("Latest version: 1.18.10")
+        );
     }
 
     #[test]

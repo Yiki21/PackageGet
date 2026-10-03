@@ -1012,6 +1012,28 @@ pub trait PackageManager: Send + Sync {
         Err(ManagerError::unsupported(ManagerCapability::Updates))
     }
 
+    /// Resolves one exact package name into an installable target.
+    ///
+    /// The UI calls this for managers that advertise
+    /// [`ManagerCapability::Install`] without [`ManagerCapability::Search`],
+    /// so the manager keeps ownership of any typed installation identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManagerErrorKind::Protocol`] when `name` is empty after
+    /// trimming, and a classified error when the manager cannot build an
+    /// install target for its current configuration.
+    fn install_target(&self, _config: &ManagerConfig, name: &str) -> ManagerResult<PackageTarget> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ManagerError::new(
+                ManagerErrorKind::Protocol,
+                "package name must not be empty",
+            ));
+        }
+        Ok(PackageTarget::new(self.descriptor().id().clone(), name))
+    }
+
     /// Searches for packages matching `query`.
     ///
     /// # Errors
@@ -1196,6 +1218,52 @@ mod tests {
                 scope: PackageScope::User,
                 origin: package.origin,
             }
+        );
+    }
+
+    #[test]
+    fn default_install_target_trims_the_name_and_rejects_blank_input() {
+        struct InstallOnly(ManagerDescriptor);
+
+        #[async_trait]
+        impl PackageManager for InstallOnly {
+            fn descriptor(&self) -> &ManagerDescriptor {
+                &self.0
+            }
+
+            async fn availability(
+                &self,
+                _config: &ManagerConfig,
+            ) -> ManagerResult<ManagerAvailability> {
+                Ok(ManagerAvailability::Available { version: None })
+            }
+        }
+
+        let id = ManagerId::parse("org.example:install-only").expect("valid ID");
+        let manager = InstallOnly(
+            ManagerDescriptor::new(
+                id.clone(),
+                "Install only",
+                ManagerCategory::Development,
+                SupportedPlatforms::from([Platform::Linux]),
+                ManagerCapabilities::from([ManagerCapability::Install]),
+            )
+            .expect("valid descriptor"),
+        );
+        let config = ManagerConfig::new(id.clone());
+
+        assert_eq!(
+            manager
+                .install_target(&config, "  example-tool \n")
+                .expect("bare install target"),
+            PackageTarget::new(id, "example-tool")
+        );
+        assert_eq!(
+            manager
+                .install_target(&config, " \t ")
+                .expect_err("blank names must be rejected")
+                .kind(),
+            ManagerErrorKind::Protocol
         );
     }
 }

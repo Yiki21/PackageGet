@@ -118,6 +118,8 @@ pub enum Message {
     RefreshAll,
     /// Retry loading one package manager.
     RetryLoad(ManagerId),
+    /// Abandon pending per-source loads and keep already loaded updates.
+    StopWaiting,
     /// Show an update in the package inspector.
     InspectPackage(ManagerId, String),
     /// Retry on-demand package metadata loading.
@@ -505,11 +507,11 @@ impl Updates {
                 }
             }
             Message::RefreshSelected => {
+                let selected: Vec<ManagerId> = info.selected_managers.iter().cloned().collect();
                 if info.is_updating
                     || self.pending_update.is_some()
                     || !self.update_all_refreshing.is_empty()
-                    || info.is_loading_count
-                    || !info.loading_updates.is_empty()
+                    || Self::any_loading_updates(info, selected.into_iter())
                 {
                     return Action::None;
                 }
@@ -527,19 +529,18 @@ impl Updates {
                 Action::Run(Task::batch(tasks))
             }
             Message::RefreshAll => {
-                if info.is_updating
-                    || self.pending_update.is_some()
-                    || !self.update_all_refreshing.is_empty()
-                    || info.is_loading_count
-                    || !info.loading_updates.is_empty()
-                {
-                    return Action::None;
-                }
                 let pm_types = shared::configured_managers_with_capability(
                     pm_config,
                     catalog,
                     ManagerCapability::Updates,
                 );
+                if info.is_updating
+                    || self.pending_update.is_some()
+                    || !self.update_all_refreshing.is_empty()
+                    || Self::any_loading_updates(info, pm_types.iter().cloned())
+                {
+                    return Action::None;
+                }
 
                 if pm_types.is_empty() {
                     return Action::None;
@@ -564,20 +565,52 @@ impl Updates {
                 info.load_errors.remove(&pm_type);
                 Action::Run(Self::start_load(pm_config, info, pm_type, catalog, true))
             }
-            Message::PrepareUpdateAll => {
-                if info.is_updating
-                    || self.pending_update.is_some()
-                    || !self.update_all_refreshing.is_empty()
-                    || info.is_loading_count
-                    || !info.loading_updates.is_empty()
-                {
+            Message::StopWaiting => {
+                let waiting = self.stoppable_sources(info);
+                if waiting.is_empty() {
                     return Action::None;
                 }
+                let mut finished_preflight = false;
+                for manager in waiting {
+                    info.loading_updates.remove(&manager);
+                    apply_manager_counted_items_result(
+                        &mut info.updates_by_manager,
+                        &mut info.load_errors,
+                        manager.clone(),
+                        Err(shared::stopped_waiting_error(
+                            catalog.display_name(&manager),
+                        )),
+                    );
+                    if self.update_all_refreshing.remove(&manager)
+                        && self.update_all_refreshing.is_empty()
+                    {
+                        finished_preflight = true;
+                    }
+                }
+                if finished_preflight {
+                    let scope = self.update_all_scope.clone();
+                    self.pending_update = Some(Self::build_update_plan(
+                        info,
+                        &scope,
+                        catalog,
+                        UpdatePlanScope::All,
+                    ));
+                }
+                Action::None
+            }
+            Message::PrepareUpdateAll => {
                 let managers = shared::configured_managers_with_capability(
                     pm_config,
                     catalog,
                     ManagerCapability::Updates,
                 );
+                if info.is_updating
+                    || self.pending_update.is_some()
+                    || !self.update_all_refreshing.is_empty()
+                    || Self::any_loading_updates(info, managers.iter().cloned())
+                {
+                    return Action::None;
+                }
                 if managers.is_empty() {
                     return Action::None;
                 }
@@ -640,6 +673,25 @@ impl Updates {
                 Action::Run(Self::start_load(pm_config, info, manager, catalog, true))
             }
         }
+    }
+
+    /// Selected or Update All sources whose in-flight update load can be
+    /// abandoned; the request-id guard discards their late results.
+    fn stoppable_sources(&self, info: &UpdatesInfo) -> HashSet<ManagerId> {
+        self.update_all_scope
+            .iter()
+            .chain(info.selected_managers.iter())
+            .filter(|manager| info.loading_updates.contains_key(*manager))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether any of `managers` is still loading its update list.
+    fn any_loading_updates(info: &UpdatesInfo, managers: impl Iterator<Item = ManagerId>) -> bool {
+        managers.into_iter().any(|manager| {
+            info.loading_updates.contains_key(&manager)
+                || (info.is_loading_count && !info.updates_by_manager.contains_key(&manager))
+        })
     }
 
     fn set_source_selection(
@@ -806,11 +858,18 @@ impl Updates {
         )
         .len();
         let selected_loading_sources = info.selected_loading_sources();
-        let can_refresh = !info.is_updating
+        let base_can_refresh = !info.is_updating
             && self.pending_update.is_none()
-            && self.update_all_refreshing.is_empty()
-            && !info.is_loading_count
-            && info.loading_updates.is_empty();
+            && self.update_all_refreshing.is_empty();
+        let can_refresh_selected = base_can_refresh
+            && !Self::any_loading_updates(info, info.selected_managers.iter().cloned());
+        let configured_updates_managers = shared::configured_managers_with_capability(
+            pm_config,
+            catalog,
+            ManagerCapability::Updates,
+        );
+        let can_refresh_all = base_can_refresh
+            && !Self::any_loading_updates(info, configured_updates_managers.iter().cloned());
 
         let toolbar = shared::toolbar(
             column![
@@ -821,12 +880,12 @@ impl Updates {
                         row![
                             shared::refresh_button_with_label(
                                 "Refresh Selected",
-                                can_refresh,
+                                can_refresh_selected,
                                 Message::RefreshSelected
                             ),
                             shared::refresh_button_with_label(
                                 "Refresh All",
-                                can_refresh,
+                                can_refresh_all,
                                 Message::RefreshAll
                             ),
                         ]
@@ -886,7 +945,7 @@ impl Updates {
             ),
             shared::summary_row(summary_items),
             toolbar,
-            self.batch_actions_view(info, catalog),
+            self.batch_actions_view(info, pm_config, catalog),
             self.update_confirmation_view(catalog),
             self.updates_list_view(
                 info,
@@ -1045,7 +1104,10 @@ impl Updates {
             })
             .collect();
 
-        if filtered_managers.is_empty() && selected_loading_sources > 0 {
+        if filtered_managers.is_empty()
+            && selected_loading_sources > 0
+            && self.stoppable_sources(info).is_empty()
+        {
             return shared::centered_message("Loading selected package manager updates...");
         }
 
@@ -1072,19 +1134,17 @@ impl Updates {
         let mut updates_sections =
             Vec::with_capacity(filtered_managers.len() + usize::from(selected_loading_sources > 0));
         if selected_loading_sources > 0 {
-            updates_sections.push(
-                iced::widget::text(format!(
+            updates_sections.push(shared::pending_sources_notice(
+                format!(
                     "Loading {selected_loading_sources} remaining selected source{}...",
                     if selected_loading_sources == 1 {
                         ""
                     } else {
                         "s"
                     }
-                ))
-                .size(13)
-                .style(theme::text_accent)
-                .into(),
-            );
+                ),
+                (!self.stoppable_sources(info).is_empty()).then_some(Message::StopWaiting),
+            ));
         }
         updates_sections.extend(filtered_managers.into_iter().map(
             |(manager, (count, packages))| {
@@ -1466,6 +1526,7 @@ impl Updates {
     fn batch_actions_view<'a>(
         &self,
         info: &'a UpdatesInfo,
+        pm_config: &updater_core::Config,
         catalog: &'a ManagerCatalog,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{button, checkbox, column, row, text};
@@ -1556,8 +1617,15 @@ impl Updates {
         let update_all_enabled = !info.is_updating
             && self.pending_update.is_none()
             && !is_preparing_all
-            && !info.is_loading_count
-            && info.loading_updates.is_empty();
+            && !Self::any_loading_updates(
+                info,
+                shared::configured_managers_with_capability(
+                    pm_config,
+                    catalog,
+                    ManagerCapability::Updates,
+                )
+                .into_iter(),
+            );
         let update_all = button(
             text(if is_preparing_all {
                 "Preparing Update All..."
@@ -2108,5 +2176,188 @@ mod tests {
         );
         assert!(updates.update_all_refreshing.is_empty());
         assert!(updates.pending_update.is_some());
+    }
+
+    fn configured(managers: &[&ManagerId]) -> updater_core::Config {
+        updater_core::Config {
+            managers: managers
+                .iter()
+                .map(|manager| updater_core::ManagerConfig::new((*manager).clone()))
+                .collect(),
+            ..updater_core::Config::default()
+        }
+    }
+
+    #[test]
+    fn stop_waiting_releases_refresh_and_ignores_late_update_result() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            has_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let config = configured(&[&cargo, &npm]);
+        let catalog = ManagerCatalog::builtin();
+        info.selected_managers = HashSet::from([cargo.clone(), npm.clone()]);
+        info.updates_by_manager
+            .insert(npm.clone(), (1, vec![update(&npm, "typescript")]));
+        info.updates_by_manager
+            .insert(cargo.clone(), (2, Vec::new()));
+        info.loading_updates.insert(cargo.clone(), 3);
+
+        assert!(matches!(
+            updates.update(Message::RefreshSelected, &config, &mut info, &catalog),
+            Action::None
+        ));
+        assert!(updates.stoppable_sources(&info).contains(&cargo));
+
+        let action = updates.update(Message::StopWaiting, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None));
+        assert!(info.loading_updates.is_empty());
+        assert_eq!(
+            info.load_errors.get(&cargo).map(String::as_str),
+            Some("Stopped waiting for Cargo; a late response will be ignored.")
+        );
+        assert_eq!(info.selected_loading_sources(), 0);
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 3,
+                manager: cargo.clone(),
+                result: Ok(vec![update(&cargo, "late-crate")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(
+            info.updates_by_manager
+                .get(&cargo)
+                .is_some_and(|(_, packages)| packages.is_empty())
+        );
+        assert!(info.load_errors.contains_key(&cargo));
+        assert_eq!(
+            info.updates_by_manager.get(&npm).map(|(count, _)| *count),
+            Some(1)
+        );
+
+        assert!(matches!(
+            updates.update(Message::RefreshSelected, &config, &mut info, &catalog),
+            Action::Run(_)
+        ));
+        assert!(info.loading_updates.contains_key(&cargo));
+        assert!(
+            info.loading_updates.contains_key(&npm),
+            "Refresh Selected reloads every selected source"
+        );
+        assert!(matches!(
+            updates.update(
+                Message::RetryLoad(npm.clone()),
+                &config,
+                &mut info,
+                &catalog
+            ),
+            Action::None
+        ));
+    }
+
+    #[test]
+    fn refresh_selected_ignores_loads_of_unselected_sources() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            has_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let config = configured(&[&cargo, &npm]);
+        info.selected_managers.insert(cargo.clone());
+        info.updates_by_manager
+            .insert(cargo.clone(), (0, Vec::new()));
+        info.loading_updates.insert(npm.clone(), 9);
+
+        assert!(matches!(
+            updates.update(
+                Message::RefreshSelected,
+                &config,
+                &mut info,
+                &ManagerCatalog::builtin()
+            ),
+            Action::Run(_)
+        ));
+        assert!(matches!(
+            updates.update(
+                Message::PrepareUpdateAll,
+                &config,
+                &mut info,
+                &ManagerCatalog::builtin()
+            ),
+            Action::None
+        ));
+        assert!(updates.update_all_refreshing.is_empty());
+    }
+
+    #[test]
+    fn stop_waiting_completes_update_all_preflight_without_the_stopped_source() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            has_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+        let dnf = manager_id("builtin:dnf");
+        let flatpak = manager_id("builtin:flatpak");
+        let config = configured(&[&dnf, &flatpak]);
+        let catalog = ManagerCatalog::builtin();
+        info.updates_by_manager.insert(dnf.clone(), (0, Vec::new()));
+        info.updates_by_manager
+            .insert(flatpak.clone(), (0, Vec::new()));
+
+        assert!(matches!(
+            updates.update(Message::PrepareUpdateAll, &config, &mut info, &catalog),
+            Action::Run(_)
+        ));
+        let flatpak_request = info.loading_updates[&flatpak];
+        let dnf_request = info.loading_updates[&dnf];
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: flatpak_request,
+                manager: flatpak.clone(),
+                result: Ok(vec![update(&flatpak, "org.example.App")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(updates.pending_update.is_none());
+
+        let _ = updates.update(Message::StopWaiting, &config, &mut info, &catalog);
+
+        let plan = updates
+            .pending_update
+            .as_ref()
+            .expect("stopping the last source completes the preflight");
+        assert_eq!(plan.packages.manager_groups.len(), 1);
+        assert_eq!(plan.packages.manager_groups[0].0, flatpak);
+        assert_eq!(plan.failed_sources, vec![dnf.clone()]);
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: dnf_request,
+                manager: dnf.clone(),
+                result: Ok(vec![update(&dnf, "late-package")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert_eq!(
+            updates
+                .pending_update
+                .as_ref()
+                .map(UpdatePlan::package_count),
+            Some(1)
+        );
     }
 }

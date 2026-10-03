@@ -211,6 +211,21 @@ impl PackageManager for NixProfileManager {
         Ok(manager_availability(self.descriptor(), config, NIX_COMMAND, &["--version"]).await)
     }
 
+    fn install_target(&self, config: &ManagerConfig, name: &str) -> ManagerResult<PackageTarget> {
+        let settings = self.settings(config)?;
+        let installable = name.trim();
+        validate_installable(installable)?;
+        let reference = NixReference::Installable {
+            profile: settings.profile,
+            installable: installable.to_owned(),
+        };
+        let mut target = PackageTarget::new(self.descriptor.id().clone(), installable);
+        target.scope = PackageScope::User;
+        target.origin = Some(reference.origin());
+        validate_target_header(self.descriptor.id(), &target)?;
+        Ok(target)
+    }
+
     async fn installed(&self, config: &ManagerConfig) -> ManagerResult<Vec<PackageInfo>> {
         let (profile, elements) = self.inventory(config).await?;
         Ok(elements
