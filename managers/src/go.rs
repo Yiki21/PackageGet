@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     env,
     path::{Path, PathBuf},
     process::Output,
@@ -14,6 +15,7 @@ use updater_manager_api::{
     ManagerCategory, ManagerConfig, ManagerDescriptor, ManagerError, ManagerErrorKind, ManagerId,
     ManagerResult, PackageAction, PackageInfo, PackageManager, PackageOrigin, PackageScope,
     PackageTarget, PackageUpdate, Platform, ProgressEvent, ProgressSink, SupportedPlatforms,
+    UpdatesReport,
 };
 
 use crate::{
@@ -27,6 +29,8 @@ const GO_ID: &str = "builtin:go";
 const GO_COMMAND: &str = "go";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+/// Maximum number of `go list -m` lookups in flight during an update scan.
+const UPDATE_LOOKUP_CONCURRENCY: usize = 4;
 
 /// Direct `updater-manager-api` implementation for Go-installed binaries.
 #[derive(Debug, Clone)]
@@ -262,6 +266,105 @@ impl GoManager {
             .validated_version(module)
     }
 
+    /// Resolves the latest published version of every updateable binary.
+    ///
+    /// Lookups run at most [`UPDATE_LOOKUP_CONCURRENCY`] at a time. Each slot
+    /// belongs to one entry of `binaries`, so the caller sees the installed
+    /// binary order regardless of completion order. A binary that is not
+    /// updateable keeps a `None` slot. Failures stay in their slot instead of
+    /// aborting the scan, which is what keeps one unreachable module from
+    /// hiding the updates of every other binary.
+    async fn latest_versions(
+        &self,
+        config: &ManagerConfig,
+        binaries: &[InstalledGoBinary],
+    ) -> Vec<Option<ManagerResult<String>>> {
+        let mut slots = vec![None; binaries.len()];
+        let mut pending = binaries
+            .iter()
+            .enumerate()
+            .filter(|(_, binary)| binary.updateable);
+        let mut running = VecDeque::new();
+        loop {
+            while running.len() < UPDATE_LOOKUP_CONCURRENCY {
+                let Some((index, binary)) = pending.next() else {
+                    break;
+                };
+                let manager = self.clone();
+                let config = config.clone();
+                let module = binary.module.clone();
+                running.push_back((
+                    index,
+                    tokio::spawn(async move { manager.latest_version(&config, &module).await }),
+                ));
+            }
+            let Some((index, task)) = running.pop_front() else {
+                break;
+            };
+            let result = task.await.unwrap_or_else(|_| {
+                Err(ManagerError::new(
+                    ManagerErrorKind::Other,
+                    "Go latest version lookup did not complete",
+                )
+                .with_detail(&binaries[index].module))
+            });
+            slots[index] = Some(result);
+        }
+        slots
+    }
+
+    /// Collects updates together with the per-binary lookup failures.
+    ///
+    /// A binary whose latest version cannot be resolved is recorded as a
+    /// warning and skipped, so the remaining binaries still produce updates.
+    ///
+    /// # Errors
+    ///
+    /// Propagates inventory failures, and the first lookup failure when every
+    /// updateable binary failed, so a completely broken Go installation stays
+    /// visible instead of reporting that nothing is outdated.
+    async fn collect_updates(&self, config: &ManagerConfig) -> ManagerResult<UpdatesReport> {
+        let binaries = self.installed_binaries(config).await?;
+        let slots = self.latest_versions(config, &binaries).await;
+        let mut updates = Vec::new();
+        let mut warnings = Vec::new();
+        let mut first_error = None;
+        let mut resolved = 0_usize;
+        for (binary, slot) in binaries.iter().zip(slots) {
+            let Some(result) = slot else {
+                continue;
+            };
+            let available = match result {
+                Ok(available) => available,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error.clone());
+                    }
+                    warnings.push(degraded_lookup(&binary.name, &binary.module, error));
+                    continue;
+                }
+            };
+            resolved += 1;
+            match parse_semver(&available)
+                .and_then(|latest| parse_semver(&binary.version).map(|current| (current, latest)))
+            {
+                Ok((current, latest)) if latest > current => updates.push(PackageUpdate::new(
+                    binary.target(self.descriptor.id()),
+                    binary.version.clone(),
+                    available,
+                )),
+                Ok(_) => {}
+                Err(error) => warnings.push(degraded_lookup(&binary.name, &binary.module, error)),
+            }
+        }
+        if resolved == 0
+            && let Some(error) = first_error
+        {
+            return Err(error);
+        }
+        Ok(UpdatesReport::degraded(updates, warnings))
+    }
+
     fn validate_target(&self, target: &PackageTarget) -> ManagerResult<()> {
         if &target.manager_id != self.descriptor.id() {
             return Err(protocol(
@@ -431,22 +534,15 @@ impl PackageManager for GoManager {
         config: &ManagerConfig,
         _refresh: bool,
     ) -> ManagerResult<Vec<PackageUpdate>> {
-        let binaries = self.installed_binaries(config).await?;
-        let mut updates = Vec::new();
-        for binary in binaries {
-            if !binary.updateable {
-                continue;
-            }
-            let available = self.latest_version(config, &binary.module).await?;
-            if parse_semver(&available)? > parse_semver(&binary.version)? {
-                updates.push(PackageUpdate::new(
-                    binary.target(self.descriptor.id()),
-                    binary.version,
-                    available,
-                ));
-            }
-        }
-        Ok(updates)
+        Ok(self.collect_updates(config).await?.into_updates())
+    }
+
+    async fn updates_report(
+        &self,
+        config: &ManagerConfig,
+        _refresh: bool,
+    ) -> ManagerResult<UpdatesReport> {
+        self.collect_updates(config).await
     }
 
     async fn search(&self, config: &ManagerConfig, query: &str) -> ManagerResult<Vec<PackageInfo>> {
@@ -916,6 +1012,13 @@ async fn run_success(spec: &CommandSpec, timeout_message: &str) -> ManagerResult
 
 fn protocol(message: &str, detail: &str) -> ManagerError {
     ManagerError::new(ManagerErrorKind::Protocol, message).with_detail(detail)
+}
+
+/// Keeps a per-binary lookup failure's classification while naming the binary
+/// it belongs to.
+fn degraded_lookup(binary: &str, module: &str, error: ManagerError) -> ManagerError {
+    let detail = format!("{binary} ({module})");
+    ManagerError::new(error.kind(), error.message().to_owned()).with_detail(detail)
 }
 
 fn fs_error(message: &str, error: std::io::Error) -> ManagerError {

@@ -4,17 +4,14 @@ use std::{fs, path::PathBuf};
 use std::sync::Mutex;
 
 use tempfile::{TempDir, tempdir};
-#[cfg(windows)]
-use updater_manager_api::ManagerAvailability;
-#[cfg(unix)]
-use updater_manager_api::ManagerErrorKind;
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerConfig, PackageAction, PackageManager, Platform,
+    AuthorizationHint, ManagerAvailability, ManagerCapabilities, ManagerCapability,
+    ManagerCategory, ManagerConfig, ManagerDescriptor, ManagerError, ManagerErrorKind, ManagerId,
+    ManagerResult, PackageAction, PackageManager, PackageTarget, PackageUpdate, Platform,
+    SupportedPlatforms,
 };
 #[cfg(unix)]
-use updater_manager_api::{
-    NoopProgressSink, PackageOrigin, PackageScope, PackageTarget, ProgressEvent,
-};
+use updater_manager_api::{NoopProgressSink, PackageOrigin, PackageScope, ProgressEvent};
 use updater_managers::GoManager;
 
 #[cfg(unix)]
@@ -157,6 +154,72 @@ async fn windows_contract_preserves_logical_identity_and_executable_removal() {
     assert!(!bin.join("tool.exe").exists());
 }
 
+/// The manager-api default must keep the single-value `updates` contract intact
+/// for every manager that does not resolve packages one by one.
+#[tokio::test]
+async fn default_updates_report_forwards_to_updates_without_warnings() {
+    struct UpdateSource(ManagerDescriptor, bool);
+
+    #[async_trait::async_trait]
+    impl PackageManager for UpdateSource {
+        fn descriptor(&self) -> &ManagerDescriptor {
+            &self.0
+        }
+
+        async fn availability(
+            &self,
+            _config: &ManagerConfig,
+        ) -> ManagerResult<ManagerAvailability> {
+            Ok(ManagerAvailability::Available { version: None })
+        }
+
+        async fn updates(
+            &self,
+            _config: &ManagerConfig,
+            _refresh: bool,
+        ) -> ManagerResult<Vec<PackageUpdate>> {
+            if self.1 {
+                let id = self.0.id().clone();
+                return Ok(vec![PackageUpdate::new(
+                    PackageTarget::new(id, "example-tool"),
+                    "v1.0.0",
+                    "v1.1.0",
+                )]);
+            }
+            Err(ManagerError::new(ManagerErrorKind::Other, "scan failed"))
+        }
+    }
+
+    let descriptor = ManagerDescriptor::new(
+        ManagerId::parse("org.example:updates").expect("valid ID"),
+        "Updates",
+        ManagerCategory::Development,
+        SupportedPlatforms::from([Platform::Linux]),
+        ManagerCapabilities::from([ManagerCapability::Updates]),
+    )
+    .expect("valid descriptor");
+    let config = ManagerConfig::new(descriptor.id().clone());
+
+    let report = UpdateSource(descriptor.clone(), true)
+        .updates_report(&config, false)
+        .await
+        .expect("default report");
+    assert_eq!(report.updates().len(), 1);
+    assert_eq!(report.updates()[0].target.name, "example-tool");
+    assert!(!report.is_degraded());
+    assert!(report.warnings().is_empty());
+    assert_eq!(report.into_updates().len(), 1);
+
+    assert_eq!(
+        UpdateSource(descriptor, false)
+            .updates_report(&config, false)
+            .await
+            .expect_err("propagate the update scan failure")
+            .kind(),
+        ManagerErrorKind::Other
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn installed_is_sorted_and_preserves_binary_module_and_package_identity() {
@@ -248,6 +311,155 @@ exit 11
         .await
         .expect_err("surface go list failure");
     assert_ne!(error.kind(), ManagerErrorKind::Protocol);
+}
+
+/// A fake `go` whose installed binaries are `atool`, `mtool`, and `ztool`,
+/// where only `mtool`'s latest-version lookup fails.
+#[cfg(unix)]
+fn unresolvable_module_fixture() -> (&'static str, [&'static str; 3]) {
+    const SCRIPT: &str = r#"#!/bin/sh
+if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
+  case "${4##*/}" in
+    atool) printf '{"Path":"example.com/mod/cmd/atool","Main":{"Path":"example.com/mod","Version":"v1.2.0"}}\n'; exit 0 ;;
+    mtool) printf '{"Path":"example.net/mtool","Main":{"Path":"example.net/mtool","Version":"v0.8.0"}}\n'; exit 0 ;;
+    ztool) printf '{"Path":"example.net/ztool/cmd/ztool","Main":{"Path":"example.net/ztool","Version":"v0.5.0"}}\n'; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+if [ "$1" = "list" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
+  case "$4" in
+    example.com/mod@latest) printf '{"Path":"example.com/mod","Version":"v1.3.0"}\n'; exit 0 ;;
+    example.net/ztool@latest) printf '{"Path":"example.net/ztool","Version":"v0.6.0"}\n'; exit 0 ;;
+    example.net/mtool@latest) printf '410 Gone: module example.net/mtool is no longer available\n' >&2; exit 1 ;;
+    *) exit 1 ;;
+  esac
+fi
+exit 20
+"#;
+    (SCRIPT, ["atool", "mtool", "ztool"])
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn one_unresolvable_module_keeps_the_other_go_updates() {
+    let manager = GoManager::new();
+    let bin = tempdir().expect("create GOBIN");
+    let (script, names) = unresolvable_module_fixture();
+    for name in names {
+        write_binary(bin.path().join(name), name.as_bytes());
+    }
+    let (_directory, executable) = fake_go(script);
+    let config = config(&manager, &executable, bin.path());
+
+    let updates = manager
+        .updates(&config, false)
+        .await
+        .expect("one unresolvable module must not fail the Go source");
+    assert_eq!(
+        updates
+            .iter()
+            .map(|update| update.target.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["atool", "ztool"],
+        "healthy binaries keep their updates in installed order"
+    );
+    assert_eq!(updates[0].available_version, "v1.3.0");
+    assert_eq!(updates[1].available_version, "v0.6.0");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn degraded_go_report_records_the_binary_it_skipped() {
+    let manager = GoManager::new();
+    let bin = tempdir().expect("create GOBIN");
+    let (script, names) = unresolvable_module_fixture();
+    for name in names {
+        write_binary(bin.path().join(name), name.as_bytes());
+    }
+    let (_directory, executable) = fake_go(script);
+    let config = config(&manager, &executable, bin.path());
+
+    let report = manager
+        .updates_report(&config, false)
+        .await
+        .expect("report the partial Go scan");
+    assert_eq!(
+        report
+            .updates()
+            .iter()
+            .map(|update| update.target.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["atool", "ztool"]
+    );
+    assert!(report.is_degraded());
+    assert_eq!(report.warnings().len(), 1);
+    let warning = &report.warnings()[0];
+    assert_ne!(warning.kind(), ManagerErrorKind::Protocol);
+    assert!(
+        warning
+            .detail()
+            .is_some_and(|detail| detail.contains("mtool")),
+        "the recorded warning must name the skipped binary: {warning:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn go_latest_lookups_overlap_but_stay_within_the_concurrency_limit() {
+    let manager = GoManager::new();
+    let bin = tempdir().expect("create GOBIN");
+    let marks = bin.path().join("marks.log");
+    let count = 6;
+    for index in 0..count {
+        write_binary(bin.path().join(format!("tool{index}")), b"tool");
+    }
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
+  name=${{4##*/}}
+  index=${{name#tool}}
+  printf '{{"Path":"example.com/mod%s","Main":{{"Path":"example.com/mod%s","Version":"v1.0.0"}}}}\n' "$index" "$index"
+  exit 0
+fi
+if [ "$1" = "list" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
+  module=${{4%@*}}
+  index=${{module#example.com/mod}}
+  printf 'S%s\n' "$index" >> '{marks}'
+  sleep 0.2
+  printf 'E%s\n' "$index" >> '{marks}'
+  printf '{{"Path":"%s","Version":"v1.1.0"}}\n' "$module"
+  exit 0
+fi
+exit 21
+"#,
+        marks = marks.display()
+    );
+    let (_directory, executable) = fake_go(&script);
+    let config = config(&manager, &executable, bin.path());
+
+    let updates = manager.updates(&config, false).await.expect("Go updates");
+    assert_eq!(updates.len(), count);
+
+    let log = fs::read_to_string(&marks).expect("read lookup mark log");
+    let mut in_flight = 0_usize;
+    let mut peak = 0_usize;
+    for line in log.lines() {
+        if line.starts_with('S') {
+            in_flight += 1;
+            peak = peak.max(in_flight);
+        } else {
+            in_flight = in_flight.saturating_sub(1);
+        }
+    }
+    assert_eq!(in_flight, 0, "every started lookup must also finish");
+    assert!(
+        peak > 1,
+        "lookups ran strictly one at a time (peak in flight: {peak})"
+    );
+    assert!(
+        peak <= 4,
+        "lookups exceeded the bounded concurrency limit (peak in flight: {peak})"
+    );
 }
 
 #[cfg(unix)]
