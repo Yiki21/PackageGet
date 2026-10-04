@@ -386,7 +386,7 @@ async fn empty_groups_are_a_successful_noop() {
 }
 
 #[tokio::test]
-async fn failure_reports_partial_progress_and_skips_later_groups() {
+async fn failure_reports_partial_progress_and_continues_later_groups() {
     let failing = manager_id("org.example:failing");
     let skipped = manager_id("org.example:skipped");
     let order = Arc::new(Mutex::new(Vec::new()));
@@ -424,15 +424,15 @@ async fn failure_reports_partial_progress_and_skips_later_groups() {
     )
     .await;
 
-    assert_eq!(outcome.completed_packages, 1);
-    assert_eq!(outcome.completed_managers, 0);
+    assert_eq!(outcome.completed_packages, 2);
+    assert_eq!(outcome.completed_managers, 1);
     assert_eq!(outcome.failed_manager, Some(failing.clone()));
     assert_eq!(outcome.manager_outcomes.len(), 2);
     assert_eq!(
         outcome.manager_outcomes[1].status,
-        ManagerOperationStatus::NotStarted
+        ManagerOperationStatus::Succeeded
     );
-    assert_eq!(*order.lock().unwrap(), vec![failing]);
+    assert_eq!(*order.lock().unwrap(), vec![failing, skipped]);
 }
 
 #[tokio::test]
