@@ -17,6 +17,10 @@ use crate::{
 };
 
 pub use finding::FindingInfo;
+/// Test-only re-export so `app` tests can drive the Discover page's row
+/// inspection without widening the module's production surface.
+#[cfg(test)]
+pub(crate) use finding::Message as FindingMessage;
 pub use health::ManagerHealthInfo;
 pub(crate) use health::Message as HealthMessage;
 pub(crate) use installed::Installed;

@@ -217,6 +217,31 @@ pub enum Message {
     },
 }
 
+/// Keyboard hint shown in the footer for one page.
+///
+/// Every page advertises the page-switch shortcut and how to close the current
+/// transient surface; list pages additionally advertise moving and selecting,
+/// and only pages with a search box advertise `/` as the focus control.
+pub(crate) fn footer_shortcuts(page: content::ActiveContentPage) -> &'static str {
+    match page {
+        content::ActiveContentPage::Finding => {
+            "Ctrl+K Search  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Install"
+        }
+        content::ActiveContentPage::Updates => {
+            "Ctrl+R Refresh  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Update"
+        }
+        content::ActiveContentPage::Installed => {
+            "Ctrl+R Refresh  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Remove"
+        }
+        content::ActiveContentPage::Health => {
+            "Ctrl+R Recheck  ·  Esc Close  ·  Alt+1–5 Pages  ·  Ctrl+Enter Save"
+        }
+        content::ActiveContentPage::Settings => {
+            "Tab Move Focus  ·  Esc Close  ·  Alt+1–5 Pages  ·  Ctrl+Enter Save"
+        }
+    }
+}
+
 impl App {
     /// Creates app state and starts config loading.
     pub fn new() -> (Self, Task<Message>) {
@@ -668,23 +693,19 @@ impl App {
         }
 
         if matches!(shortcut, Shortcut::Dismiss) {
-            let dismissed = self.pending_settings_exit.take().is_some()
+            // Innermost surface first; the chain short-circuits, so one press
+            // closes one thing. Dismiss must not steal focus back into the page
+            // search box, so it never refocuses anything: the user asked to
+            // close something, not to start typing again, and `/` remains the
+            // documented way to focus search.
+            let _dismissed = self.pending_settings_exit.take().is_some()
                 || self
                     .content
                     .dismiss_active_transient(&mut self.installed_info)
                 || self.status_panel.dismiss_top_surface()
                 || std::mem::replace(&mut self.activity_center_open, false);
 
-            return match (dismissed, self.content.active_content) {
-                (
-                    true,
-                    ActiveContentPage::Finding
-                    | ActiveContentPage::Updates
-                    | ActiveContentPage::Installed
-                    | ActiveContentPage::Health,
-                ) => self.focus_search(self.content.active_content),
-                _ => Task::none(),
-            };
+            return Task::none();
         }
 
         match shortcut {
@@ -740,6 +761,11 @@ impl App {
             }
             Shortcut::FocusNext => iced::widget::operation::focus_next(),
             Shortcut::FocusPrevious => iced::widget::operation::focus_previous(),
+            // The focused text input already dropped its own focus before the
+            // shortcut was published, and iced exposes no `unfocus` task
+            // operation, so there is nothing left to do but leave the page's
+            // inspected row and drawers alone.
+            Shortcut::BlurInput => Task::none(),
             Shortcut::Dismiss => Task::none(),
         }
     }
@@ -1179,26 +1205,10 @@ impl App {
 
         let shortcuts = iced::widget::container(
             row![
-                iced::widget::text(match self.content.active_content {
-                    content::ActiveContentPage::Finding => {
-                        "Ctrl+K Search  ·  Ctrl+R Refresh  ·  / Focus  ·  Ctrl+Enter Install"
-                    }
-                    content::ActiveContentPage::Updates => {
-                        "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Update"
-                    }
-                    content::ActiveContentPage::Installed => {
-                        "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Remove"
-                    }
-                    content::ActiveContentPage::Health => {
-                        "Ctrl+R Recheck  ·  / Focus  ·  Ctrl+Enter Save"
-                    }
-                    content::ActiveContentPage::Settings => {
-                        "Alt+1–5 Navigate  ·  Tab Move Focus  ·  Ctrl+Enter Save"
-                    }
-                })
-                .size(11)
-                .style(crate::theme::text_on_surface_alt)
-                .width(Length::Fill),
+                iced::widget::text(footer_shortcuts(self.content.active_content))
+                    .size(11)
+                    .style(crate::theme::text_on_surface_alt)
+                    .width(Length::Fill),
                 iced::widget::button(
                     iced::widget::text(status_panel::FOOTER_HISTORY_LABEL).size(11)
                 )
@@ -2190,6 +2200,113 @@ mod tests {
         assert!(app.updates_info.is_loading_count);
         assert_eq!(app.updates_info.init_progress, Some((0, 1)));
         assert!(!app.installed_info.is_loading_count);
+    }
+
+    #[test]
+    fn blur_keeps_transients_that_dismiss_clears() {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        app.activity_center_open = true;
+        app.status_panel
+            .record_outcome(updater_core::OperationOutcome {
+                action: updater_manager_api::PackageAction::Install,
+                completed_packages: 1,
+                total_packages: 1,
+                completed_managers: 1,
+                total_managers: 1,
+                failed_manager: None,
+                error: None,
+                cancelled: false,
+                manager_outcomes: Vec::new(),
+                scope: updater_manager_api::PackageScope::User,
+            });
+
+        // Esc captured by the focused search box only blurs it: the inspected
+        // row and the completed-operation surface must survive.
+        let _ = app.handle_shortcut(Shortcut::BlurInput);
+
+        assert!(
+            app.activity_center_open,
+            "blurring the search box must not dismiss the page behind it"
+        );
+        assert!(
+            app.status_panel.is_visible(),
+            "blurring the search box must not drop the operation summary"
+        );
+
+        // Esc anywhere else still dismisses, innermost surface first. The
+        // dismiss chain short-circuits, so each surface needs its own press.
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(
+            !app.status_panel.is_visible(),
+            "dismissing outside the search box still clears the operation summary"
+        );
+
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(!app.activity_center_open);
+    }
+
+    #[test]
+    fn blur_keeps_the_inspected_row_that_dismiss_clears() {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        app.content.active_content = content::ActiveContentPage::Finding;
+        let _ = app.update_message(Message::Content(content::Message::Finding(
+            content::FindingMessage::InspectPackage(
+                manager_id("builtin:cargo"),
+                "alpha".to_owned(),
+            ),
+        )));
+        assert!(app.content.finding.has_inspector_selection());
+
+        // Esc captured by the focused search box only blurs it.
+        let _ = app.handle_shortcut(Shortcut::BlurInput);
+
+        assert!(
+            app.content.finding.has_inspector_selection(),
+            "blurring the search box must keep the inspected row"
+        );
+
+        // Esc anywhere else still dismisses the inspected row.
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(!app.content.finding.has_inspector_selection());
+    }
+
+    #[test]
+    fn footer_hints_document_the_keyboard_controls() {
+        for page in [
+            content::ActiveContentPage::Finding,
+            content::ActiveContentPage::Updates,
+            content::ActiveContentPage::Installed,
+            content::ActiveContentPage::Health,
+            content::ActiveContentPage::Settings,
+        ] {
+            let hint = footer_shortcuts(page);
+            assert!(
+                hint.contains("Esc Close"),
+                "{page:?} footer omits Esc: {hint}"
+            );
+            assert!(
+                hint.contains("Alt+1–5 Pages"),
+                "{page:?} footer omits the page-switch shortcut: {hint}"
+            );
+        }
+
+        for page in [
+            content::ActiveContentPage::Finding,
+            content::ActiveContentPage::Updates,
+            content::ActiveContentPage::Installed,
+        ] {
+            let hint = footer_shortcuts(page);
+            assert!(hint.contains("↑↓ Move"), "{page:?} footer omits movement");
+            assert!(
+                hint.contains("Space Select"),
+                "{page:?} footer omits selection"
+            );
+        }
     }
 
     #[test]
