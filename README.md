@@ -59,8 +59,9 @@ updates.
 All platforms require the stable Rust toolchain and a native C/C++ build toolchain. The following additional packages are Linux build requirements:
 
 - `cargo`
-- `mold`, which is used by default for Linux builds
-- A C/C++ build toolchain, such as `gcc` or `clang`
+- `clang`, which is the default Linux linker driver (`.cargo/config.toml` sets `linker = "clang"` for `x86_64-unknown-linux-gnu`)
+- `mold`, which `clang` uses as the default Linux linker (`-fuse-ld=mold`)
+- A C/C++ compiler toolchain for native dependencies, such as `gcc`/`g++`
 - `pkg-config`
 - OpenSSL development libraries
 - Wayland or X11 development libraries, plus `libxkbcommon`
@@ -71,17 +72,17 @@ Install the required dependencies on common distributions:
 ```bash
 # Debian / Ubuntu
 sudo apt update
-sudo apt install -y build-essential mold pkg-config libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev policykit-1
+sudo apt install -y build-essential clang mold pkg-config libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev policykit-1
 ```
 
 ```bash
 # Fedora
-sudo dnf install -y gcc gcc-c++ mold pkgconf-pkg-config openssl-devel wayland-devel libX11-devel libxkbcommon-devel libxkbcommon-x11-devel polkit
+sudo dnf install -y gcc gcc-c++ clang mold pkgconf-pkg-config openssl-devel wayland-devel libX11-devel libxkbcommon-devel libxkbcommon-x11-devel polkit
 ```
 
 ```bash
 # Arch Linux
-sudo pacman -S --needed base-devel mold pkgconf openssl wayland libx11 libxkbcommon libxkbcommon-x11 polkit
+sudo pacman -S --needed base-devel clang mold pkgconf openssl wayland libx11 libxkbcommon libxkbcommon-x11 polkit
 ```
 
 ## Running for development
