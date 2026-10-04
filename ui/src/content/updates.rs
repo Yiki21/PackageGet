@@ -143,6 +143,29 @@ pub enum Message {
     PrepareFailedUpdateRetry,
 }
 
+/// Whether an updates load may run a privileged metadata sync.
+///
+/// System managers answer a privileged refresh with `apt-get update`,
+/// `dnf check-upgrade --refresh` and friends, which raise their own
+/// authorization prompt. Only explicit user refreshes and retries ask for
+/// that: after a package operation the local listing (`apt list
+/// --upgradable`, `dnf check-upgrade`, `pacman -Qu`) already reflects the
+/// write, so a post-operation reload must stay [`RefreshMode::Local`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshMode {
+    /// Re-read local package metadata only.
+    Local,
+    /// Refresh remote metadata before listing, which may prompt for authorization.
+    Privileged,
+}
+
+impl RefreshMode {
+    /// Whether this mode forces the manager to refresh remote metadata.
+    fn forces_metadata_sync(self) -> bool {
+        matches!(self, Self::Privileged)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UpdatesInfo {
     /// Updates cache by manager `(count, updates)`.
@@ -155,6 +178,9 @@ pub struct UpdatesInfo {
     pub selected_managers: HashSet<ManagerId>,
     /// Managers currently loading update list.
     pub loading_updates: HashMap<ManagerId, u64>,
+    /// [`RefreshMode`] of each in-flight updates request, so a privileged
+    /// metadata sync stays traceable to the action that asked for it.
+    pub refresh_modes: HashMap<ManagerId, RefreshMode>,
     /// Last allocated updates-load request generation.
     pub request_generation: u64,
     /// Whether initial per-manager counts are loading.
@@ -297,6 +323,7 @@ impl Updates {
                     return Action::None;
                 }
                 info.loading_updates.remove(&pm_type);
+                info.refresh_modes.remove(&pm_type);
                 apply_manager_counted_items_result(
                     &mut info.updates_by_manager,
                     &mut info.load_errors,
@@ -523,7 +550,9 @@ impl Updates {
 
                 let tasks: Vec<Task<Message>> = managers
                     .into_iter()
-                    .map(|manager| Self::start_load(pm_config, info, manager, catalog, true))
+                    .map(|manager| {
+                        Self::start_load(pm_config, info, manager, catalog, RefreshMode::Privileged)
+                    })
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -548,7 +577,9 @@ impl Updates {
 
                 let tasks: Vec<Task<Message>> = pm_types
                     .into_iter()
-                    .map(|manager| Self::start_load(pm_config, info, manager, catalog, true))
+                    .map(|manager| {
+                        Self::start_load(pm_config, info, manager, catalog, RefreshMode::Privileged)
+                    })
                     .collect();
 
                 Action::Run(Task::batch(tasks))
@@ -563,7 +594,13 @@ impl Updates {
                 }
                 info.init_errors.remove(&pm_type);
                 info.load_errors.remove(&pm_type);
-                Action::Run(Self::start_load(pm_config, info, pm_type, catalog, true))
+                Action::Run(Self::start_load(
+                    pm_config,
+                    info,
+                    pm_type,
+                    catalog,
+                    RefreshMode::Privileged,
+                ))
             }
             Message::StopWaiting => {
                 let waiting = self.stoppable_sources(info);
@@ -573,6 +610,7 @@ impl Updates {
                 let mut finished_preflight = false;
                 for manager in waiting {
                     info.loading_updates.remove(&manager);
+                    info.refresh_modes.remove(&manager);
                     apply_manager_counted_items_result(
                         &mut info.updates_by_manager,
                         &mut info.load_errors,
@@ -624,7 +662,7 @@ impl Updates {
                 }
 
                 Action::Run(Task::batch(managers.into_iter().map(|manager| {
-                    Self::start_load(pm_config, info, manager, catalog, true)
+                    Self::start_load(pm_config, info, manager, catalog, RefreshMode::Privileged)
                 })))
             }
             Message::ConfirmUpdate => {
@@ -670,7 +708,13 @@ impl Updates {
                 self.update_all_refreshing = self.update_all_scope.clone();
                 info.init_errors.remove(&manager);
                 info.load_errors.remove(&manager);
-                Action::Run(Self::start_load(pm_config, info, manager, catalog, true))
+                Action::Run(Self::start_load(
+                    pm_config,
+                    info,
+                    manager,
+                    catalog,
+                    RefreshMode::Privileged,
+                ))
             }
         }
     }
@@ -718,17 +762,35 @@ impl Updates {
         if info.init_errors.contains_key(&manager) || info.load_errors.contains_key(&manager) {
             info.init_errors.remove(&manager);
             info.load_errors.remove(&manager);
-            Action::Run(Self::start_load(pm_config, info, manager, catalog, true))
+            Action::Run(Self::start_load(
+                pm_config,
+                info,
+                manager,
+                catalog,
+                RefreshMode::Privileged,
+            ))
         } else if info.loading_updates.contains_key(&manager) {
             Action::None
         } else if let Some((count, packages)) = info.updates_by_manager.get(&manager) {
             if *count == packages.len() {
                 Action::None
             } else {
-                Action::Run(Self::start_load(pm_config, info, manager, catalog, false))
+                Action::Run(Self::start_load(
+                    pm_config,
+                    info,
+                    manager,
+                    catalog,
+                    RefreshMode::Local,
+                ))
             }
         } else {
-            Action::Run(Self::start_load(pm_config, info, manager, catalog, false))
+            Action::Run(Self::start_load(
+                pm_config,
+                info,
+                manager,
+                catalog,
+                RefreshMode::Local,
+            ))
         }
     }
 
@@ -1685,11 +1747,12 @@ impl Updates {
         info: &mut UpdatesInfo,
         manager: ManagerId,
         catalog: &ManagerCatalog,
-        force_refresh: bool,
+        mode: RefreshMode,
     ) -> Task<Message> {
         info.request_generation = info.request_generation.wrapping_add(1);
         let request_id = info.request_generation;
         info.loading_updates.insert(manager.clone(), request_id);
+        info.refresh_modes.insert(manager.clone(), mode);
 
         let pm_config = pm_config.clone();
         let registry = catalog.registry();
@@ -1703,7 +1766,7 @@ impl Updates {
                 .manager(&manager)
                 .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
             runtime
-                .updates(manager_config, force_refresh)
+                .updates(manager_config, mode.forces_metadata_sync())
                 .await
                 .map_err(|error| Self::describe_load_error(&error))
         })
@@ -2359,5 +2422,51 @@ mod tests {
                 .map(UpdatePlan::package_count),
             Some(1)
         );
+    }
+
+    #[test]
+    fn explicit_refresh_forces_a_privileged_metadata_sync() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            has_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+        let cargo = manager_id("builtin:cargo");
+        let config = configured(&[&cargo]);
+        let catalog = ManagerCatalog::builtin();
+        info.selected_managers.insert(cargo.clone());
+        info.updates_by_manager
+            .insert(cargo.clone(), (0, Vec::new()));
+
+        let _ = updates.update(Message::RefreshSelected, &config, &mut info, &catalog);
+
+        assert_eq!(
+            info.refresh_modes.get(&cargo),
+            Some(&RefreshMode::Privileged)
+        );
+    }
+
+    #[test]
+    fn reloading_a_cached_listing_stays_local() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            has_loading_count: true,
+            ..UpdatesInfo::default()
+        };
+        let cargo = manager_id("builtin:cargo");
+        let config = configured(&[&cargo]);
+        let catalog = ManagerCatalog::builtin();
+        info.selected_managers.insert(cargo.clone());
+        info.updates_by_manager
+            .insert(cargo.clone(), (1, Vec::new()));
+
+        let _ = updates.update(
+            Message::SelectPackageManager(cargo.clone(), true),
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert_eq!(info.refresh_modes.get(&cargo), Some(&RefreshMode::Local));
     }
 }

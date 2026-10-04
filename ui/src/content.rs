@@ -27,8 +27,8 @@ pub(crate) use shared::{
 };
 pub(crate) use updater_core::CancellationToken;
 pub use updater_core::OperationOutcome;
-pub(crate) use updates::Updates;
 pub use updates::UpdatesInfo;
+pub(crate) use updates::{RefreshMode, Updates};
 
 pub struct ViewOptions {
     pub show_inspector: bool,
