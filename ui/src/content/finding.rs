@@ -861,7 +861,7 @@ impl Finding {
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
-        use iced::widget::{column, container, row, scrollable};
+        use iced::widget::{column, container, row, scrollable, text};
 
         if let Some(empty) = shared::empty_state(configured_managers, info.selected_managers.len())
         {
@@ -869,8 +869,36 @@ impl Finding {
                 .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT));
         }
 
+        let exact_lookup_hint =
+            shared::exact_lookup_search_hint(info.selected_managers.iter().map(|manager| {
+                (
+                    catalog.display_name(manager).to_owned(),
+                    shared::manager_exact_lookup(manager, catalog),
+                )
+            }));
+
         if self.last_search_query.is_empty() {
-            return shared::centered_message("Enter a package name and click Search");
+            return match exact_lookup_hint {
+                Some(hint) => container(
+                    column![
+                        text("Enter a package name and click Search")
+                            .size(16)
+                            .style(theme::text_on_surface_muted),
+                        text(hint)
+                            .size(13)
+                            .style(theme::text_on_surface_alt)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                    ]
+                    .spacing(theme::spacing::SM)
+                    .align_x(iced::Alignment::Center),
+                )
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .center_x(iced::Length::Fill)
+                .center_y(iced::Length::Fill)
+                .into(),
+                None => shared::centered_message("Enter a package name and click Search"),
+            };
         }
 
         let mut results_sections: Vec<iced::Element<'_, Message>> = Vec::new();
@@ -1528,6 +1556,7 @@ fn still_searching_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use updater_manager_api::ManagerDescriptor;
 
     fn manager_id(value: &str) -> ManagerId {
         ManagerId::parse(value).unwrap()
@@ -2216,5 +2245,44 @@ mod tests {
             action,
             Action::Navigate(crate::content::ActiveContentPage::Health)
         ));
+    }
+
+    #[test]
+    fn exact_lookup_search_hint_is_built_from_the_descriptor_flag() {
+        let go = ManagerDescriptor::new(
+            manager_id("builtin:go"),
+            "Go",
+            updater_manager_api::ManagerCategory::Development,
+            updater_manager_api::SupportedPlatforms::from([updater_manager_api::Platform::Linux]),
+            updater_manager_api::ManagerCapabilities::from([ManagerCapability::Search]),
+        )
+        .unwrap()
+        .with_exact_lookup(true);
+        let cargo = ManagerDescriptor::new(
+            manager_id("builtin:cargo"),
+            "Cargo",
+            updater_manager_api::ManagerCategory::Development,
+            updater_manager_api::SupportedPlatforms::from([updater_manager_api::Platform::Linux]),
+            updater_manager_api::ManagerCapabilities::from([ManagerCapability::Search]),
+        )
+        .unwrap();
+
+        assert!(go.exact_lookup());
+        assert!(!cargo.exact_lookup());
+        assert!(
+            shared::exact_lookup_search_hint(vec![(
+                go.display_name().to_owned(),
+                go.exact_lookup()
+            )])
+            .expect("the exact source needs a hint")
+            .contains("Go")
+        );
+        assert_eq!(
+            shared::exact_lookup_search_hint(vec![(
+                cargo.display_name().to_owned(),
+                cargo.exact_lookup()
+            )]),
+            None
+        );
     }
 }

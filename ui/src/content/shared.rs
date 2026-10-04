@@ -9,9 +9,9 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Alignment, Border, Element, Length};
 use updater_core::{Config, ManagerRegistry, OperationOutcome};
 use updater_manager_api::{
-    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerError,
-    ManagerErrorKind, ManagerId, PackageAction, PackageInfo, PackageOrigin, PackageScope,
-    PackageTarget, Platform,
+    AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerDescriptor,
+    ManagerError, ManagerErrorKind, ManagerId, PackageAction, PackageInfo, PackageOrigin,
+    PackageScope, PackageTarget, Platform,
 };
 
 use crate::{icon, manager_catalog::ManagerCatalog, theme};
@@ -639,21 +639,18 @@ where
             entry.status,
             ManagerSourceStatus::Loading | ManagerSourceStatus::Initializing
         );
-    let (detail, detail_style): (String, fn(&iced::Theme) -> iced::widget::text::Style) =
-        match entry.status {
-            ManagerSourceStatus::Ready => (
-                entry.count.map_or_else(
-                    || "Ready".to_owned(),
-                    |count| format!("{count} {count_label}"),
-                ),
-                theme::text_on_surface_muted,
-            ),
-            ManagerSourceStatus::Loading => ("Loading...".to_owned(), theme::text_accent),
-            ManagerSourceStatus::Initializing => {
-                ("Initializing...".to_owned(), theme::text_on_surface_alt)
-            }
-            ManagerSourceStatus::Failed => ("Failed".to_owned(), theme::text_error),
-        };
+    let detail_style: fn(&iced::Theme) -> iced::widget::text::Style = match entry.status {
+        ManagerSourceStatus::Ready => theme::text_on_surface_muted,
+        ManagerSourceStatus::Loading => theme::text_accent,
+        ManagerSourceStatus::Initializing => theme::text_on_surface_alt,
+        ManagerSourceStatus::Failed => theme::text_error,
+    };
+    // The descriptor decides this, never a manager-ID list in the UI.
+    let exact_lookup = manager_exact_lookup(&manager, catalog);
+    let detail = source_detail_with_lookup(
+        manager_source_detail(entry.status, entry.count, count_label),
+        exact_lookup,
+    );
     let checkbox: Element<'_, Message> = iced::widget::checkbox(selected)
         .size(18)
         .style(checkbox_style(row_disabled))
@@ -1241,6 +1238,66 @@ where
             .into(),
         ),
     }
+}
+
+/// Qualifier shown for a source that resolves an exact identifier.
+pub const EXACT_LOOKUP_LABEL: &str = "exact identifier lookup";
+
+/// Label describing an exact-identifier source, or `None` for a catalog source.
+#[must_use]
+pub fn exact_lookup_label(exact_lookup: bool) -> Option<&'static str> {
+    exact_lookup.then_some(EXACT_LOOKUP_LABEL)
+}
+
+/// Returns whether a manager's descriptor declares an exact identifier lookup.
+#[must_use]
+pub fn manager_exact_lookup(manager: &ManagerId, catalog: &ManagerCatalog) -> bool {
+    catalog
+        .descriptor(manager)
+        .is_some_and(ManagerDescriptor::exact_lookup)
+}
+
+/// Base detail line for one source row in the source picker.
+#[must_use]
+pub fn manager_source_detail(
+    status: ManagerSourceStatus,
+    count: Option<usize>,
+    count_label: &str,
+) -> String {
+    match status {
+        ManagerSourceStatus::Ready => count.map_or_else(
+            || "Ready".to_owned(),
+            |count| format!("{count} {count_label}"),
+        ),
+        ManagerSourceStatus::Loading => "Loading...".to_owned(),
+        ManagerSourceStatus::Initializing => "Initializing...".to_owned(),
+        ManagerSourceStatus::Failed => "Failed".to_owned(),
+    }
+}
+
+/// Appends the exact-identifier qualifier when the source needs one.
+#[must_use]
+pub fn source_detail_with_lookup(detail: String, exact_lookup: bool) -> String {
+    exact_lookup_label(exact_lookup).map_or(detail.clone(), |label| format!("{detail} · {label}"))
+}
+
+/// Hint for the Discover empty state naming the selected exact-identifier
+/// sources, or `None` when every selected source is an ordinary catalog search.
+pub fn exact_lookup_search_hint(
+    sources: impl IntoIterator<Item = (String, bool)>,
+) -> Option<String> {
+    let names: Vec<String> = sources
+        .into_iter()
+        .filter(|(_, exact_lookup)| *exact_lookup)
+        .map(|(name, _)| name)
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "{} only accept{} an exact identifier, not a catalog search.",
+            names.join(", "),
+            if names.len() == 1 { "s" } else { "" },
+        )
+    })
 }
 
 /// Separates the readable summary of a described error from its diagnostic detail.
@@ -1847,10 +1904,11 @@ mod tests {
 
     use super::ManagerCatalog;
     use super::{
-        DesktopOpenCommand, DesktopTargetKind, EmptyState, OperationNotice, PackageDetailState,
-        desktop_open_commands, empty_state, is_installable_search_result, is_stopped_waiting_error,
-        operation_notice_headline, operation_notice_message, selection_key, stopped_waiting_error,
-        validate_http_url,
+        DesktopOpenCommand, DesktopTargetKind, EmptyState, ManagerSourceStatus, OperationNotice,
+        PackageDetailState, desktop_open_commands, empty_state, exact_lookup_label,
+        exact_lookup_search_hint, is_installable_search_result, is_stopped_waiting_error,
+        manager_source_detail, operation_notice_headline, operation_notice_message, selection_key,
+        source_detail_with_lookup, stopped_waiting_error, validate_http_url,
     };
     use updater_manager_api::{
         ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageAction,
@@ -2116,6 +2174,44 @@ mod tests {
         assert_eq!(empty_state(2, 0), Some(EmptyState::NoSourceSelected));
         assert_eq!(empty_state(2, 1), None);
         assert_eq!(empty_state(2, 2), None);
+    }
+
+    #[test]
+    fn exact_lookup_label_follows_the_descriptor_flag() {
+        assert_eq!(exact_lookup_label(true), Some(super::EXACT_LOOKUP_LABEL));
+        assert_eq!(exact_lookup_label(false), None);
+
+        let exact = source_detail_with_lookup(
+            manager_source_detail(ManagerSourceStatus::Ready, Some(3), "results"),
+            true,
+        );
+        assert!(exact.contains("3 results"));
+        assert!(exact.contains(super::EXACT_LOOKUP_LABEL));
+
+        let catalog = source_detail_with_lookup(
+            manager_source_detail(ManagerSourceStatus::Ready, Some(3), "results"),
+            false,
+        );
+        assert_eq!(catalog, "3 results");
+    }
+
+    #[test]
+    fn exact_lookup_search_hint_names_only_exact_sources() {
+        assert_eq!(exact_lookup_search_hint(Vec::new()), None);
+        assert_eq!(
+            exact_lookup_search_hint(vec![("Cargo".to_owned(), false)]),
+            None
+        );
+        let single = exact_lookup_search_hint(vec![("Go".to_owned(), true)]).expect("hint");
+        assert!(single.starts_with("Go only accepts an exact identifier"));
+        let multiple = exact_lookup_search_hint(vec![
+            ("Go".to_owned(), true),
+            ("pipx".to_owned(), true),
+            ("Cargo".to_owned(), false),
+        ])
+        .expect("hint");
+        assert!(multiple.contains("Go, pipx"));
+        assert!(!multiple.contains("Cargo"));
     }
 
     #[test]
