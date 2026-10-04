@@ -184,13 +184,21 @@ impl AptManager {
             .collect())
     }
 
+    /// Returns the installed version of every package from one `dpkg-query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed command error when `dpkg-query` fails and a protocol
+    /// error when its output is not valid UTF-8. A failure must not become an
+    /// empty map: this map is the only source of installed versions for the
+    /// search rows, so an empty map would label installed packages as absent.
     async fn installed_version_map(&self) -> ManagerResult<HashMap<String, String>> {
         let spec = installed_version_command();
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
+        let output = require_success(
+            &spec,
+            run_output(&spec).await?,
+            "APT installed version listing failed",
+        )?;
         let stdout = decode_stdout(output, "APT installed versions are not valid UTF-8")?;
         Ok(parse_installed_versions(&stdout))
     }
@@ -272,11 +280,7 @@ impl PackageManager for AptManager {
     async fn search(&self, config: &ManagerConfig, query: &str) -> ManagerResult<Vec<PackageInfo>> {
         self.validate_config(config)?;
         let spec = search_command(query);
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
+        let output = require_success(&spec, run_output(&spec).await?, "APT search failed")?;
         let stdout = decode_stdout(output, "APT search output is not valid UTF-8")?;
         let installed_versions = self.installed_version_map().await?;
         Ok(parse_search_results(

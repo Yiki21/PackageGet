@@ -115,13 +115,32 @@ mod fake_path {
     };
 
     use tempfile::TempDir;
-    use updater_manager_api::{ManagerConfig, PackageManager};
+    use updater_manager_api::{ManagerConfig, ManagerErrorKind, PackageManager};
     use updater_managers::AptManager;
 
-    /// Names the fake `apt`/`dpkg-query` directory for the child test process.
+    /// Names the fake `apt`/`apt-cache`/`dpkg-query` directory for the child
+    /// test process.
     const FAKE_APT_DIRECTORY_ENV: &str = "UPDATER_APT_CONTRACT_FAKE_DIRECTORY";
     const BATCHING_CHILD_TEST: &str =
         "fake_path::apt_listing_batching_child_checks_locale_and_batching";
+    const FAILURE_CHILD_TEST: &str =
+        "fake_path::apt_failure_child_checks_search_and_version_errors";
+
+    /// Fake `apt-cache` that fails while `apt-cache-fails` exists, matches
+    /// nothing while `apt-cache-empty` exists, and otherwise logs its
+    /// invocation.
+    const FAKE_APT_CACHE_SCRIPT: &str = r#"#!/bin/sh
+directory=${0%/*}
+printf 'apt-cache %s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >> "$directory/apt-cache-invocations.log"
+if [ -e "$directory/apt-cache-fails" ]; then
+  printf 'E: Malformed entry in package cache (needs cache update)\n' >&2
+  exit 100
+fi
+if [ -e "$directory/apt-cache-empty" ]; then
+  exit 0
+fi
+printf 'bash - GNU Bourne Again SHell\nvim - Vi IMproved\n'
+"#;
 
     /// Fake `dpkg-query` that logs every invocation and fails while
     /// `dpkg-query-fails` exists.
@@ -159,6 +178,10 @@ directory=${0%/*}
 printf 'apt %s\n' "$*" >> "$directory/apt-invocations.log"
 printf 'lc_all=%s lang=%s\n' "${LC_ALL:-unset}" "${LANG:-unset}" >> "$directory/apt-locale.log"
 if [ "$1" = "list" ] && [ "$2" = "--upgradable" ]; then
+  if [ -e "$directory/apt-list-fails" ]; then
+    printf 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1\n' >&2
+    exit 100
+  fi
   if [ -e "$directory/apt-no-marker" ]; then
     printf 'bash/stable 5.2.30-1 amd64\n'
     printf 'vim/stable 2:9.1.1234 amd64 [upgradable from: 9.1.0-1]\n'
@@ -185,6 +208,7 @@ exit 2
         let directory = tempfile::tempdir().expect("create fake apt directory");
         for (name, script) in [
             ("apt", FAKE_APT_SCRIPT),
+            ("apt-cache", FAKE_APT_CACHE_SCRIPT),
             ("dpkg-query", FAKE_DPKG_QUERY_SCRIPT),
         ] {
             write_fake_executable(&directory.path().join(name), script);
@@ -305,5 +329,88 @@ exit 2
             "both unknown rows must share one batched dpkg-query: {invocations:?}"
         );
         fs::remove_file(directory.join("apt-no-marker")).expect("restore the upgrade marker");
+    }
+
+    /// The fake `apt-cache` and `dpkg-query` live on `PATH`, so the assertions
+    /// run in a child process; the argument is the child that must run.
+    #[test]
+    fn apt_search_and_installed_version_failures_surface_as_errors() {
+        run_fake_apt_child(
+            FAILURE_CHILD_TEST,
+            "apt_search_and_installed_version_failures_surface_as_errors",
+        );
+    }
+
+    #[ignore = "child process of apt_search_and_installed_version_failures_surface_as_errors"]
+    #[tokio::test]
+    async fn apt_failure_child_checks_search_and_version_errors() {
+        let Some(directory) = std::env::var_os(FAKE_APT_DIRECTORY_ENV).map(PathBuf::from) else {
+            eprintln!(
+                "skipped: run through apt_search_and_installed_version_failures_surface_as_errors"
+            );
+            return;
+        };
+        let manager = AptManager::new();
+        let config = ManagerConfig::new(manager.descriptor().id().clone());
+
+        // A failed `apt-cache search` is an error, not an empty result.
+        fs::write(directory.join("apt-cache-fails"), "").expect("make fake apt-cache fail");
+        let error = manager
+            .search(&config, "bash")
+            .await
+            .expect_err("a failed apt-cache search must not read as an empty result");
+        assert_eq!(error.kind(), ManagerErrorKind::Other);
+        assert!(
+            error
+                .detail()
+                .is_some_and(|detail| detail.contains("package cache")),
+            "the diagnostic must reach the caller: {error:?}"
+        );
+        fs::remove_file(directory.join("apt-cache-fails")).expect("restore fake apt-cache");
+
+        // A failed version lookup fails the search instead of publishing rows
+        // labelled 'Not Installed' for packages that are installed.
+        fs::write(directory.join("dpkg-query-fails"), "").expect("make fake dpkg-query fail");
+        let error = manager
+            .search(&config, "bash")
+            .await
+            .expect_err("a failed installed-version lookup must fail the search");
+        assert_eq!(error.message(), "APT installed version listing failed");
+        fs::remove_file(directory.join("dpkg-query-fails")).expect("restore fake dpkg-query");
+
+        // A successful search reports the installed versions it read, never
+        // 'Not Installed' for the packages that the map covers.
+        let search = manager
+            .search(&config, "bash")
+            .await
+            .expect("search fake package cache");
+        assert_eq!(search.len(), 2);
+        assert_eq!(search[0].name, "bash");
+        assert_eq!(search[0].version, "5.2.26-1");
+        assert_eq!(search[1].name, "vim");
+        assert_eq!(search[1].version, "9.1.0-1");
+
+        // A failed update listing is an error, not an installation that is
+        // simply up to date.
+        fs::write(directory.join("apt-list-fails"), "").expect("make fake apt listing fail");
+        let error = manager
+            .updates(&config, false)
+            .await
+            .expect_err("a failed apt listing must not read as 'nothing to update'");
+        assert_eq!(error.kind(), ManagerErrorKind::Busy);
+        fs::remove_file(directory.join("apt-list-fails")).expect("restore fake apt");
+
+        // A successful search with no matches stays an empty listing; apt-cache
+        // exits 0 when nothing matches.
+        fs::write(directory.join("apt-cache-empty"), "")
+            .expect("make fake apt-cache match nothing");
+        assert!(
+            manager
+                .search(&config, "zzz")
+                .await
+                .expect("a no-match search is an empty listing")
+                .is_empty()
+        );
+        fs::remove_file(directory.join("apt-cache-empty")).expect("restore fake apt-cache");
     }
 }

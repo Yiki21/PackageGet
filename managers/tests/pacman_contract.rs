@@ -331,3 +331,140 @@ exit 2
     assert_eq!(invoked.lines().count(), 1, "{invoked}");
     assert!(invoked.starts_with("-Qu"), "{invoked}");
 }
+
+/// The fake `pacman` used by the result-reporting tests below.
+#[cfg(unix)]
+fn fake_pacman_script(mode: &str) -> String {
+    match mode {
+        "search-fails" => {
+            r#"#!/bin/sh
+if [ "$1" = "-Ss" ]; then
+  printf 'error: failed to init transaction (unable to lock database)\n' >&2
+  exit 1
+fi
+exit 2
+"#
+        }
+        "search-exits-100" => {
+            r#"#!/bin/sh
+if [ "$1" = "-Ss" ]; then
+  printf 'error: could not access database directory\n' >&2
+  exit 100
+fi
+exit 2
+"#
+        }
+        "search-no-match" => {
+            r#"#!/bin/sh
+if [ "$1" = "-Ss" ]; then
+  exit 1
+fi
+exit 2
+"#
+        }
+        "search-usage-error" => {
+            r#"#!/bin/sh
+if [ "$1" = "-Ss" ]; then
+  exit 2
+fi
+exit 2
+"#
+        }
+        "version-map-fails" => {
+            r#"#!/bin/sh
+if [ "$1" = "-Ss" ]; then
+  printf 'core/bash 5.2.037-1\n    The GNU Bourne Again shell\n'
+  exit 0
+fi
+if [ "$1" = "-Q" ]; then
+  printf 'error: could not open database\n' >&2
+  exit 1
+fi
+exit 2
+"#
+        }
+        other => panic!("unknown fake Pacman mode: {other}"),
+    }
+    .to_owned()
+}
+
+#[cfg(unix)]
+fn write_fake_pacman(mode: &str) -> (TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().expect("create fake Pacman directory");
+    let executable = directory.path().join("pacman");
+    fs::write(&executable, fake_pacman_script(mode)).expect("write fake Pacman executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("mark fake Pacman executable");
+    (directory, executable)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn search_failure_is_reported_instead_of_an_empty_result() {
+    let manager = PacmanManager::new();
+
+    // A locked or uninitializable database is a failure, not 'no matches'.
+    let (_directory, executable) = write_fake_pacman("search-fails");
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    let error = manager
+        .search(&config, "bash")
+        .await
+        .expect_err("a failed Pacman search must not read as an empty result");
+    assert_eq!(error.kind(), ManagerErrorKind::Busy);
+    assert!(
+        error.detail().is_some_and(|detail| detail.contains("lock")),
+        "the diagnostic must reach the caller: {error:?}"
+    );
+
+    // Any other non-zero exit stays a classified failure too.
+    let (_directory, executable) = write_fake_pacman("search-exits-100");
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    let error = manager
+        .search(&config, "bash")
+        .await
+        .expect_err("exit 100 must not read as an empty result");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn search_without_matches_stays_an_empty_listing() {
+    let manager = PacmanManager::new();
+
+    // `pacman -Ss` exits 1 with empty stdout and stderr when nothing matched,
+    // which is the one exit code the tool defines as 'no results'.
+    let (_directory, executable) = write_fake_pacman("search-no-match");
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    assert!(
+        manager
+            .search(&config, "zzz")
+            .await
+            .expect("a no-match search is an empty listing")
+            .is_empty()
+    );
+
+    // Exit 2 is a usage error even without a diagnostic.
+    let (_directory, executable) = write_fake_pacman("search-usage-error");
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+    let error = manager
+        .search(&config, "bash")
+        .await
+        .expect_err("exit 2 is not a no-match result");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn installed_version_failure_does_not_publish_not_installed_rows() {
+    let manager = PacmanManager::new();
+    let (_directory, executable) = write_fake_pacman("version-map-fails");
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(executable);
+
+    let error = manager
+        .search(&config, "bash")
+        .await
+        .expect_err("a broken local database must fail the search, not label rows absent");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+}
