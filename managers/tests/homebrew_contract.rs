@@ -113,6 +113,77 @@ exit 2
     )
 }
 
+#[cfg(unix)]
+fn pinned_fixture_brew() -> (TempDir, PathBuf) {
+    fake_brew(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'Homebrew 6.0.13\n'
+  exit 0
+fi
+if [ "$1" = "info" ] && [ "$2" = "--json=v2" ] && [ "$3" = "--installed" ]; then
+  printf '%s\n' '{
+    "formulae": [
+      {"name":"jq","full_name":"jq","tap":"homebrew/core","desc":"JSON processor","homepage":"https://jqlang.github.io/jq/","installed":[{"version":"1.8.0"}],"linked_keg":"1.8.0"},
+      {"name":"ripgrep","full_name":"ripgrep","tap":"homebrew/core","desc":"Search tool","homepage":"https://github.com/BurntSushi/ripgrep","installed":[{"version":"14.0.0"}],"linked_keg":"14.0.0"}
+    ],
+    "casks": [
+      {"token":"pinnedcask","full_token":"pinnedcask","tap":"homebrew/cask","desc":"Pinned cask","homepage":"https://example.test/pinned-cask","installed":"2.0"}
+    ]
+  }'
+  exit 0
+fi
+if [ "$1" = "outdated" ] && [ "$2" = "--json=v2" ]; then
+  printf '%s\n' '{
+    "formulae": [
+      {"name":"jq","installed_versions":["1.8.0"],"current_version":"1.9.0","pinned":false,"pinned_version":null},
+      {"name":"ripgrep","installed_versions":["14.0.0"],"current_version":"14.1.0","pinned":true,"pinned_version":"14.0.0"}
+    ],
+    "casks": [
+      {"name":"pinnedcask","installed_versions":["2.0"],"current_version":"2.1","pinned":true,"pinned_version":"2.0"}
+    ]
+  }'
+  exit 0
+fi
+exit 2
+"#,
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pinned_formulae_and_casks_never_enter_the_update_plan() {
+    let _guard = HOMEBREW_CONTRACT_LOCK.lock().await;
+    let manager = HomebrewManager::new();
+    let (_directory, executable) = pinned_fixture_brew();
+    let config = ManagerConfig::new(manager.descriptor().id().clone()).with_executable(&executable);
+
+    // brew still lists the pinned formula and cask as outdated, and they stay
+    // part of the installed inventory.
+    let installed = manager
+        .installed(&config)
+        .await
+        .expect("list pinned Homebrew inventory");
+    assert_eq!(
+        installed
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["jq", "ripgrep", "pinnedcask"]
+    );
+
+    // A pinned formula is an explicit instruction not to upgrade, so it must
+    // not appear as an available update the way an ordinary one does.
+    let updates = manager
+        .updates(&config, false)
+        .await
+        .expect("list unpinned Homebrew updates");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].target.name, "jq");
+    assert_eq!(updates[0].current_version, "1.8.0");
+    assert_eq!(updates[0].available_version, "1.9.0");
+}
+
 #[test]
 fn homebrew_descriptor_exposes_the_stable_public_contract() {
     let manager = HomebrewManager::new();

@@ -171,6 +171,13 @@ impl HomebrewManager {
                     .map(|entry| (BrewKind::Cask, entry)),
             )
         {
+            // A pinned formula is an explicit request to stay on the installed
+            // version, so it is not an available update. brew refuses to move
+            // it, and offering it would enter Update All and Select-all plans
+            // that can only fail. pipx already excludes pinned sources.
+            if entry.pinned {
+                continue;
+            }
             let package = find_unique_installed(&installed, kind, &entry.name)?;
             let current_version = required_versions(&entry.installed_versions, &entry.name)?;
             let available_version = required_text(
@@ -717,6 +724,13 @@ struct OutdatedEntry {
     installed_versions: Vec<String>,
     #[serde(default)]
     current_version: String,
+    #[serde(default)]
+    pinned: bool,
+    /// Retained for a future pin affordance; the update plan only needs
+    /// `pinned`, which is why this field is currently unread.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pinned_version: Option<String>,
 }
 
 fn installed_command(brew_path: &Path) -> CommandSpec {
@@ -1007,6 +1021,23 @@ mod tests {
                 serde_json::from_str(json).expect("parse cask installed shape");
             assert_eq!(installed.versions(), expected);
         }
+    }
+
+    #[test]
+    fn outdated_entries_keep_pinned_metadata_and_default_it_when_absent() {
+        let pinned: OutdatedEntry = serde_json::from_str(
+            r#"{"name":"jq","installed_versions":["1.7.1"],"current_version":"1.9.0","pinned":true,"pinned_version":"1.7.1"}"#,
+        )
+        .expect("parse pinned outdated entry");
+        assert!(pinned.pinned);
+        assert_eq!(pinned.pinned_version.as_deref(), Some("1.7.1"));
+
+        let unpinned: OutdatedEntry = serde_json::from_str(
+            r#"{"name":"jq","installed_versions":["1.7.1"],"current_version":"1.9.0"}"#,
+        )
+        .expect("parse outdated entry without pinned keys");
+        assert!(!unpinned.pinned);
+        assert_eq!(unpinned.pinned_version, None);
     }
 
     #[test]
