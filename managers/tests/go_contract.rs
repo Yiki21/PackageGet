@@ -12,7 +12,7 @@ use updater_manager_api::{
 };
 #[cfg(unix)]
 use updater_manager_api::{NoopProgressSink, PackageOrigin, PackageScope, ProgressEvent};
-use updater_managers::GoManager;
+use updater_managers::{CargoManager, GoManager, PipxManager};
 
 #[cfg(unix)]
 fn fake_go(script: &str) -> (TempDir, PathBuf) {
@@ -72,6 +72,21 @@ fn write_binary(path: impl AsRef<std::path::Path>, contents: &[u8]) {
         fs::set_permissions(path.as_ref(), fs::Permissions::from_mode(0o755))
             .expect("mark binary fixture executable");
     }
+}
+
+#[test]
+fn go_descriptor_labels_search_as_exact_identifier_lookup() {
+    let manager = GoManager::new();
+    assert!(manager.descriptor().exact_lookup());
+}
+
+/// The UI reads `exact_lookup` to label a Discover source as exact-identifier
+/// lookup instead of hard-coding manager IDs.
+#[test]
+fn exact_lookup_is_advertised_by_exact_identifier_sources_only() {
+    assert!(GoManager::new().descriptor().exact_lookup());
+    assert!(PipxManager::new().descriptor().exact_lookup());
+    assert!(!CargoManager::new().descriptor().exact_lookup());
 }
 
 #[test]

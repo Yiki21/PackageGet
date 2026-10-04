@@ -58,7 +58,8 @@ impl GoManager {
         )
         .expect("Go descriptor must remain valid")
         .with_description("Go module binary package manager")
-        .with_authorization(AuthorizationHint::None);
+        .with_authorization(AuthorizationHint::None)
+        .with_exact_lookup(true);
         Self { descriptor }
     }
 

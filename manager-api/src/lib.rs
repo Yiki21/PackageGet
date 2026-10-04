@@ -354,6 +354,7 @@ pub struct ManagerDescriptor {
     platforms: SupportedPlatforms,
     capabilities: ManagerCapabilities,
     authorization: AuthorizationHint,
+    exact_lookup: bool,
 }
 
 impl ManagerDescriptor {
@@ -392,6 +393,7 @@ impl ManagerDescriptor {
             platforms,
             capabilities,
             authorization: AuthorizationHint::None,
+            exact_lookup: false,
         })
     }
 
@@ -406,6 +408,18 @@ impl ManagerDescriptor {
     #[must_use]
     pub fn with_authorization(mut self, authorization: AuthorizationHint) -> Self {
         self.authorization = authorization;
+        self
+    }
+
+    /// Declares that search consumes an exact package identifier instead of a
+    /// free-text catalog query.
+    ///
+    /// Managers that resolve one exact name, path, or distribution advertise
+    /// this so the UI can avoid presenting their source as an ordinary catalog
+    /// search. The default is `false`.
+    #[must_use]
+    pub fn with_exact_lookup(mut self, exact_lookup: bool) -> Self {
+        self.exact_lookup = exact_lookup;
         self
     }
 
@@ -449,6 +463,12 @@ impl ManagerDescriptor {
     #[must_use]
     pub fn authorization(&self) -> &AuthorizationHint {
         &self.authorization
+    }
+
+    /// Returns whether search consumes an exact package identifier.
+    #[must_use]
+    pub fn exact_lookup(&self) -> bool {
+        self.exact_lookup
     }
 }
 
@@ -1293,6 +1313,21 @@ mod tests {
                 origin: package.origin,
             }
         );
+    }
+
+    #[test]
+    fn descriptor_exact_lookup_defaults_to_false_and_follows_its_builder() {
+        let descriptor = ManagerDescriptor::new(
+            ManagerId::parse("builtin:apt").expect("valid ID"),
+            "APT",
+            ManagerCategory::System,
+            SupportedPlatforms::from([Platform::Linux]),
+            ManagerCapabilities::from([ManagerCapability::Installed]),
+        )
+        .expect("valid descriptor");
+        assert!(!descriptor.exact_lookup());
+        assert!(descriptor.clone().with_exact_lookup(true).exact_lookup());
+        assert!(!descriptor.with_exact_lookup(false).exact_lookup());
     }
 
     #[test]
