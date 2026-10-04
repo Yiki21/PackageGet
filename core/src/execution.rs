@@ -339,7 +339,13 @@ pub async fn execute_package_groups(
                 PackageAction::Uninstall => "remove",
                 _ => "process",
             };
-            let cancelled = error.kind() == ManagerErrorKind::Cancelled;
+            // A manager may report Cancelled without the user ever pressing
+            // Stop, for example when its output merely mentions a canceled
+            // operation. Only a triggered cancellation token makes the whole
+            // operation a cancellation; otherwise it stays a failure so the
+            // failed manager can be retried.
+            let cancelled =
+                error.kind() == ManagerErrorKind::Cancelled && cancellation.is_cancelled();
             let completed =
                 completed_packages + manager_completed.load(Ordering::Relaxed).min(targets.len());
             let error = if cancelled {

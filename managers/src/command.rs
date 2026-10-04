@@ -337,16 +337,6 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
     } else if contains_any(
         &detail,
         &[
-            "operation was cancelled",
-            "operation was canceled",
-            "cancelled",
-            "canceled",
-        ],
-    ) {
-        ManagerErrorKind::Cancelled
-    } else if contains_any(
-        &detail,
-        &[
             "could not resolve host",
             "couldn't resolve host",
             "network is unreachable",
@@ -355,6 +345,29 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
         ],
     ) {
         ManagerErrorKind::Network
+    } else if contains_any(&detail, &["timed out", "timeout", "deadline exceeded"]) {
+        ManagerErrorKind::Timeout
+    } else if contains_any(
+        &detail,
+        &[
+            "request dismissed",
+            "dismissed by the user",
+            "dismissed by user",
+            "authentication dialog was cancelled",
+            "authentication dialog was canceled",
+            "cancelled by the user",
+            "canceled by the user",
+            "cancelled by user",
+            "canceled by user",
+            "user cancelled",
+            "user canceled",
+        ],
+    ) {
+        // Only tool-specific user-cancellation wording counts. A bare
+        // "canceled"/"cancelled" substring also appears in network and
+        // timeout output (".NET: The operation was canceled.", "Go: context
+        // canceled") and must not be reported as a user cancellation.
+        ManagerErrorKind::Cancelled
     } else if contains_any(
         &detail,
         &[
@@ -397,8 +410,6 @@ fn classify_command_failure(detail: &str) -> ManagerErrorKind {
         ],
     ) {
         ManagerErrorKind::Busy
-    } else if contains_any(&detail, &["timed out", "timeout", "deadline exceeded"]) {
-        ManagerErrorKind::Timeout
     } else if contains_any(
         &detail,
         &[
@@ -753,10 +764,22 @@ mod tests {
     fn classifies_command_failures_without_treating_every_pkexec_error_as_permission() {
         for (detail, expected) in [
             ("command not found", ManagerErrorKind::CommandMissing),
-            ("operation was cancelled", ManagerErrorKind::Cancelled),
-            ("pkexec: canceled", ManagerErrorKind::Cancelled),
+            (
+                "Error executing command as another user: Request dismissed",
+                ManagerErrorKind::Cancelled,
+            ),
+            ("cancelled by the user", ManagerErrorKind::Cancelled),
             ("could not resolve host", ManagerErrorKind::Network),
             ("failed to download object", ManagerErrorKind::Network),
+            // Network and timeout output that merely contains "canceled" must
+            // not read as a user cancellation.
+            ("The operation was canceled.", ManagerErrorKind::Other),
+            ("context canceled", ManagerErrorKind::Other),
+            ("download canceled by the server", ManagerErrorKind::Other),
+            (
+                "request timed out: the operation was canceled.",
+                ManagerErrorKind::Timeout,
+            ),
             ("pkexec: not authorized", ManagerErrorKind::Permission),
             ("not allowed for user", ManagerErrorKind::Permission),
             ("operation not permitted", ManagerErrorKind::Permission),

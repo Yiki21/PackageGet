@@ -18,6 +18,7 @@ struct FakeManager {
     received_targets: Option<Arc<Mutex<Vec<PackageTarget>>>>,
     fail_after: Option<usize>,
     cancel_token: Option<CancellationToken>,
+    reports_cancelled_without_request: bool,
 }
 
 impl FakeManager {
@@ -40,6 +41,7 @@ impl FakeManager {
             received_targets: None,
             fail_after,
             cancel_token: None,
+            reports_cancelled_without_request: false,
         }
     }
 
@@ -50,6 +52,14 @@ impl FakeManager {
 
     fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.cancel_token = Some(cancellation);
+        self
+    }
+
+    /// Reports `Cancelled` without touching the operation's cancellation
+    /// token, the way a manager does when its output merely mentions a
+    /// canceled network or timeout failure.
+    fn with_unrequested_cancellation(mut self) -> Self {
+        self.reports_cancelled_without_request = true;
         self
     }
 }
@@ -92,6 +102,13 @@ impl PackageManager for FakeManager {
             return Err(ManagerError::new(
                 ManagerErrorKind::Cancelled,
                 "fake manager cancelled",
+            ));
+        }
+
+        if self.reports_cancelled_without_request {
+            return Err(ManagerError::new(
+                ManagerErrorKind::Cancelled,
+                "The operation was canceled.",
             ));
         }
 
@@ -433,6 +450,65 @@ async fn failure_reports_partial_progress_and_continues_later_groups() {
         ManagerOperationStatus::Succeeded
     );
     assert_eq!(*order.lock().unwrap(), vec![failing, skipped]);
+}
+
+#[tokio::test]
+async fn unrequested_cancellation_is_reported_as_a_failure() {
+    let cancelled = manager_id("org.example:unrequested-cancel");
+    let later = manager_id("org.example:later");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ManagerRegistry::new();
+    registry
+        .register(Arc::new(
+            FakeManager::new(
+                cancelled.as_str(),
+                [ManagerCapability::Update],
+                Arc::clone(&order),
+                None,
+            )
+            .with_unrequested_cancellation(),
+        ))
+        .unwrap();
+    registry
+        .register(Arc::new(FakeManager::new(
+            later.as_str(),
+            [ManagerCapability::Update],
+            Arc::clone(&order),
+            None,
+        )))
+        .unwrap();
+
+    let outcome = execute_package_groups(
+        &registry,
+        &config(&[cancelled.clone(), later.clone()]),
+        PackageAction::Update,
+        &[
+            (cancelled.clone(), vec![target(&cancelled, "alpha")]),
+            (later.clone(), vec![target(&later, "beta")]),
+        ],
+        &CancellationToken::default(),
+        &|_| {},
+    )
+    .await;
+
+    assert!(!outcome.is_cancelled());
+    assert_eq!(outcome.failed_manager, Some(cancelled));
+    assert_eq!(
+        outcome.manager_outcomes[0].status,
+        ManagerOperationStatus::Failed
+    );
+    assert_eq!(
+        outcome.manager_outcomes[1].status,
+        ManagerOperationStatus::Succeeded
+    );
+    assert!(
+        outcome
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Failed to update packages from")),
+        "{:?}",
+        outcome.error
+    );
 }
 
 #[tokio::test]

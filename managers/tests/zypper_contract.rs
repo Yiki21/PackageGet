@@ -206,7 +206,12 @@ case "$4" in
     ;;
   code-107) exit 107 ;;
   not-authorized) printf 'not authorized\n' >&2; exit 126 ;;
-  cancelled-text) printf 'operation was cancelled\n' >&2; exit 127 ;;
+  cancelled-text)
+    # A bare "cancelled" substring in output is not a user cancellation;
+    # Zypper reports real cancellations as exit code 105.
+    printf 'operation was cancelled\n' >&2
+    exit 127
+    ;;
   *) exit 104 ;;
 esac
 "#,
@@ -230,7 +235,7 @@ esac
         ("code-106", ManagerErrorKind::Network),
         ("code-107", ManagerErrorKind::Other),
         ("not-authorized", ManagerErrorKind::Permission),
-        ("cancelled-text", ManagerErrorKind::Cancelled),
+        ("cancelled-text", ManagerErrorKind::Other),
     ] {
         let error = manager
             .search(&config, query)
