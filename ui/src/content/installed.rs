@@ -131,6 +131,8 @@ pub enum Message {
     },
     /// Remove result message.
     RemovePackagesResult(OperationOutcome),
+    /// Dismiss the last package-operation notice.
+    DismissOperationNotice,
 }
 
 /// Information about installed packages passed from app state
@@ -174,8 +176,8 @@ pub struct InstalledInfo {
     pub remove_logs: Vec<String>,
     /// Removal plan frozen when the confirmation opened; Confirm executes exactly this.
     pub pending_remove: Option<PackageActionPlan>,
-    /// Last removal error shown in UI.
-    pub last_remove_error: Option<String>,
+    /// Last package-operation notice shown in UI.
+    pub last_operation_notice: Option<shared::OperationNotice>,
     /// Last inspector action error shown in UI.
     pub inspector_error: Option<String>,
 }
@@ -510,7 +512,7 @@ impl Installed {
                 if info.selected_packages.is_empty() || info.is_removing {
                     return Action::None;
                 }
-                info.last_remove_error = None;
+                info.last_operation_notice = None;
                 let manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
                         info.installed_packages
@@ -523,8 +525,10 @@ impl Installed {
                 );
                 if manager_groups.is_empty() {
                     info.pending_remove = None;
-                    info.last_remove_error =
-                        Some("Selected packages are no longer available to remove".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Uninstall,
+                        "Selected packages are no longer available to remove".to_owned(),
+                    ));
                     return Action::None;
                 }
                 info.pending_remove = Some(PackageActionPlan { manager_groups });
@@ -587,16 +591,26 @@ impl Installed {
             Message::RemovePackagesResult(outcome) => {
                 info.is_removing = false;
                 info.remove_progress = None;
+                info.last_operation_notice = shared::OperationNotice::from_outcome(&outcome);
+                if let Some(notice) = &info.last_operation_notice {
+                    log::error!(
+                        "Remove packages {}: {}",
+                        if notice.is_stopped() {
+                            "stopped"
+                        } else {
+                            "failed"
+                        },
+                        shared::operation_notice_message(notice).unwrap_or_default()
+                    );
+                }
                 if outcome.is_success() {
                     info.selected_packages.clear();
-                    info.last_remove_error = None;
-                    Action::PackageOperationFinished { outcome }
-                } else {
-                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
-                    log::error!("Failed to remove packages: {}", error);
-                    info.last_remove_error = Some(error);
-                    Action::PackageOperationFinished { outcome }
                 }
+                Action::PackageOperationFinished { outcome }
+            }
+            Message::DismissOperationNotice => {
+                info.last_operation_notice = None;
+                Action::None
             }
         }
     }
@@ -672,12 +686,14 @@ impl Installed {
         }
         let plan = info.pending_remove.take()?;
         let Some((initial_manager, _)) = plan.manager_groups.first() else {
-            info.last_remove_error =
-                Some("The removal plan does not contain any packages".to_owned());
+            info.last_operation_notice = Some(shared::OperationNotice::failed(
+                PackageAction::Uninstall,
+                "The removal plan does not contain any packages".to_owned(),
+            ));
             return None;
         };
         info.is_removing = true;
-        info.last_remove_error = None;
+        info.last_operation_notice = None;
         info.remove_logs.clear();
         info.remove_progress = Some((
             0,
@@ -1386,12 +1402,13 @@ impl Installed {
         if info.pending_remove.is_some() {
             content = content.push(self.remove_confirmation_view(info, catalog));
         }
-        if let Some(error) = &info.last_remove_error {
-            content = content.push(
-                text(format!("Removal failed: {error}"))
-                    .size(13)
-                    .style(theme::text_error),
-            );
+        if let Some(notice) = &info.last_operation_notice {
+            content = content.push(shared::operation_notice_card(
+                notice,
+                catalog,
+                Message::CopyInspectorText,
+                Message::DismissOperationNotice,
+            ));
         }
 
         content.into()
@@ -1862,5 +1879,82 @@ mod tests {
             Some("gone is no longer installed")
         );
         assert_eq!(target.name, "hello");
+    }
+
+    fn remove_outcome(cancelled: bool, error: Option<&str>) -> OperationOutcome {
+        OperationOutcome {
+            action: PackageAction::Uninstall,
+            completed_packages: if cancelled { 1 } else { 0 },
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: (!cancelled).then(|| ManagerId::parse("builtin:apt").unwrap()),
+            error: error.map(str::to_owned),
+            cancelled,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::System,
+        }
+    }
+
+    #[test]
+    fn cancelled_removal_outcome_is_not_reported_as_a_failure() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo {
+            is_removing: true,
+            ..InstalledInfo::default()
+        };
+
+        let _ = installed.update(
+            Message::RemovePackagesResult(remove_outcome(
+                true,
+                Some("package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(notice, &ManagerCatalog::builtin()),
+            "Removal stopped after 1 of 2 packages"
+        );
+    }
+
+    #[test]
+    fn failed_removal_outcome_names_the_manager_and_dismisses() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo {
+            is_removing: true,
+            ..InstalledInfo::default()
+        };
+
+        let _ = installed.update(
+            Message::RemovePackagesResult(remove_outcome(
+                false,
+                Some("Failed to remove packages from builtin:apt: package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(!notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(notice, &ManagerCatalog::builtin()),
+            "APT: remove failed"
+        );
+        let message = shared::operation_notice_message(notice).expect("detail");
+        assert!(!message.contains("builtin:apt"));
+
+        let _ = installed.update(
+            Message::DismissOperationNotice,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+        assert!(info.last_operation_notice.is_none());
     }
 }

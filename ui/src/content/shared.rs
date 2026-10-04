@@ -7,10 +7,11 @@ use std::{
 
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Border, Element, Length};
-use updater_core::{Config, ManagerRegistry};
+use updater_core::{Config, ManagerRegistry, OperationOutcome};
 use updater_manager_api::{
     AuthorizationHint, ManagerCapability, ManagerCategory, ManagerConfig, ManagerError,
-    ManagerErrorKind, ManagerId, PackageInfo, PackageOrigin, PackageScope, PackageTarget, Platform,
+    ManagerErrorKind, ManagerId, PackageAction, PackageInfo, PackageOrigin, PackageScope,
+    PackageTarget, Platform,
 };
 
 use crate::{icon, manager_catalog::ManagerCatalog, theme};
@@ -1302,6 +1303,288 @@ where
         .into()
 }
 
+/// Height cap for a package-operation failure's diagnostic block.
+const OPERATION_DETAIL_MAX_HEIGHT: f32 = 96.0;
+
+/// User-facing result of a finished package operation.
+///
+/// A cancellation the user asked for is not a failure, so it is reported as
+/// [`OperationNotice::Stopped`] with neutral wording rather than an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationNotice {
+    /// The user stopped the operation before it finished.
+    Stopped {
+        /// Action the operation was performing.
+        action: PackageAction,
+        /// Packages finished before the stop.
+        completed: usize,
+        /// Packages the operation covered.
+        total: usize,
+    },
+    /// The operation failed.
+    Failed {
+        /// Action the operation was performing.
+        action: PackageAction,
+        /// Manager that failed, when the failure came from one manager.
+        manager: Option<ManagerId>,
+        /// Failure message reported by the execution layer.
+        message: String,
+    },
+}
+
+impl OperationNotice {
+    /// Classifies a finished operation, or `None` when it succeeded.
+    #[must_use]
+    pub fn from_outcome(outcome: &OperationOutcome) -> Option<Self> {
+        if outcome.is_cancelled() {
+            return Some(Self::Stopped {
+                action: outcome.action,
+                completed: outcome.completed_packages,
+                total: outcome.total_packages,
+            });
+        }
+        if outcome.is_success() {
+            return None;
+        }
+        Some(Self::Failed {
+            action: outcome.action,
+            manager: outcome.failed_manager.clone(),
+            message: outcome.error.clone().unwrap_or_else(|| outcome.summary()),
+        })
+    }
+
+    /// Builds a failure that never reached a manager, such as a stale plan.
+    #[must_use]
+    pub fn failed(action: PackageAction, message: String) -> Self {
+        Self::Failed {
+            action,
+            manager: None,
+            message,
+        }
+    }
+
+    /// Returns whether the user stopped this operation.
+    #[must_use]
+    pub const fn is_stopped(&self) -> bool {
+        matches!(self, Self::Stopped { .. })
+    }
+}
+
+/// Verb for the action the operation was performing.
+const fn operation_verb(action: PackageAction) -> &'static str {
+    match action {
+        PackageAction::Install => "install",
+        PackageAction::Update => "update",
+        PackageAction::Uninstall => "remove",
+        _ => "process",
+    }
+}
+
+/// Noun for the action the operation was performing.
+const fn operation_noun(action: PackageAction) -> &'static str {
+    match action {
+        PackageAction::Install => "Install",
+        PackageAction::Update => "Update",
+        PackageAction::Uninstall => "Removal",
+        _ => "Operation",
+    }
+}
+
+/// First line of an operation notice, naming the manager when one is known.
+#[must_use]
+pub fn operation_notice_headline(notice: &OperationNotice, catalog: &ManagerCatalog) -> String {
+    match notice {
+        OperationNotice::Stopped {
+            action,
+            completed,
+            total,
+        } => format!(
+            "{} stopped after {completed} of {total} packages",
+            operation_noun(*action)
+        ),
+        OperationNotice::Failed {
+            action,
+            manager: Some(manager),
+            ..
+        } => format!(
+            "{}: {} failed",
+            catalog.display_name(manager),
+            operation_verb(*action)
+        ),
+        OperationNotice::Failed { action, .. } => {
+            format!("{} failed", operation_noun(*action))
+        }
+    }
+}
+
+/// Failure text with the execution layer's manager-ID envelope removed.
+fn strip_manager_envelope(message: &str, action: PackageAction, manager: &ManagerId) -> String {
+    let prefix = format!(
+        "Failed to {} packages from {manager}: ",
+        operation_verb(action)
+    );
+    message
+        .strip_prefix(&prefix)
+        .map_or_else(|| message.to_owned(), std::borrow::ToOwned::to_owned)
+}
+
+/// Message body of an operation notice, bounded to the failure text itself.
+#[must_use]
+pub fn operation_notice_message(notice: &OperationNotice) -> Option<String> {
+    let OperationNotice::Failed {
+        action,
+        manager,
+        message,
+    } = notice
+    else {
+        return None;
+    };
+    Some(manager.as_ref().map_or_else(
+        || message.clone(),
+        |manager| strip_manager_envelope(message, *action, manager),
+    ))
+}
+
+/// Splits an operation failure into a leading line and bounded diagnostics.
+///
+/// Execution failures put the summary and the stderr tail on adjacent lines
+/// rather than after [`ERROR_DETAIL_SEPARATOR`], so a single newline is also a
+/// split point. Without one the whole message is the summary.
+fn split_operation_detail(message: &str) -> (&str, Option<&str>) {
+    let (summary, detail) = split_error_detail(message);
+    if let Some(detail) = detail {
+        return (summary, Some(detail));
+    }
+    match message.split_once('\n') {
+        Some((summary, detail)) if !detail.trim().is_empty() => (summary, Some(detail)),
+        _ => (message, None),
+    }
+}
+
+/// Renders a finished package operation for the page's action area.
+///
+/// A user-stopped operation gets a single neutral line and only a dismiss
+/// control. A real failure names the manager by display name and keeps its
+/// stderr in a bounded, scrollable monospace block with copy and dismiss,
+/// instead of dumping an unbounded error string inline.
+pub fn operation_notice_card<'a, Message>(
+    notice: &'a OperationNotice,
+    catalog: &ManagerCatalog,
+    copy: impl FnOnce(String) -> Message,
+    dismiss: Message,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    let headline = operation_notice_headline(notice, catalog);
+    let dismiss_button = button(text("Dismiss").size(13))
+        .padding([7, 12])
+        .style(theme::secondary_button(true))
+        .on_press(dismiss);
+
+    if notice.is_stopped() {
+        return container(
+            row![
+                text(headline)
+                    .size(13)
+                    .style(theme::text_warning)
+                    .width(iced::Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+                dismiss_button,
+            ]
+            .spacing(theme::spacing::MD)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(theme::spacing::SM)
+        .width(iced::Length::Fill)
+        .style(theme::surface_container)
+        .into();
+    }
+
+    let message = operation_notice_message(notice).unwrap_or_default();
+    let copy = copy(format!("{headline}\n{message}"));
+    // The text widgets own their strings so the card can borrow no local state.
+    let (summary, diagnostics) = split_operation_detail(&message);
+    let summary = summary.to_owned();
+    let diagnostics = diagnostics.map(str::to_owned);
+    let mut body = column![
+        text(headline)
+            .size(14)
+            .font(theme::FONT_SEMIBOLD)
+            .style(theme::text_on_surface),
+        text(summary)
+            .size(13)
+            .style(theme::text_on_surface_muted)
+            .wrapping(text::Wrapping::WordOrGlyph),
+    ]
+    .spacing(theme::spacing::XS)
+    .width(iced::Length::Fill);
+    if let Some(diagnostics) = diagnostics {
+        body = body.push(
+            container(
+                scrollable(
+                    text(diagnostics)
+                        .size(12)
+                        .font(theme::FONT_MONO)
+                        .style(theme::text_on_surface_alt)
+                        .width(iced::Length::Fill)
+                        .wrapping(text::Wrapping::WordOrGlyph),
+                )
+                .width(iced::Length::Fill),
+            )
+            .padding(theme::spacing::SM)
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fixed(OPERATION_DETAIL_MAX_HEIGHT))
+            .style(theme::surface_container),
+        );
+    }
+
+    let content = row![
+        container(
+            text("!")
+                .size(14)
+                .font(theme::FONT_SEMIBOLD)
+                .style(theme::text_on_primary)
+        )
+        .width(24)
+        .height(24)
+        .center_x(24)
+        .center_y(24)
+        .style(|iced_theme: &iced::Theme| container::Style {
+            background: Some(theme::semantic_colors(iced_theme).error.into()),
+            border: Border {
+                radius: 999.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        body,
+        column![
+            button(text("Copy").size(13))
+                .padding([7, 12])
+                .style(theme::secondary_button(true))
+                .on_press(copy),
+            dismiss_button,
+        ]
+        .spacing(theme::spacing::XS),
+    ]
+    .spacing(theme::spacing::MD)
+    .align_y(iced::Alignment::Start);
+
+    container(content)
+        .padding(theme::spacing::MD)
+        .width(iced::Length::Fill)
+        .style(|iced_theme: &iced::Theme| container::Style {
+            background: Some(theme::semantic_colors(iced_theme).error_soft.into()),
+            border: Border {
+                radius: theme::radius::SURFACE.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 // Retry and copy are per-section message constructors for the error card.
 #[allow(clippy::too_many_arguments)]
 pub fn manager_section<'a, Message>(
@@ -1485,14 +1768,16 @@ where
 mod tests {
     use std::ffi::{OsStr, OsString};
 
+    use super::ManagerCatalog;
     use super::{
-        DesktopOpenCommand, DesktopTargetKind, PackageDetailState, desktop_open_commands,
-        is_installable_search_result, is_stopped_waiting_error, selection_key,
-        stopped_waiting_error, validate_http_url,
+        DesktopOpenCommand, DesktopTargetKind, OperationNotice, PackageDetailState,
+        desktop_open_commands, is_installable_search_result, is_stopped_waiting_error,
+        operation_notice_headline, operation_notice_message, selection_key, stopped_waiting_error,
+        validate_http_url,
     };
     use updater_manager_api::{
-        ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageInfo,
-        Platform,
+        ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageAction,
+        PackageInfo, Platform,
     };
 
     fn manager_id(value: &str) -> ManagerId {
@@ -1746,5 +2031,90 @@ mod tests {
         assert!(is_stopped_waiting_error(&stopped_waiting_error("Snap")));
         assert!(!is_stopped_waiting_error("network unreachable"));
         assert!(!is_stopped_waiting_error("Failed to search in Snap"));
+    }
+
+    #[test]
+    fn cancelled_operation_is_reported_as_stopped_not_failed() {
+        let outcome = updater_core::OperationOutcome {
+            action: PackageAction::Update,
+            completed_packages: 2,
+            total_packages: 5,
+            completed_managers: 1,
+            total_managers: 2,
+            failed_manager: None,
+            error: Some("pkexec authentication failed".to_owned()),
+            cancelled: true,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::System,
+        };
+
+        let notice = OperationNotice::from_outcome(&outcome).expect("a stopped notice");
+        assert!(notice.is_stopped());
+        assert_eq!(operation_notice_message(&notice), None);
+        let headline = operation_notice_headline(&notice, &ManagerCatalog::builtin());
+        assert_eq!(headline, "Update stopped after 2 of 5 packages");
+        assert!(!headline.to_lowercase().contains("fail"));
+    }
+
+    #[test]
+    fn failed_operation_uses_the_manager_display_name_and_hides_the_id() {
+        let manager = manager_id("builtin:apt");
+        let outcome = updater_core::OperationOutcome {
+            action: PackageAction::Update,
+            completed_packages: 0,
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: Some(manager.clone()),
+            error: Some(
+                "Failed to update packages from builtin:apt: package manager command failed: /usr/bin/pkexec failed:\nE: boom\nE: bang"
+                    .to_owned(),
+            ),
+            cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::System,
+        };
+
+        let notice = OperationNotice::from_outcome(&outcome).expect("a failure notice");
+        assert!(!notice.is_stopped());
+        let headline = operation_notice_headline(&notice, &ManagerCatalog::builtin());
+        assert_eq!(headline, "APT: update failed");
+        assert!(!headline.contains("builtin:apt"));
+
+        let message = operation_notice_message(&notice).expect("failure detail");
+        assert!(!message.contains("builtin:apt"));
+        assert!(message.starts_with("package manager command failed"));
+    }
+
+    #[test]
+    fn successful_operation_has_no_notice() {
+        let outcome = updater_core::OperationOutcome {
+            action: PackageAction::Install,
+            completed_packages: 1,
+            total_packages: 1,
+            completed_managers: 1,
+            total_managers: 1,
+            failed_manager: None,
+            error: None,
+            cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::User,
+        };
+
+        assert_eq!(OperationNotice::from_outcome(&outcome), None);
+    }
+
+    #[test]
+    fn operation_failure_detail_splits_on_a_single_newline() {
+        let notice = OperationNotice::failed(
+            PackageAction::Uninstall,
+            "package manager command failed:\nE: boom\nE: bang".to_owned(),
+        );
+        let headline = operation_notice_headline(&notice, &ManagerCatalog::builtin());
+        assert_eq!(headline, "Removal failed");
+        let message = operation_notice_message(&notice).expect("failure detail");
+        let (summary, detail) = super::split_operation_detail(&message);
+        assert_eq!(summary, "package manager command failed:");
+        assert_eq!(detail, Some("E: boom\nE: bang"));
     }
 }

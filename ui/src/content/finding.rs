@@ -114,6 +114,8 @@ pub enum Message {
     },
     /// Install result message.
     InstallPackagesResult(OperationOutcome),
+    /// Dismiss the last package-operation notice.
+    DismissOperationNotice,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -138,8 +140,8 @@ pub struct FindingInfo {
     pub install_progress: Option<(usize, usize, ManagerId, String)>,
     /// Install command logs.
     pub install_logs: Vec<String>,
-    /// Last install error shown in UI.
-    pub last_install_error: Option<String>,
+    /// Last install operation notice shown in UI.
+    pub last_operation_notice: Option<shared::OperationNotice>,
 }
 
 pub enum Action {
@@ -359,7 +361,7 @@ impl Finding {
                 if info.is_installing || self.pending_install.is_some() {
                     return Action::None;
                 }
-                info.last_install_error = None;
+                info.last_operation_notice = None;
                 match self.named_install_plan(pm_config, catalog) {
                     Ok(plan) => {
                         self.install_name_error = None;
@@ -413,7 +415,7 @@ impl Finding {
                 {
                     return Action::None;
                 }
-                info.last_install_error = None;
+                info.last_operation_notice = None;
                 let manager_groups = collect_selected_package_groups(
                     info.search_results
                         .iter()
@@ -423,8 +425,10 @@ impl Finding {
                     PackageInfo::target,
                 );
                 if manager_groups.is_empty() {
-                    info.last_install_error =
-                        Some("Selected packages are no longer available to install".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Install,
+                        "Selected packages are no longer available to install".to_owned(),
+                    ));
                     return Action::None;
                 }
                 self.pending_install = Some(PackageActionPlan { manager_groups });
@@ -439,13 +443,15 @@ impl Finding {
                     return Action::None;
                 }
                 let Some((initial_manager, _)) = plan.manager_groups.first() else {
-                    info.last_install_error =
-                        Some("The install plan does not contain any packages".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Install,
+                        "The install plan does not contain any packages".to_owned(),
+                    ));
                     return Action::None;
                 };
 
                 info.is_installing = true;
-                info.last_install_error = None;
+                info.last_operation_notice = None;
                 info.install_logs.clear();
                 info.install_progress = Some((
                     0,
@@ -507,9 +513,20 @@ impl Finding {
             Message::InstallPackagesResult(outcome) => {
                 info.is_installing = false;
                 info.install_progress = None;
+                info.last_operation_notice = shared::OperationNotice::from_outcome(&outcome);
+                if let Some(notice) = &info.last_operation_notice {
+                    log::error!(
+                        "Install packages {}: {}",
+                        if notice.is_stopped() {
+                            "stopped"
+                        } else {
+                            "failed"
+                        },
+                        shared::operation_notice_message(notice).unwrap_or_default()
+                    );
+                }
                 if outcome.is_success() {
                     info.selected_packages.clear();
-                    info.last_install_error = None;
                     if self.plan_from_install_by_name {
                         self.install_name_query.clear();
                         self.install_name_error = None;
@@ -522,14 +539,15 @@ impl Finding {
                     };
                     Action::PackageOperationFinished { outcome, follow_up }
                 } else {
-                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
-                    log::error!("Failed to install packages: {}", error);
-                    info.last_install_error = Some(error);
                     Action::PackageOperationFinished {
                         outcome,
                         follow_up: Task::none(),
                     }
                 }
+            }
+            Message::DismissOperationNotice => {
+                info.last_operation_notice = None;
+                Action::None
             }
         }
     }
@@ -1155,12 +1173,15 @@ impl Finding {
             .spacing(12)
             .align_y(iced::Alignment::Center);
 
-        if let Some(error) = &info.last_install_error {
+        if let Some(notice) = &info.last_operation_notice {
             column![
                 actions_row,
-                text(format!("Install failed: {error}"))
-                    .size(13)
-                    .style(theme::text_error)
+                shared::operation_notice_card(
+                    notice,
+                    catalog,
+                    Message::CopyInspectorText,
+                    Message::DismissOperationNotice,
+                )
             ]
             .spacing(8)
             .into()
@@ -1595,8 +1616,11 @@ mod tests {
         assert!(finding.pending_install.is_none());
         assert!(!info.is_installing);
         assert_eq!(
-            info.last_install_error.as_deref(),
-            Some("Selected packages are no longer available to install")
+            info.last_operation_notice,
+            Some(shared::OperationNotice::failed(
+                PackageAction::Install,
+                "Selected packages are no longer available to install".to_owned(),
+            ))
         );
     }
 
@@ -2077,5 +2101,88 @@ mod tests {
         assert_eq!(info.request_generation, 1);
         assert_eq!(info.searching_managers.get(&manager), Some(&1));
         assert_eq!(finding.last_search_query, "ripgrep");
+    }
+
+    fn install_outcome(cancelled: bool, error: Option<&str>) -> OperationOutcome {
+        OperationOutcome {
+            action: PackageAction::Install,
+            completed_packages: if cancelled { 1 } else { 0 },
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: (!cancelled).then(|| manager_id("builtin:apt")),
+            error: error.map(str::to_owned),
+            cancelled,
+            manager_outcomes: Vec::new(),
+            scope: PackageScope::System,
+        }
+    }
+
+    #[test]
+    fn cancelled_install_outcome_is_not_reported_as_a_failure() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo {
+            is_installing: true,
+            ..FindingInfo::default()
+        };
+
+        let _ = finding.update(
+            Message::InstallPackagesResult(install_outcome(
+                true,
+                Some("pkexec authentication was dismissed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(notice.is_stopped());
+        let headline = shared::operation_notice_headline(
+            notice,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+        assert_eq!(headline, "Install stopped after 1 of 2 packages");
+        assert!(!headline.to_lowercase().contains("fail"));
+    }
+
+    #[test]
+    fn failed_install_outcome_names_the_manager_and_can_be_dismissed() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo {
+            is_installing: true,
+            ..FindingInfo::default()
+        };
+
+        let _ = finding.update(
+            Message::InstallPackagesResult(install_outcome(
+                false,
+                Some("Failed to install packages from builtin:apt: package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(!notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(
+                notice,
+                &crate::manager_catalog::ManagerCatalog::builtin()
+            ),
+            "APT: install failed"
+        );
+
+        assert!(matches!(
+            finding.update(
+                Message::DismissOperationNotice,
+                &updater_core::Config::default(),
+                &mut info,
+                &crate::manager_catalog::ManagerCatalog::builtin(),
+            ),
+            Action::None
+        ));
+        assert!(info.last_operation_notice.is_none());
     }
 }
