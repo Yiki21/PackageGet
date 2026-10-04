@@ -119,8 +119,6 @@ pub enum Message {
     Content(content::Message),
     /// Status panel message.
     StatusPanel(status_panel::Message),
-    /// Stop the active operation before its next manager starts.
-    CancelActiveOperation,
     /// Show or hide the Activity Center.
     ToggleActivityCenter,
     /// Clear the bounded operation history.
@@ -279,7 +277,14 @@ impl App {
     /// Handles one app message and returns follow-up tasks.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let at = Instant::now();
-        let is_animation_message = matches!(&message, Message::StatusPanel(_));
+        // `StopOperation` changes panel state that the synced label must
+        // reflect, so it is routed like an ordinary message rather than an
+        // animation-only tick.
+        let is_animation_message = matches!(
+            &message,
+            Message::StatusPanel(panel_msg)
+                if !matches!(panel_msg, status_panel::Message::StopOperation)
+        );
         let task = if let Message::Shortcut(shortcut) = message {
             self.handle_shortcut(shortcut)
         } else {
@@ -373,6 +378,9 @@ impl App {
                 };
             }
             Message::StatusPanel(panel_msg) => {
+                if matches!(panel_msg, status_panel::Message::StopOperation) {
+                    self.cancel_active_operation();
+                }
                 self.status_panel.update(
                     panel_msg,
                     &self.installed_info,
@@ -380,12 +388,6 @@ impl App {
                     &self.finding_info,
                     &self.manager_catalog,
                 );
-            }
-            Message::CancelActiveOperation => {
-                if let Some(cancellation) = &self.active_operation_cancellation {
-                    cancellation.cancel();
-                    self.status_panel.request_cancellation();
-                }
             }
             Message::ToggleActivityCenter => {
                 self.activity_center_open = !self.activity_center_open;
@@ -826,6 +828,13 @@ impl App {
         )
     }
 
+    fn cancel_active_operation(&mut self) {
+        if let Some(cancellation) = &self.active_operation_cancellation {
+            cancellation.cancel();
+            self.status_panel.request_cancellation();
+        }
+    }
+
     fn record_operation(
         &mut self,
         outcome: &content::OperationOutcome,
@@ -1190,36 +1199,12 @@ impl App {
                 .size(11)
                 .style(crate::theme::text_on_surface_alt)
                 .width(Length::Fill),
-                iced::widget::button(iced::widget::text("Activity").size(11))
-                    .padding([3, 8])
-                    .style(crate::theme::secondary_button(true))
-                    .on_press(Message::ToggleActivityCenter),
                 iced::widget::button(
-                    iced::widget::text(
-                        if self
-                            .active_operation_cancellation
-                            .as_ref()
-                            .is_some_and(content::CancellationToken::is_cancelled)
-                        {
-                            "Stopping..."
-                        } else {
-                            "Stop Operation"
-                        },
-                    )
-                    .size(11),
+                    iced::widget::text(status_panel::FOOTER_HISTORY_LABEL).size(11)
                 )
                 .padding([3, 8])
-                .style(crate::theme::secondary_button(
-                    self.active_operation_cancellation
-                        .as_ref()
-                        .is_some_and(|token| !token.is_cancelled())
-                ))
-                .on_press_maybe(
-                    self.active_operation_cancellation
-                        .as_ref()
-                        .is_some_and(|token| !token.is_cancelled())
-                        .then_some(Message::CancelActiveOperation)
-                ),
+                .style(crate::theme::secondary_button(true))
+                .on_press(Message::ToggleActivityCenter),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),

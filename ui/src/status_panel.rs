@@ -34,6 +34,8 @@ pub struct StatusPanel {
     activity_phase: f32,
     /// Whether any package-manager work is currently active.
     is_active: bool,
+    /// Whether the active work belongs to a package operation this panel can stop.
+    is_stoppable: bool,
     /// Whether the active write should stop before the next manager starts.
     cancellation_requested: bool,
     /// Whether command output is expanded.
@@ -45,6 +47,46 @@ pub struct StatusPanel {
     /// Command output captured when the most recent operation completed.
     outcome_logs: Vec<String>,
 }
+
+/// Whether the active operation's writer should stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Stop the active operation before its next manager starts.
+    Stop,
+    /// Toggle the live command-output drawer.
+    ToggleOutput,
+    /// Dismiss the completed-operation summary.
+    DismissOutcome,
+}
+
+impl Action {
+    /// Message this action sends when pressed.
+    pub const fn message(self) -> Message {
+        match self {
+            Self::Stop => Message::StopOperation,
+            Self::ToggleOutput => Message::ToggleDetails,
+            Self::DismissOutcome => Message::DismissOutcome,
+        }
+    }
+
+    /// Whether this action is the panel's primary control for the active operation.
+    const fn is_primary(self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
+/// Label of the History button in the application footer.
+pub const FOOTER_HISTORY_LABEL: &str = "History";
+/// Label of the output drawer toggle while the drawer is collapsed.
+pub const SHOW_OUTPUT_LABEL: &str = "Show output";
+/// Label of the output drawer toggle while the drawer is expanded.
+pub const HIDE_OUTPUT_LABEL: &str = "Hide output";
+/// Label of the Stop action while the operation is still running.
+const STOP_LABEL: &str = "Stop";
+/// Label of the Stop action once cancellation is already requested.
+const STOPPING_LABEL: &str = "Stopping...";
+/// Label of the completed-operation dismiss action.
+const DISMISS_LABEL: &str = "Dismiss";
 
 /// Messages handled by the status panel.
 ///
@@ -58,6 +100,8 @@ pub enum Message {
     Sync(Instant),
     /// Toggle command-output details.
     ToggleDetails,
+    /// Stop the active operation before its next manager starts.
+    StopOperation,
     /// Dismiss the completed-operation summary.
     DismissOutcome,
 }
@@ -81,7 +125,9 @@ impl Message {
     fn at(self) -> Instant {
         match self {
             Message::Tick(at) | Message::Sync(at) => at,
-            Message::ToggleDetails | Message::DismissOutcome => Instant::now(),
+            Message::ToggleDetails | Message::StopOperation | Message::DismissOutcome => {
+                Instant::now()
+            }
         }
     }
 }
@@ -99,6 +145,7 @@ impl StatusPanel {
             progress_counts: None,
             activity_phase: 0.0,
             is_active: false,
+            is_stoppable: false,
             cancellation_requested: false,
             details_expanded: false,
             drawer_animation: Animation::new(0.0).duration(Duration::from_millis(180)),
@@ -197,9 +244,41 @@ impl StatusPanel {
         }
     }
 
+    /// Returns the actions the panel currently offers, in display order.
+    ///
+    /// Used by both `render` and its tests so the rendered action row cannot
+    /// drift from the asserted one.
+    pub fn actions(&self) -> impl Iterator<Item = Action> + '_ {
+        let stop = (self.is_active && self.is_stoppable).then_some(Action::Stop);
+        let toggle = (!self.command_logs.is_empty()).then_some(Action::ToggleOutput);
+        let dismiss = (self.outcome.is_some() && !self.is_active).then_some(Action::DismissOutcome);
+
+        stop.into_iter().chain(toggle).chain(dismiss)
+    }
+
+    /// Label rendered for one action in the panel's current state.
+    pub fn action_label(&self, action: Action) -> &'static str {
+        match action {
+            Action::Stop if self.cancellation_requested => STOPPING_LABEL,
+            Action::Stop => STOP_LABEL,
+            Action::ToggleOutput if self.details_expanded => HIDE_OUTPUT_LABEL,
+            Action::ToggleOutput => SHOW_OUTPUT_LABEL,
+            Action::DismissOutcome => DISMISS_LABEL,
+        }
+    }
+
+    /// Whether one action can be pressed in the panel's current state.
+    pub fn action_enabled(&self, action: Action) -> bool {
+        match action {
+            Action::Stop => !self.cancellation_requested,
+            Action::ToggleOutput | Action::DismissOutcome => true,
+        }
+    }
+
     /// Clears cancellation state when a new package operation starts.
     pub fn begin_package_operation(&mut self) {
         self.cancellation_requested = false;
+        self.is_stoppable = true;
     }
 
     /// Marks the active operation as terminating its current manager command.
@@ -210,6 +289,7 @@ impl StatusPanel {
     /// Records a package-operation result until it is dismissed or superseded.
     pub fn record_outcome(&mut self, outcome: OperationOutcome) {
         self.cancellation_requested = false;
+        self.is_stoppable = false;
         self.outcome_logs.clone_from(&self.command_logs);
         self.outcome = Some(outcome);
     }
@@ -503,28 +583,15 @@ fn render(panel: &StatusPanel) -> iced::Element<'_, Message> {
     .spacing(8)
     .align_y(iced::Alignment::Center);
 
-    if !panel.command_logs.is_empty() {
+    for action in panel.actions() {
+        let enabled = panel.action_enabled(action);
         status_actions = status_actions.push(
             button(
-                text(if panel.details_expanded {
-                    "Hide activity"
-                } else {
-                    "Activity"
-                })
-                .size(12),
+                text(panel.action_label(action)).size(if action.is_primary() { 13 } else { 12 }),
             )
-            .padding([5, 9])
-            .style(crate::theme::secondary_button(true))
-            .on_press(Message::ToggleDetails),
-        );
-    }
-
-    if panel.outcome.is_some() && !panel.is_active {
-        status_actions = status_actions.push(
-            button(text("Dismiss").size(12))
-                .padding([5, 9])
-                .style(crate::theme::secondary_button(true))
-                .on_press(Message::DismissOutcome),
+            .padding(if action.is_primary() { [6, 12] } else { [5, 9] })
+            .style(crate::theme::secondary_button(enabled))
+            .on_press_maybe(enabled.then_some(action.message())),
         );
     }
 
@@ -671,6 +738,19 @@ fn activity_capsule_bar<Message: 'static>(
 mod tests {
     use super::*;
 
+    fn active_updates_info(completed: usize, total: usize, package: &str) -> UpdatesInfo {
+        UpdatesInfo {
+            is_updating: true,
+            update_progress: Some((
+                completed,
+                total,
+                ManagerId::parse("builtin:cargo").unwrap(),
+                package.to_owned(),
+            )),
+            ..UpdatesInfo::default()
+        }
+    }
+
     #[test]
     fn cancellation_status_describes_the_manager_boundary() {
         let now = Instant::now();
@@ -700,5 +780,78 @@ mod tests {
 
         assert_eq!(panel.status_label, "Stopping current manager...");
         assert!(panel.cancellation_requested);
+    }
+
+    #[test]
+    fn stop_action_is_offered_while_active_and_absent_when_idle() {
+        let now = Instant::now();
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+        let updates = active_updates_info(1, 3, "firefox");
+
+        let mut panel = StatusPanel::new(now);
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert!(
+            !panel.actions().any(|action| action == Action::Stop),
+            "a read-only scan is not stoppable"
+        );
+
+        panel.begin_package_operation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+        let actions: Vec<_> = panel.actions().collect();
+
+        assert!(actions.contains(&Action::Stop));
+        assert_eq!(panel.action_label(Action::Stop), "Stop");
+        assert!(matches!(Action::Stop.message(), Message::StopOperation));
+        assert!(panel.action_enabled(Action::Stop));
+
+        panel.request_cancellation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert_eq!(panel.action_label(Action::Stop), "Stopping...");
+        assert!(!panel.action_enabled(Action::Stop));
+
+        let mut idle = StatusPanel::new(now);
+        idle.update(
+            Message::Sync(now),
+            &installed,
+            &UpdatesInfo::default(),
+            &finding,
+            &catalog,
+        );
+
+        assert!(!idle.actions().any(|action| action == Action::Stop));
+        assert_eq!(idle.actions().count(), 0);
+    }
+
+    #[test]
+    fn visible_action_labels_are_unique_per_screen_state() {
+        let now = Instant::now();
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+        let updates = active_updates_info(1, 3, "firefox");
+
+        let mut panel = StatusPanel::new(now);
+        panel.begin_package_operation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        let labels: Vec<_> = panel
+            .actions()
+            .map(|action| panel.action_label(action))
+            .collect();
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+
+        assert_eq!(labels.len(), unique.len(), "duplicate labels: {labels:?}");
+        // The footer's history button must not share a label with any panel
+        // control, since both are on screen during an operation.
+        assert!(!labels.contains(&FOOTER_HISTORY_LABEL));
+        assert_eq!(panel.action_label(Action::ToggleOutput), SHOW_OUTPUT_LABEL);
+
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert_eq!(panel.action_label(Action::Stop), "Stop");
     }
 }
