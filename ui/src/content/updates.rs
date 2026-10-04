@@ -9,6 +9,7 @@ use updater_manager_api::{
 };
 
 use crate::{
+    activity,
     content::InstalledInfo,
     content::errors::{ManagerErrors, apply_manager_counted_items_result},
     content::shared::{self, ManagerSectionStyle, PackageSelectionKey},
@@ -181,6 +182,8 @@ pub struct UpdatesInfo {
     /// [`RefreshMode`] of each in-flight updates request, so a privileged
     /// metadata sync stays traceable to the action that asked for it.
     pub refresh_modes: HashMap<ManagerId, RefreshMode>,
+    /// Time of the last successful check per manager, in RFC 3339.
+    pub checked_at: HashMap<ManagerId, String>,
     /// Last allocated updates-load request generation.
     pub request_generation: u64,
     /// Whether initial per-manager counts are loading.
@@ -224,6 +227,53 @@ impl UpdatesInfo {
         self.selected_managers.iter().any(|manager| {
             self.init_errors.contains_key(manager) || self.load_errors.contains_key(manager)
         })
+    }
+
+    /// Whether the most recent check of `manager` failed.
+    fn has_error(&self, manager: &ManagerId) -> bool {
+        self.load_errors.contains_key(manager) || self.init_errors.contains_key(manager)
+    }
+
+    /// Updates count that still reflects a successful check.
+    ///
+    /// A failed source keeps its previous count in [`Self::updates_by_manager`]
+    /// so it can be shown as last known, but it must not be presented as a
+    /// current total.
+    pub fn current_update_count(&self) -> usize {
+        self.updates_by_manager
+            .iter()
+            .filter(|(manager, _)| !self.has_error(manager))
+            .map(|(_, (count, _))| *count)
+            .sum()
+    }
+
+    /// Stamps `manager` as successfully checked at `checked_at`.
+    pub fn mark_checked(&mut self, manager: ManagerId, checked_at: String) {
+        self.checked_at.insert(manager, checked_at);
+    }
+
+    /// Oldest successful check among `managers`, as its RFC 3339 timestamp.
+    ///
+    /// [`crate::activity::now_timestamp`] emits fixed-width UTC timestamps, so
+    /// comparing the strings orders them chronologically.
+    fn oldest_checked_at<'a>(
+        &'a self,
+        managers: impl Iterator<Item = &'a ManagerId>,
+    ) -> Option<&'a str> {
+        managers
+            .filter_map(|manager| self.checked_at.get(manager).map(String::as_str))
+            .min()
+    }
+
+    /// Formats an RFC 3339 check time as a local `HH:MM` label.
+    fn checked_at_label(checked_at: &str) -> Option<String> {
+        chrono::DateTime::parse_from_rfc3339(checked_at)
+            .ok()
+            .map(|time| {
+                time.with_timezone(&chrono::Local)
+                    .format("%H:%M")
+                    .to_string()
+            })
     }
 }
 
@@ -324,6 +374,9 @@ impl Updates {
                 }
                 info.loading_updates.remove(&pm_type);
                 info.refresh_modes.remove(&pm_type);
+                if result.is_ok() {
+                    info.mark_checked(pm_type.clone(), activity::now_timestamp());
+                }
                 apply_manager_counted_items_result(
                     &mut info.updates_by_manager,
                     &mut info.load_errors,
@@ -908,11 +961,7 @@ impl Updates {
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row};
 
-        let update_count: usize = info
-            .updates_by_manager
-            .values()
-            .map(|(count, _)| *count)
-            .sum();
+        let update_count = info.current_update_count();
         let configured_managers = shared::configured_managers_with_capability(
             pm_config,
             catalog,
@@ -978,6 +1027,20 @@ impl Updates {
         };
         let mut summary_items = vec![
             (format!("{update_count} updates"), theme::colors::UPDATES),
+            (
+                info.oldest_checked_at(configured_updates_managers.iter())
+                    .map_or_else(
+                        || "Not checked yet".to_owned(),
+                        |checked_at| {
+                            format!(
+                                "Last checked {}",
+                                UpdatesInfo::checked_at_label(checked_at)
+                                    .unwrap_or_else(|| checked_at.to_owned())
+                            )
+                        },
+                    ),
+                theme::colors::ON_SURFACE_MUTED,
+            ),
             (source_scope, theme::colors::ON_SURFACE_MUTED),
             (
                 format!("{} packages selected", info.selected_packages.len()),
@@ -1313,11 +1376,7 @@ impl Updates {
     ) -> iced::Element<'a, Message> {
         let is_loading = info.loading_updates.contains_key(&manager);
         let filtered_packages = self.filter_and_sort_updates(packages, info.sort_by);
-        let subtitle = if is_loading {
-            "(Loading...)".to_owned()
-        } else {
-            format!("({} updates)", count)
-        };
+        let subtitle = self.source_subtitle(info, &manager, count, is_loading);
 
         let body = (!filtered_packages.is_empty()).then(|| {
             iced::widget::column(
@@ -1345,6 +1404,38 @@ impl Updates {
             Message::CopyInspectorText,
             body,
         )
+    }
+
+    /// Subtitle for one updates source header.
+    ///
+    /// A source whose last check failed keeps its previous count for context,
+    /// but labels it as last known so it cannot read as current, and reports
+    /// the time of its last successful check when there is one.
+    fn source_subtitle(
+        &self,
+        info: &UpdatesInfo,
+        manager: &ManagerId,
+        count: usize,
+        is_loading: bool,
+    ) -> String {
+        if is_loading {
+            return "(Loading...)".to_owned();
+        }
+        if info.has_error(manager) {
+            return if count == 0 {
+                "(last known: none)".to_owned()
+            } else {
+                format!("(last known: {count})")
+            };
+        }
+        let checked = info
+            .checked_at
+            .get(manager)
+            .and_then(|checked_at| UpdatesInfo::checked_at_label(checked_at));
+        match checked {
+            Some(checked) => format!("({count} updates · checked {checked})"),
+            None => format!("({count} updates)"),
+        }
     }
 
     fn filter_and_sort_updates<'a>(
@@ -2421,6 +2512,125 @@ mod tests {
                 .as_ref()
                 .map(UpdatePlan::package_count),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn successful_load_records_checked_at() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let config = configured(&[&cargo]);
+        let catalog = ManagerCatalog::builtin();
+        info.loading_updates.insert(cargo.clone(), 1);
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 1,
+                manager: cargo.clone(),
+                result: Ok(vec![update(&cargo, "cargo-edit")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        let checked_at = info
+            .checked_at
+            .get(&cargo)
+            .expect("a successful load stamps the source as checked");
+        assert!(chrono::DateTime::parse_from_rfc3339(checked_at).is_ok());
+        assert_eq!(info.current_update_count(), 1);
+        assert_eq!(
+            updates.source_subtitle(&info, &cargo, 1, false),
+            format!(
+                "(1 updates · checked {})",
+                UpdatesInfo::checked_at_label(checked_at).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn failed_refresh_marks_count_as_last_known_and_drops_out_of_the_total() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let config = configured(&[&cargo, &npm]);
+        let catalog = ManagerCatalog::builtin();
+        info.loading_updates.insert(cargo.clone(), 1);
+        info.loading_updates.insert(npm.clone(), 2);
+
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 1,
+                manager: cargo.clone(),
+                result: Ok(vec![
+                    update(&cargo, "cargo-edit"),
+                    update(&cargo, "cargo-nextest"),
+                    update(&cargo, "cargo-audit"),
+                ]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 2,
+                manager: npm.clone(),
+                result: Ok(vec![update(&npm, "typescript")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert_eq!(info.current_update_count(), 4);
+
+        info.loading_updates.insert(cargo.clone(), 3);
+        let _ = updates.update(
+            Message::LoadUpdatesResult {
+                request_id: 3,
+                manager: cargo.clone(),
+                result: Err("Failed to load updates".to_owned()),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert_eq!(
+            info.updates_by_manager.get(&cargo).map(|(count, _)| *count),
+            Some(3),
+            "the previous count is kept for context"
+        );
+        assert_eq!(
+            info.current_update_count(),
+            1,
+            "a stale count must not be presented as current"
+        );
+        assert_eq!(
+            updates.source_subtitle(&info, &cargo, 3, false),
+            "(last known: 3)"
+        );
+        assert_eq!(
+            updates.source_subtitle(&info, &npm, 1, false),
+            format!(
+                "(1 updates · checked {})",
+                UpdatesInfo::checked_at_label(info.checked_at.get(&npm).unwrap()).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn loading_source_subtitle_hides_the_last_known_count() {
+        let updates = Updates::default();
+        let info = UpdatesInfo::default();
+        let cargo = manager_id("builtin:cargo");
+
+        assert_eq!(
+            updates.source_subtitle(&info, &cargo, 3, true),
+            "(Loading...)"
         );
     }
 

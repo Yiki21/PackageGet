@@ -627,6 +627,8 @@ impl App {
                         Ok(updates) => {
                             self.updates_info.init_errors.remove(&manager);
                             self.updates_info
+                                .mark_checked(manager.clone(), crate::activity::now_timestamp());
+                            self.updates_info
                                 .updates_by_manager
                                 .insert(manager, (updates.len(), updates));
                         }
@@ -1056,12 +1058,7 @@ impl App {
             return crate::shortcut::capture(page.into());
         }
 
-        let update_count = self
-            .updates_info
-            .updates_by_manager
-            .values()
-            .map(|(count, _)| *count)
-            .sum();
+        let update_count = self.updates_info.current_update_count();
         let sidebar_summary = sidebar::Summary {
             update_count,
             updates_loading: self.updates_info.is_loading_count
@@ -1515,6 +1512,7 @@ impl App {
                 self.updates_info.selected_packages.clear();
                 self.updates_info.loading_updates.clear();
                 self.updates_info.refresh_modes.clear();
+                self.updates_info.checked_at.clear();
                 self.updates_info.load_errors.clear();
                 self.updates_info.init_errors.clear();
                 self.updates_info.init_logs.clear();
@@ -1575,6 +1573,9 @@ impl App {
             .retain(|manager, _| !affected.contains(manager));
         self.updates_info
             .refresh_modes
+            .retain(|manager, _| !affected.contains(manager));
+        self.updates_info
+            .checked_at
             .retain(|manager, _| !affected.contains(manager));
         self.updates_info
             .load_errors
@@ -2156,6 +2157,28 @@ mod tests {
         );
         assert!(!app.installed_info.is_loading_count);
         assert!(!app.updates_info.is_loading_count);
+    }
+
+    #[test]
+    fn successful_init_updates_count_stamps_checked_at() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        app.package_data_generation = 2;
+        app.updates_info.is_loading_count = true;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation: 2,
+            manager: manager.clone(),
+            result: Ok(Vec::new()),
+        });
+
+        let checked_at = app
+            .updates_info
+            .checked_at
+            .get(&manager)
+            .expect("a successful check records its time");
+        assert!(chrono::DateTime::parse_from_rfc3339(checked_at).is_ok());
+        assert_eq!(app.updates_info.current_update_count(), 0);
     }
 
     #[test]
