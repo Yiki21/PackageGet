@@ -133,6 +133,8 @@ pub enum Message {
     RemovePackagesResult(OperationOutcome),
     /// Dismiss the last package-operation notice.
     DismissOperationNotice,
+    /// Open the Package Managers page, where configuration is fixed.
+    OpenManagers,
 }
 
 /// Information about installed packages passed from app state
@@ -191,6 +193,8 @@ pub enum Action {
     CancellableRun(iced::Task<Message>, CancellationToken),
     /// Complete a package operation and refresh managers that succeeded.
     PackageOperationFinished { outcome: OperationOutcome },
+    /// Switch the visible page.
+    Navigate(crate::content::ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -612,6 +616,7 @@ impl Installed {
                 info.last_operation_notice = None;
                 Action::None
             }
+            Message::OpenManagers => Action::Navigate(crate::content::ActiveContentPage::Health),
         }
     }
 
@@ -880,7 +885,13 @@ impl Installed {
             ]),
             toolbar,
             self.batch_actions_view(info, catalog),
-            self.packages_list_view(info, catalog, show_inspector, inspector_drawer),
+            self.packages_list_view(
+                info,
+                shared::configured_managers(pm_config).len(),
+                catalog,
+                show_inspector,
+                inspector_drawer,
+            ),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -1004,11 +1015,18 @@ impl Installed {
     fn packages_list_view<'a>(
         &'a self,
         info: &'a InstalledInfo,
+        configured_managers: usize,
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable};
+
+        if let Some(empty) = shared::empty_state(configured_managers, info.selected_managers.len())
+        {
+            return shared::empty_state_view(empty, Message::OpenManagers)
+                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT));
+        }
 
         if !info.has_loading_count {
             return shared::centered_message(if info.is_loading_count {
@@ -1956,5 +1974,23 @@ mod tests {
             &ManagerCatalog::builtin(),
         );
         assert!(info.last_operation_notice.is_none());
+    }
+
+    #[test]
+    fn open_managers_navigates_to_the_managers_page() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo::default();
+
+        let action = installed.update(
+            Message::OpenManagers,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(
+            action,
+            Action::Navigate(crate::content::ActiveContentPage::Health)
+        ));
     }
 }

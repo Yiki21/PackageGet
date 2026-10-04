@@ -87,6 +87,8 @@ pub enum Action {
     Run(iced::Task<Message>),
     /// Cooperative package-operation task.
     CancellableRun(iced::Task<Message>, updater_core::CancellationToken),
+    /// Switch the visible page.
+    Navigate(ActiveContentPage),
     /// Reload package data and run an optional page follow-up task.
     ReloadPackageData {
         /// Package-data reload scope.
@@ -222,6 +224,7 @@ impl Content {
                     installed::Action::CancellableRun(task, cancellation) => {
                         Action::CancellableRun(task.map(Message::Installed), cancellation)
                     }
+                    installed::Action::Navigate(page) => Action::Navigate(page),
                     installed::Action::None => Action::None,
                     installed::Action::PackageOperationFinished { outcome } => {
                         Action::PackageOperationFinished {
@@ -240,6 +243,7 @@ impl Content {
                     updates::Action::CancellableRun(task, cancellation) => {
                         Action::CancellableRun(task.map(Message::Updates), cancellation)
                     }
+                    updates::Action::Navigate(page) => Action::Navigate(page),
                     updates::Action::PackageOperationFinished { outcome } => {
                         Action::PackageOperationFinished {
                             outcome,
@@ -258,6 +262,7 @@ impl Content {
                     finding::Action::CancellableRun(task, cancellation) => {
                         Action::CancellableRun(task.map(Message::Finding), cancellation)
                     }
+                    finding::Action::Navigate(page) => Action::Navigate(page),
                     finding::Action::PackageOperationFinished { outcome, follow_up } => {
                         Action::PackageOperationFinished {
                             outcome,

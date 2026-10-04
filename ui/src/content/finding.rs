@@ -116,6 +116,8 @@ pub enum Message {
     InstallPackagesResult(OperationOutcome),
     /// Dismiss the last package-operation notice.
     DismissOperationNotice,
+    /// Open the Package Managers page, where configuration is fixed.
+    OpenManagers,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -156,6 +158,8 @@ pub enum Action {
         outcome: OperationOutcome,
         follow_up: iced::Task<Message>,
     },
+    /// Switch the visible page.
+    Navigate(crate::content::ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -549,6 +553,7 @@ impl Finding {
                 info.last_operation_notice = None;
                 Action::None
             }
+            Message::OpenManagers => Action::Navigate(crate::content::ActiveContentPage::Health),
         }
     }
 
@@ -835,7 +840,13 @@ impl Finding {
             self.install_by_name_view(info, pm_config, catalog),
             self.batch_actions_view(info, catalog),
             self.install_confirmation_view(catalog),
-            self.search_results_view(info, catalog, show_inspector, inspector_drawer),
+            self.search_results_view(
+                info,
+                shared::configured_managers(pm_config).len(),
+                catalog,
+                show_inspector,
+                inspector_drawer,
+            ),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -845,14 +856,17 @@ impl Finding {
     fn search_results_view<'a>(
         &'a self,
         info: &'a FindingInfo,
+        configured_managers: usize,
         catalog: &'a crate::manager_catalog::ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable};
 
-        if info.selected_managers.is_empty() {
-            return shared::centered_message("Please select package managers to search from");
+        if let Some(empty) = shared::empty_state(configured_managers, info.selected_managers.len())
+        {
+            return shared::empty_state_view(empty, Message::OpenManagers)
+                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT));
         }
 
         if self.last_search_query.is_empty() {
@@ -2184,5 +2198,23 @@ mod tests {
             Action::None
         ));
         assert!(info.last_operation_notice.is_none());
+    }
+
+    #[test]
+    fn open_managers_navigates_to_the_managers_page() {
+        let mut finding = Finding::default();
+        let mut info = FindingInfo::default();
+
+        let action = finding.update(
+            Message::OpenManagers,
+            &updater_core::Config::default(),
+            &mut info,
+            &crate::manager_catalog::ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(
+            action,
+            Action::Navigate(crate::content::ActiveContentPage::Health)
+        ));
     }
 }

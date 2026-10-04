@@ -1166,6 +1166,83 @@ where
         .into()
 }
 
+/// Headline for a page with no configured package managers.
+pub const NO_MANAGERS_CONFIGURED: &str = "No package managers are configured";
+
+/// Hint pointing at where package managers are configured.
+pub const NO_MANAGERS_HINT: &str =
+    "Open the Package Managers page and click \"Scan $PATH\" to discover available managers.";
+
+/// Hint for a page whose sources exist but none of them is selected.
+pub const NO_SOURCE_SELECTED_HINT: &str = "Select at least one source above";
+
+/// Why a package page has no list to render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyState {
+    /// No package manager is configured, so there is nothing to select.
+    NoManagersConfigured,
+    /// Managers are configured but none is ticked as a source.
+    NoSourceSelected,
+}
+
+/// Resolves the empty state a package page should show.
+///
+/// `configured` is the number of configured package managers and `selected`
+/// the number of those ticked as sources. Nothing configured is reported as
+/// such rather than asking the user to select something that does not exist.
+#[must_use]
+pub fn empty_state(configured: usize, selected: usize) -> Option<EmptyState> {
+    if configured == 0 {
+        Some(EmptyState::NoManagersConfigured)
+    } else if selected == 0 {
+        Some(EmptyState::NoSourceSelected)
+    } else {
+        None
+    }
+}
+
+/// Renders the empty state for a package page.
+///
+/// Returns `None` when the page has configured and selected sources, so the
+/// caller keeps rendering its normal content. `open_managers` navigates to
+/// the Package Managers page, which is where the empty configuration is fixed.
+pub fn empty_state_view<'a, Message>(
+    state: EmptyState,
+    open_managers: Message,
+) -> Option<Element<'a, Message>>
+where
+    Message: Clone + 'a,
+{
+    match state {
+        EmptyState::NoSourceSelected => Some(centered_message(NO_SOURCE_SELECTED_HINT)),
+        EmptyState::NoManagersConfigured => Some(
+            container(
+                column![
+                    text(NO_MANAGERS_CONFIGURED)
+                        .size(16)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(theme::text_on_surface),
+                    text(NO_MANAGERS_HINT)
+                        .size(13)
+                        .style(theme::text_on_surface_muted),
+                    button(text("Open Managers").size(13).font(theme::FONT_SEMIBOLD))
+                        .padding([7, 12])
+                        .style(theme::secondary_button(true))
+                        .on_press(open_managers),
+                ]
+                .spacing(theme::spacing::MD)
+                .align_x(iced::Alignment::Center)
+                .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into(),
+        ),
+    }
+}
+
 /// Separates the readable summary of a described error from its diagnostic detail.
 const ERROR_DETAIL_SEPARATOR: &str = "\n\n";
 
@@ -1770,8 +1847,8 @@ mod tests {
 
     use super::ManagerCatalog;
     use super::{
-        DesktopOpenCommand, DesktopTargetKind, OperationNotice, PackageDetailState,
-        desktop_open_commands, is_installable_search_result, is_stopped_waiting_error,
+        DesktopOpenCommand, DesktopTargetKind, EmptyState, OperationNotice, PackageDetailState,
+        desktop_open_commands, empty_state, is_installable_search_result, is_stopped_waiting_error,
         operation_notice_headline, operation_notice_message, selection_key, stopped_waiting_error,
         validate_http_url,
     };
@@ -2031,6 +2108,14 @@ mod tests {
         assert!(is_stopped_waiting_error(&stopped_waiting_error("Snap")));
         assert!(!is_stopped_waiting_error("network unreachable"));
         assert!(!is_stopped_waiting_error("Failed to search in Snap"));
+    }
+
+    #[test]
+    fn empty_state_separates_missing_managers_from_missing_selection() {
+        assert_eq!(empty_state(0, 0), Some(EmptyState::NoManagersConfigured));
+        assert_eq!(empty_state(2, 0), Some(EmptyState::NoSourceSelected));
+        assert_eq!(empty_state(2, 1), None);
+        assert_eq!(empty_state(2, 2), None);
     }
 
     #[test]

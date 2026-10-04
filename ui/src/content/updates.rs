@@ -144,6 +144,8 @@ pub enum Message {
     PrepareFailedUpdateRetry,
     /// Dismiss the last package-operation notice.
     DismissOperationNotice,
+    /// Open the Package Managers page, where configuration is fixed.
+    OpenManagers,
 }
 
 /// Whether an updates load may run a privileged metadata sync.
@@ -288,6 +290,8 @@ pub enum Action {
     CancellableRun(iced::Task<Message>, CancellationToken),
     /// Complete a package operation and refresh managers that succeeded.
     PackageOperationFinished { outcome: OperationOutcome },
+    /// Switch the visible page.
+    Navigate(crate::content::ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -601,6 +605,7 @@ impl Updates {
                 info.last_operation_notice = None;
                 Action::None
             }
+            Message::OpenManagers => Action::Navigate(crate::content::ActiveContentPage::Health),
             Message::RefreshSelected => {
                 let selected: Vec<ManagerId> = info.selected_managers.iter().cloned().collect();
                 if info.is_updating
@@ -1077,6 +1082,25 @@ impl Updates {
             ));
         }
 
+        // The empty state reports configuration, not capability coverage, so
+        // "no managers are configured" only appears when that is literally true.
+        let updates_list: iced::Element<'_, Message> = if let Some(empty) = shared::empty_state(
+            shared::configured_managers(pm_config).len(),
+            info.selected_managers.len(),
+        ) {
+            shared::empty_state_view(empty, Message::OpenManagers)
+                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT))
+        } else {
+            self.updates_list_view(
+                info,
+                installed_info,
+                catalog,
+                show_inspector,
+                inspector_drawer,
+                selected_loading_sources,
+            )
+        };
+
         column![
             shared::page_header(
                 "Updates",
@@ -1089,14 +1113,7 @@ impl Updates {
             toolbar,
             self.batch_actions_view(info, pm_config, catalog),
             self.update_confirmation_view(catalog),
-            self.updates_list_view(
-                info,
-                installed_info,
-                catalog,
-                show_inspector,
-                inspector_drawer,
-                selected_loading_sources,
-            ),
+            updates_list,
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -1233,7 +1250,7 @@ impl Updates {
         }
 
         if info.selected_managers.is_empty() {
-            return shared::centered_message("Please select a package manager to view");
+            return shared::centered_message(shared::NO_SOURCE_SELECTED_HINT);
         }
 
         let filtered_managers: Vec<_> = info
@@ -2777,5 +2794,23 @@ mod tests {
             "APT: update failed"
         );
         assert!(info.failed_update_manager.is_some());
+    }
+
+    #[test]
+    fn open_managers_navigates_to_the_managers_page() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+
+        let action = updates.update(
+            Message::OpenManagers,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(
+            action,
+            Action::Navigate(crate::content::ActiveContentPage::Health)
+        ));
     }
 }
