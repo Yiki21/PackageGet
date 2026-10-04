@@ -16,6 +16,11 @@ const MAX_LINE_BYTES: usize = 2_048;
 const TAIL_LINE_COUNT: usize = 20;
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
+/// How long the runner keeps draining output after the direct child exits.
+/// A descendant that inherited the pipes can hold them open indefinitely.
+const OUTPUT_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
+const TRUNCATED_OUTPUT_NOTICE: &str =
+    "command output was truncated: a child process kept the output pipe open";
 const EXECUTABLE_BUSY_RETRIES: usize = 3;
 const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
@@ -170,6 +175,9 @@ async fn run_command_with_parser(
             }
         }
     };
+    // `Process::id` is only available while the direct child runs; the
+    // process group outlives it when descendants inherit the pipes.
+    let process_group = child.id();
     let stdout = child.stdout.take().ok_or_else(|| {
         ManagerError::new(
             ManagerErrorKind::Other,
@@ -196,6 +204,8 @@ async fn run_command_with_parser(
     let mut termination_error = None;
     let mut force_at = None;
     let mut forced = false;
+    let mut drain_deadline = None;
+    let mut output_truncated = false;
     // A privileged transaction runs as root behind `pkexec`. An unprivileged
     // sender cannot signal that process group, and if the GUI runs as root,
     // signalling it would interrupt a package database transaction, so the
@@ -225,42 +235,80 @@ async fn run_command_with_parser(
                     on_progress(CommandProgress::new(max_progress, None));
                 }
             }
-            _ = poll.tick(), if status.is_none() => {
-                status = child.try_wait().map_err(|error| {
-                    io_error("failed to query package manager command", error)
-                })?;
-                if status.is_some() {
+            _ = poll.tick() => {
+                if status.is_none() {
+                    status = child.try_wait().map_err(|error| {
+                        io_error("failed to query package manager command", error)
+                    })?;
+                    if status.is_some() {
+                        // The direct child exited but a descendant may still
+                        // hold the pipes open, so bound the remaining drain
+                        // instead of waiting for an end of file that may never
+                        // arrive.
+                        drain_deadline = Some(Instant::now() + OUTPUT_DRAIN_DEADLINE);
+                        continue;
+                    }
+
+                    if !cancellation_requested && is_cancelled() {
+                        cancellation_requested = true;
+                        if !privileged {
+                            force_at = Some(Instant::now() + TERMINATION_GRACE_PERIOD);
+                            if let Err(error) = terminate_process_tree(&mut child, false).await {
+                                termination_error = Some(error);
+                            }
+                        }
+                    } else if !privileged
+                        && !forced
+                        && force_at.is_some_and(|deadline| Instant::now() >= deadline)
+                    {
+                        forced = true;
+                        if let Err(error) = terminate_process_tree(&mut child, true).await {
+                            termination_error.get_or_insert(error);
+                        }
+                    }
                     continue;
                 }
 
-                if !cancellation_requested && is_cancelled() {
-                    cancellation_requested = true;
-                    if !privileged {
-                        force_at = Some(Instant::now() + TERMINATION_GRACE_PERIOD);
-                        if let Err(error) = terminate_process_tree(&mut child, false).await {
-                            termination_error = Some(error);
-                        }
-                    }
-                } else if !privileged
-                    && !forced
-                    && force_at.is_some_and(|deadline| Instant::now() >= deadline)
-                {
-                    forced = true;
-                    if let Err(error) = terminate_process_tree(&mut child, true).await {
-                        termination_error.get_or_insert(error);
-                    }
+                let cancelled = !cancellation_requested && is_cancelled();
+                let drain_expired =
+                    drain_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+                if !cancelled && !drain_expired {
+                    continue;
                 }
+
+                cancellation_requested |= cancelled;
+                output_truncated = true;
+                output_open = false;
+                if !privileged
+                    && let Some(pid) = process_group
+                    && let Err(error) = terminate_process_group(pid, true).await
+                {
+                    termination_error.get_or_insert(error);
+                }
+                if tail_logs.len() == TAIL_LINE_COUNT {
+                    tail_logs.pop_front();
+                }
+                tail_logs.push_back(TRUNCATED_OUTPUT_NOTICE.to_owned());
+                on_progress(CommandProgress::new(
+                    max_progress,
+                    Some(TRUNCATED_OUTPUT_NOTICE.to_owned()),
+                ));
             }
         }
     }
 
-    let stdout_result = stdout_task.await;
-    let stderr_result = stderr_task.await;
     let cancellation_delivered =
         cancellation_requested && !privileged && termination_error.is_none();
-    if !cancellation_delivered {
-        join_reader(stdout_result)?;
-        join_reader(stderr_result)?;
+    if output_truncated || cancellation_delivered {
+        // A descendant still holds the pipes, so the readers never see an end
+        // of file; abort them instead of waiting for one.
+        stdout_task.abort();
+        stderr_task.abort();
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+    } else {
+        join_reader(stdout_task.await)?;
+        join_reader(stderr_task.await)?;
     }
 
     let status = match status {
@@ -306,6 +354,11 @@ async fn terminate_process_tree(child: &mut Child, force: bool) -> io::Result<()
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("child PID is unavailable"))?;
+    terminate_process_group(pid, force).await
+}
+
+#[cfg(unix)]
+async fn terminate_process_group(pid: u32, force: bool) -> io::Result<()> {
     let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
     let result = unsafe { libc::kill(-(pid as i32), signal) };
     if result == 0 {
@@ -321,10 +374,7 @@ async fn terminate_process_tree(child: &mut Child, force: bool) -> io::Result<()
 }
 
 #[cfg(windows)]
-async fn terminate_process_tree(child: &mut Child, _force: bool) -> io::Result<()> {
-    let pid = child
-        .id()
-        .ok_or_else(|| io::Error::other("child PID is unavailable"))?;
+async fn terminate_process_group(pid: u32, _force: bool) -> io::Result<()> {
     let status = tokio::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status()
@@ -334,6 +384,19 @@ async fn terminate_process_tree(child: &mut Child, _force: bool) -> io::Result<(
     } else {
         Err(io::Error::other(format!("taskkill exited with {status}")))
     }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn terminate_process_group(_pid: u32, _force: bool) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn terminate_process_tree(child: &mut Child, force: bool) -> io::Result<()> {
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("child PID is unavailable"))?;
+    terminate_process_group(pid, force).await
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -610,6 +673,66 @@ mod tests {
         .await;
 
         let error = result.expect_err("command should be cancelled");
+        assert_eq!(error.kind(), ManagerErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn surviving_grandchild_does_not_block_the_runner_past_the_drain_deadline() {
+        let mut lines = Vec::new();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            run_command_with_progress(
+                &CommandSpec::new("sh").args(["-c", "sleep 600 &"]),
+                |progress| lines.extend(progress.into_parts().1),
+            ),
+        )
+        .await
+        .expect("a surviving grandchild must not keep the runner alive");
+
+        result.expect("the direct child exits successfully");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            lines.iter().any(|line| line == TRUNCATED_OUTPUT_NOTICE),
+            "truncated output must be reported: {lines:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_during_the_post_exit_drain_is_honoured() {
+        struct Cancellation(Arc<AtomicBool>);
+
+        impl ProgressSink for Cancellation {
+            fn emit(&self, _event: ProgressEvent) {}
+
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let request = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            request.store(true, Ordering::Release);
+        });
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            run_cancellable_command_with_progress(
+                &CommandSpec::new("sh").args(["-c", "sleep 600 &"]),
+                &Cancellation(cancelled),
+                |_| {},
+            ),
+        )
+        .await
+        .expect("cancellation during the post-exit drain must not hang");
+
+        let error = result.expect_err("cancelling the drain reports a cancellation");
         assert_eq!(error.kind(), ManagerErrorKind::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(5));
     }
