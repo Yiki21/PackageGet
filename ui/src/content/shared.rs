@@ -1896,31 +1896,6 @@ where
     notice.into()
 }
 
-/// Segmented button whose label is owned by the caller.
-pub fn segmented_button_owned<'a, Message>(
-    label: String,
-    selected: bool,
-    message: Message,
-) -> iced::widget::Button<'a, Message>
-where
-    Message: 'a + Clone,
-{
-    button(
-        text(label)
-            .size(12)
-            .font(if selected {
-                theme::FONT_SEMIBOLD
-            } else {
-                theme::FONT_REGULAR
-            })
-            .align_x(Alignment::Center),
-    )
-    .padding([7, 10])
-    .width(Length::Fill)
-    .style(theme::segmented_button(selected))
-    .on_press(message)
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};

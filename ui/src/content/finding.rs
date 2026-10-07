@@ -34,14 +34,10 @@ pub struct Finding {
     inspector_error: Option<String>,
     /// Frozen install plan waiting for confirmation.
     pending_install: Option<PackageActionPlan>,
-    /// Whether the frozen plan came from the install-by-name affordance.
+    /// Whether the frozen plan came from an install-by-name row.
     plan_from_install_by_name: bool,
-    /// Manager chosen for the install-by-name affordance.
-    install_name_manager: Option<ManagerId>,
-    /// Exact package name typed into the install-by-name affordance.
-    install_name_query: String,
-    /// Validation or resolution failure for the install-by-name affordance.
-    install_name_error: Option<String>,
+    /// Resolution failure per install-by-name row, keyed by its manager.
+    install_name_errors: HashMap<ManagerId, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,12 +81,8 @@ pub enum Message {
     TogglePackageSelection(ManagerId, String, bool),
     /// Select-all visible packages toggle message.
     ToggleSelectAll(bool),
-    /// Choose the manager used by the install-by-name affordance.
-    SelectInstallNameManager(ManagerId),
-    /// Install-by-name package-name change message.
-    InstallNameQueryChanged(String),
-    /// Freeze one exact manager package name into an install plan.
-    PrepareNamedInstall,
+    /// Freeze the submitted query, installed exactly by this manager, into an install plan.
+    PrepareNamedInstall(ManagerId),
     /// Abandon pending per-source searches and keep results already received.
     StopWaiting,
     /// Freeze the selected packages into an install plan.
@@ -248,8 +240,14 @@ impl Finding {
                     return Action::None;
                 }
 
-                // Search only in selected managers.
+                // Search only in selected managers; a configured source that
+                // installs by name still records a query with no searchable
+                // source selected, so the by-name rows can render it.
                 if info.selected_managers.is_empty() {
+                    if install_name_managers(pm_config, catalog).is_empty() {
+                        return Action::None;
+                    }
+                    self.record_submitted_query(info, &query);
                     return Action::None;
                 }
 
@@ -348,31 +346,20 @@ impl Finding {
                 }
                 Action::None
             }
-            Message::SelectInstallNameManager(pm_type) => {
-                if info.is_installing || self.pending_install.is_some() {
-                    return Action::None;
-                }
-                self.install_name_manager = Some(pm_type);
-                self.install_name_error = None;
-                Action::None
-            }
-            Message::InstallNameQueryChanged(query) => {
-                self.install_name_query = query;
-                self.install_name_error = None;
-                Action::None
-            }
-            Message::PrepareNamedInstall => {
+            Message::PrepareNamedInstall(manager) => {
                 if info.is_installing || self.pending_install.is_some() {
                     return Action::None;
                 }
                 info.last_operation_notice = None;
-                match self.named_install_plan(pm_config, catalog) {
+                match self.named_install_plan(&manager, pm_config, catalog) {
                     Ok(plan) => {
-                        self.install_name_error = None;
+                        self.install_name_errors.remove(&manager);
                         self.pending_install = Some(plan);
                         self.plan_from_install_by_name = true;
                     }
-                    Err(error) => self.install_name_error = Some(error),
+                    Err(error) => {
+                        self.install_name_errors.insert(manager, error);
+                    }
                 }
                 Action::None
             }
@@ -532,8 +519,7 @@ impl Finding {
                 if outcome.is_success() {
                     info.selected_packages.clear();
                     if self.plan_from_install_by_name {
-                        self.install_name_query.clear();
-                        self.install_name_error = None;
+                        self.install_name_errors.clear();
                     }
                     self.plan_from_install_by_name = false;
                     let follow_up = if self.last_search_query.is_empty() {
@@ -681,7 +667,7 @@ impl Finding {
         let result_count: usize = info.search_results.values().map(Vec::len).sum();
         let selected_sources = info.selected_managers.len();
         let can_search = !self.search_query.trim().is_empty()
-            && selected_sources > 0
+            && (selected_sources > 0 || !install_name_managers(pm_config, catalog).is_empty())
             && !info.is_installing
             && self.pending_install.is_none()
             && info.searching_managers.is_empty();
@@ -838,16 +824,9 @@ impl Finding {
                 ),
             ]),
             toolbar,
-            self.install_by_name_view(info, pm_config, catalog),
             self.batch_actions_view(info, catalog),
             self.install_confirmation_view(catalog),
-            self.search_results_view(
-                info,
-                shared::configured_managers(pm_config).len(),
-                catalog,
-                show_inspector,
-                inspector_drawer,
-            ),
+            self.search_results_view(info, pm_config, catalog, show_inspector, inspector_drawer),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -857,17 +836,38 @@ impl Finding {
     fn search_results_view<'a>(
         &'a self,
         info: &'a FindingInfo,
-        configured_managers: usize,
+        pm_config: &updater_core::Config,
         catalog: &'a crate::manager_catalog::ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable, text};
 
+        let configured_managers = shared::configured_managers(pm_config).len();
+        let named_install =
+            Self::named_install_section(self.named_install_rows(info, pm_config, catalog));
+
         if let Some(empty) = shared::empty_state(configured_managers, info.selected_managers.len())
         {
-            return shared::empty_state_view(empty, Message::OpenManagers)
-                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT));
+            match empty {
+                shared::EmptyState::NoManagersConfigured => {
+                    return shared::empty_state_view(empty, Message::OpenManagers).unwrap_or_else(
+                        || shared::centered_message(shared::NO_SOURCE_SELECTED_HINT),
+                    );
+                }
+                // A configured source that cannot search still installs the
+                // submitted query by name, so it is offered above the hint.
+                shared::EmptyState::NoSourceSelected => {
+                    let hint = shared::centered_message(shared::NO_SOURCE_SELECTED_HINT);
+                    return match named_install {
+                        Some(named_install) => column![named_install, hint]
+                            .spacing(20)
+                            .height(iced::Length::Fill)
+                            .into(),
+                        None => hint,
+                    };
+                }
+            }
         }
 
         let exact_lookup_hint =
@@ -921,8 +921,22 @@ impl Finding {
             }
         }));
 
-        if results_sections.is_empty() {
-            return shared::centered_message("No packages found");
+        match named_install {
+            Some(named_install) => {
+                if results_sections.is_empty() {
+                    results_sections.push(
+                        text("No packages found")
+                            .size(16)
+                            .style(theme::text_on_surface_muted)
+                            .into(),
+                    );
+                }
+                results_sections.push(named_install);
+            }
+            None if results_sections.is_empty() => {
+                return shared::centered_message("No packages found");
+            }
+            None => {}
         }
 
         let result_list = scrollable(column(results_sections).spacing(20))
@@ -1293,33 +1307,34 @@ impl Finding {
         .into()
     }
 
-    /// Builds the frozen install plan for one exact manager package name.
+    /// Builds the frozen install plan for the submitted query, installed
+    /// exactly by `manager`.
     ///
     /// # Errors
     ///
-    /// Returns a user-facing message when no manager can resolve the typed name.
+    /// Returns a user-facing message when `manager` cannot resolve the name.
     fn named_install_plan(
         &self,
+        manager: &ManagerId,
         pm_config: &updater_core::Config,
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Result<PackageActionPlan, String> {
-        let name = self.install_name_query.trim().to_owned();
+        let name = self.last_search_query.trim().to_owned();
         if name.is_empty() {
             return Err("Enter a package name to install".to_owned());
         }
-        let managers = install_name_managers(pm_config, catalog);
-        let manager = self
-            .install_name_manager
-            .clone()
-            .filter(|manager| managers.contains(manager))
-            .or_else(|| managers.first().cloned())
-            .ok_or_else(|| "No package manager can install by name".to_owned())?;
+        if !install_name_managers(pm_config, catalog).contains(manager) {
+            return Err(format!(
+                "{} cannot install by name",
+                catalog.display_name(manager)
+            ));
+        }
         let manager_config = pm_config
-            .manager(&manager)
+            .manager(manager)
             .ok_or_else(|| format!("Manager is not configured: {manager}"))?;
         let runtime = catalog
             .registry()
-            .get(&manager)
+            .get(manager)
             .ok_or_else(|| format!("Manager is not registered: {manager}"))?;
         let target = runtime
             .install_target(manager_config, &name)
@@ -1330,94 +1345,116 @@ impl Finding {
                 )
             })?;
         Ok(PackageActionPlan {
-            manager_groups: vec![(manager, vec![target])],
+            manager_groups: vec![(manager.clone(), vec![target])],
         })
     }
 
-    fn install_by_name_view<'a>(
-        &'a self,
+    /// One install-by-name row per configured source that cannot search,
+    /// each offering the submitted query exactly. Empty before a search.
+    fn named_install_rows(
+        &self,
         info: &FindingInfo,
         pm_config: &updater_core::Config,
-        catalog: &'a crate::manager_catalog::ManagerCatalog,
-    ) -> iced::Element<'a, Message> {
-        use iced::widget::{button, column, container, row, text, text_input};
-
-        let managers = install_name_managers(pm_config, catalog);
-        if managers.is_empty() {
-            return container("").height(iced::Length::Shrink).into();
+        catalog: &crate::manager_catalog::ManagerCatalog,
+    ) -> Vec<NamedInstallRow> {
+        if self.last_search_query.is_empty() {
+            return Vec::new();
         }
-        let effective_manager = self
-            .install_name_manager
-            .clone()
-            .filter(|manager| managers.contains(manager))
-            .or_else(|| managers.first().cloned());
-        let manager_selector: iced::Element<'_, Message> = if managers.len() == 1 {
-            text(catalog.display_name(&managers[0]).to_owned())
-                .size(13)
-                .style(theme::text_on_surface)
-                .into()
-        } else {
-            shared::segmented_group(
-                row(managers.iter().map(|manager| {
-                    let selected = effective_manager.as_ref() == Some(manager);
-                    shared::segmented_button_owned(
-                        catalog.display_name(manager).to_owned(),
-                        selected,
-                        Message::SelectInstallNameManager(manager.clone()),
-                    )
-                    .into()
-                }))
-                .spacing(2),
-            )
-            .into()
-        };
+        let idle = !info.is_installing && self.pending_install.is_none();
+        install_name_managers(pm_config, catalog)
+            .into_iter()
+            .map(|manager| {
+                let error = self.install_name_errors.get(&manager).cloned();
+                NamedInstallRow {
+                    source: catalog.display_name(&manager).to_owned(),
+                    query: self.last_search_query.clone(),
+                    can_install: idle && error.is_none(),
+                    error,
+                    manager,
+                }
+            })
+            .collect()
+    }
 
-        let enabled = !self.install_name_query.trim().is_empty()
-            && !info.is_installing
-            && self.pending_install.is_none();
-        let install_button = button(text("Install").size(13).font(theme::FONT_SEMIBOLD).style(
-            if enabled {
-                theme::text_on_primary
-            } else {
-                theme::text_on_surface_muted
-            },
-        ))
-        .padding([8, 14])
-        .style(theme::action_button(
-            enabled,
-            theme::colors::INSTALL_ACTION,
-            theme::colors::INSTALL_ACTION_HOVER,
-            theme::colors::INSTALL_ACTION_ACTIVE,
-        ))
-        .on_press_maybe(enabled.then_some(Message::PrepareNamedInstall));
+    /// Renders the install-by-name rows shown inside the search results.
+    fn named_install_section<'a>(rows: Vec<NamedInstallRow>) -> Option<iced::Element<'a, Message>> {
+        use iced::widget::{button, column, row, text};
 
-        let input = text_input("Exact package name", &self.install_name_query)
-            .on_input(Message::InstallNameQueryChanged)
-            .on_submit(Message::PrepareNamedInstall)
-            .padding([8, 10])
-            .size(13)
-            .width(iced::Length::Fill)
-            .style(theme::text_input_style);
-
+        if rows.is_empty() {
+            return None;
+        }
+        let sources = rows
+            .iter()
+            .map(|row| row.source.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut content = column![
             shared::section_title("Install by name"),
-            text("These sources cannot search; enter an exact package name.")
+            text(format!("{sources} cannot search"))
                 .size(12)
-                .style(theme::text_on_surface_muted),
-            row![manager_selector, input, install_button]
-                .spacing(theme::spacing::MD)
-                .align_y(iced::Alignment::Center),
+                .style(theme::text_on_surface_muted)
+                .wrapping(text::Wrapping::WordOrGlyph),
         ]
         .spacing(theme::spacing::SM);
-        if let Some(error) = &self.install_name_error {
-            content = content.push(
-                text(error)
-                    .size(12)
-                    .style(theme::text_error)
-                    .wrapping(text::Wrapping::WordOrGlyph),
+        for named in rows {
+            let install_button = button(text("Install").size(13).font(theme::FONT_SEMIBOLD).style(
+                if named.can_install {
+                    theme::text_on_primary
+                } else {
+                    theme::text_on_surface_muted
+                },
+            ))
+            .padding([8, 14])
+            .style(theme::action_button(
+                named.can_install,
+                theme::colors::INSTALL_ACTION,
+                theme::colors::INSTALL_ACTION_HOVER,
+                theme::colors::INSTALL_ACTION_ACTIVE,
+            ))
+            .on_press_maybe(
+                named
+                    .can_install
+                    .then(|| Message::PrepareNamedInstall(named.manager.clone())),
             );
+            content = content.push(
+                row![
+                    text(named.source)
+                        .size(13)
+                        .font(theme::FONT_SEMIBOLD)
+                        .style(theme::text_on_surface),
+                    text(format!("Install \"{}\" exactly", named.query))
+                        .size(13)
+                        .style(theme::text_on_surface_muted)
+                        .width(iced::Length::Fill)
+                        .wrapping(text::Wrapping::WordOrGlyph),
+                    install_button,
+                ]
+                .spacing(theme::spacing::MD)
+                .align_y(iced::Alignment::Center),
+            );
+            if let Some(error) = named.error {
+                content = content.push(
+                    text(error)
+                        .size(12)
+                        .style(theme::text_error)
+                        .wrapping(text::Wrapping::WordOrGlyph),
+                );
+            }
         }
-        content.into()
+        Some(shared::styled_container(content).into())
+    }
+
+    /// Records a submitted query and drops every result, selection and
+    /// by-name error left from the previous one.
+    fn record_submitted_query(&mut self, info: &mut FindingInfo, query: &str) {
+        self.pending_install = None;
+        self.plan_from_install_by_name = false;
+        self.install_name_errors.clear();
+        info.search_results.clear();
+        info.selected_packages.clear();
+        info.searching_managers.clear();
+        info.search_errors.clear();
+        self.last_search_query = query.to_owned();
     }
 
     fn start_search(
@@ -1427,13 +1464,7 @@ impl Finding {
         query: &str,
         catalog: &crate::manager_catalog::ManagerCatalog,
     ) -> Action {
-        self.pending_install = None;
-        self.plan_from_install_by_name = false;
-        info.search_results.clear();
-        info.selected_packages.clear();
-        info.searching_managers.clear();
-        info.search_errors.clear();
-        self.last_search_query = query.to_owned();
+        self.record_submitted_query(info, query);
         info.request_generation = info.request_generation.wrapping_add(1);
         let request_id = info.request_generation;
         for manager in &info.selected_managers {
@@ -1495,6 +1526,21 @@ impl Finding {
 
         Task::batch(tasks)
     }
+}
+
+/// Install-by-name row for one configured source that cannot search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NamedInstallRow {
+    /// Manager that installs the submitted query exactly.
+    manager: ManagerId,
+    /// Display name of that manager.
+    source: String,
+    /// Submitted search query offered for the exact install.
+    query: String,
+    /// Resolution failure from this manager's last install attempt.
+    error: Option<String>,
+    /// Whether this row's Install button is enabled.
+    can_install: bool,
 }
 
 /// Configured managers that can install an exact name but cannot search.
@@ -1893,12 +1939,11 @@ mod tests {
 
     #[test]
     fn named_install_plan_resolves_a_search_less_manager() {
+        let nix = manager_id("builtin:nix-profile");
         let mut finding = Finding {
-            install_name_query: "  nixpkgs#ripgrep  ".to_owned(),
-            install_name_manager: Some(manager_id("builtin:nix-profile")),
+            last_search_query: "  nixpkgs#ripgrep  ".to_owned(),
             ..Finding::default()
         };
-        let nix = manager_id("builtin:nix-profile");
         let mut info = FindingInfo::default();
         let mut config = updater_core::Config::default();
         let mut manager_config = updater_core::ManagerConfig::new(nix.clone());
@@ -1908,10 +1953,15 @@ mod tests {
         config.managers.push(manager_config);
         let catalog = crate::manager_catalog::ManagerCatalog::builtin();
 
-        let action = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        let action = finding.update(
+            Message::PrepareNamedInstall(nix.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
 
         assert!(matches!(action, Action::None));
-        assert!(finding.install_name_error.is_none());
+        assert!(finding.install_name_errors.is_empty());
         let plan = finding
             .pending_install
             .as_ref()
@@ -1924,11 +1974,16 @@ mod tests {
         assert!(targets[0].origin.is_some());
 
         finding.pending_install = None;
-        finding.install_name_query = "   ".to_owned();
-        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        finding.last_search_query = "   ".to_owned();
+        let _ = finding.update(
+            Message::PrepareNamedInstall(nix.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
         assert!(finding.pending_install.is_none());
         assert_eq!(
-            finding.install_name_error.as_deref(),
+            finding.install_name_errors.get(&nix).map(String::as_str),
             Some("Enter a package name to install")
         );
     }
@@ -1954,14 +2009,20 @@ mod tests {
         );
 
         let mut finding = Finding {
-            install_name_query: " cowsay ".to_owned(),
+            last_search_query: " cowsay ".to_owned(),
             ..Finding::default()
         };
         let mut info = FindingInfo::default();
 
-        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        let _ = finding.update(
+            Message::PrepareNamedInstall(bun.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
 
-        assert_eq!(finding.install_name_error, None);
+        assert!(finding.install_name_errors.is_empty());
+        assert!(finding.plan_from_install_by_name);
         assert_eq!(
             finding
                 .pending_install
@@ -1980,46 +2041,78 @@ mod tests {
         assert_eq!(info.install_progress, Some((0, 1, bun, String::new())));
     }
 
+    fn successful_install_outcome(scope: PackageScope) -> OperationOutcome {
+        OperationOutcome {
+            action: PackageAction::Install,
+            completed_packages: 1,
+            total_packages: 1,
+            completed_managers: 1,
+            total_managers: 1,
+            failed_manager: None,
+            error: None,
+            cancelled: false,
+            manager_outcomes: Vec::new(),
+            scope,
+        }
+    }
+
     #[test]
-    fn successful_named_install_clears_the_by_name_field() {
+    fn successful_named_install_leaves_no_stale_by_name_error() {
         let bun = manager_id("builtin:bun");
+        let uv = manager_id("builtin:uv");
         let config = updater_core::Config {
-            managers: vec![updater_core::ManagerConfig::new(bun.clone())],
+            managers: vec![
+                updater_core::ManagerConfig::new(bun.clone()),
+                updater_core::ManagerConfig::new(uv.clone()),
+            ],
             ..updater_core::Config::default()
         };
         let catalog = crate::manager_catalog::ManagerCatalog::builtin();
         let mut finding = Finding {
-            install_name_query: "cowsay".to_owned(),
+            last_search_query: "cowsay".to_owned(),
+            install_name_errors: HashMap::from([(uv.clone(), "earlier failure".to_owned())]),
             ..Finding::default()
         };
         let mut info = FindingInfo::default();
-        let _ = finding.update(Message::PrepareNamedInstall, &config, &mut info, &catalog);
+        let _ = finding.update(
+            Message::PrepareNamedInstall(bun.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
         assert!(finding.pending_install.is_some());
 
         let _ = finding.update(Message::ConfirmInstall, &config, &mut info, &catalog);
         assert!(info.is_installing);
-        let _ = finding.update(
-            Message::InstallPackagesResult(updater_core::OperationOutcome {
-                action: PackageAction::Install,
-                completed_packages: 1,
-                total_packages: 1,
-                completed_managers: 1,
-                total_managers: 1,
-                failed_manager: None,
-                error: None,
-                cancelled: false,
-                manager_outcomes: Vec::new(),
-                scope: PackageScope::User,
-            }),
+        let action = finding.update(
+            Message::InstallPackagesResult(successful_install_outcome(PackageScope::User)),
             &config,
             &mut info,
             &catalog,
         );
 
-        assert!(finding.install_name_query.is_empty());
+        assert!(matches!(action, Action::PackageOperationFinished { .. }));
+        assert!(
+            finding.install_name_errors.is_empty(),
+            "a successful by-name install leaves no stale row error"
+        );
+        assert!(!finding.plan_from_install_by_name);
+        let rows = finding.named_install_rows(&info, &config, &catalog);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.query.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cowsay", "cowsay"],
+            "the rows keep offering the submitted query"
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.can_install && row.error.is_none())
+        );
 
         let mut search_install = Finding {
-            install_name_query: "kept".to_owned(),
+            last_search_query: "code".to_owned(),
+            install_name_errors: HashMap::from([(uv.clone(), "kept".to_owned())]),
             ..Finding::default()
         };
         let snap = manager_id("builtin:snap");
@@ -2031,26 +2124,344 @@ mod tests {
         let _ = search_install.update(Message::PrepareInstall, &config, &mut info, &catalog);
         let _ = search_install.update(Message::ConfirmInstall, &config, &mut info, &catalog);
         let _ = search_install.update(
-            Message::InstallPackagesResult(updater_core::OperationOutcome {
-                action: PackageAction::Install,
-                completed_packages: 1,
-                total_packages: 1,
-                completed_managers: 1,
-                total_managers: 1,
-                failed_manager: None,
-                error: None,
-                cancelled: false,
-                manager_outcomes: Vec::new(),
-                scope: PackageScope::System,
-            }),
+            Message::InstallPackagesResult(successful_install_outcome(PackageScope::System)),
             &config,
             &mut info,
             &catalog,
         );
 
         assert_eq!(
-            search_install.install_name_query, "kept",
-            "a search-result install must not clear the by-name field"
+            search_install
+                .install_name_errors
+                .get(&uv)
+                .map(String::as_str),
+            Some("kept"),
+            "a search-result install must not clear a by-name row error"
+        );
+    }
+
+    /// Searchable (cargo) plus install-only (bun, uv) sources, with cargo selected.
+    fn mixed_source_config() -> updater_core::Config {
+        updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(manager_id("builtin:cargo")),
+                updater_core::ManagerConfig::new(manager_id("builtin:uv")),
+                updater_core::ManagerConfig::new(manager_id("builtin:bun")),
+            ],
+            ..updater_core::Config::default()
+        }
+    }
+
+    /// Counts widgets of the same kind as `sample` in the widget state tree
+    /// of `element`; this builds widget state only and never lays out or
+    /// renders.
+    fn count_widgets_like(
+        element: &iced::Element<'_, Message>,
+        sample: iced::Element<'_, Message>,
+    ) -> usize {
+        use iced::advanced::widget::{Tree, tree::Tag};
+
+        fn count(tree: &Tree, kind: Tag) -> usize {
+            usize::from(tree.tag == kind)
+                + tree
+                    .children
+                    .iter()
+                    .map(|child| count(child, kind))
+                    .sum::<usize>()
+        }
+        let kind = Tree::new(sample.as_widget()).tag;
+        count(&Tree::new(element.as_widget()), kind)
+    }
+
+    fn text_input_count(element: &iced::Element<'_, Message>) -> usize {
+        count_widgets_like(element, iced::widget::text_input("", "").into())
+    }
+
+    fn button_count(element: &iced::Element<'_, Message>) -> usize {
+        count_widgets_like(element, iced::widget::button("").into())
+    }
+
+    #[test]
+    fn discover_offers_one_by_name_row_per_search_less_source_and_one_text_input() {
+        let cargo = manager_id("builtin:cargo");
+        let bun = manager_id("builtin:bun");
+        let uv = manager_id("builtin:uv");
+        let config = mixed_source_config();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            search_query: "ripgrep".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        info.selected_managers.insert(cargo.clone());
+
+        let action = finding.update(Message::ExecuteSearch, &config, &mut info, &catalog);
+        assert!(matches!(action, Action::Run(_)));
+        assert_eq!(
+            info.searching_managers.keys().collect::<Vec<_>>(),
+            vec![&cargo],
+            "searching never asks an install-only source to search"
+        );
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: info.request_generation,
+                manager: cargo.clone(),
+                result: Ok(vec![package(&cargo, "ripgrep")]),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        let rows = finding.named_install_rows(&info, &config, &catalog);
+        assert_eq!(
+            rows,
+            vec![
+                NamedInstallRow {
+                    manager: bun.clone(),
+                    source: "Bun".to_owned(),
+                    query: "ripgrep".to_owned(),
+                    error: None,
+                    can_install: true,
+                },
+                NamedInstallRow {
+                    manager: uv.clone(),
+                    source: catalog.display_name(&uv).to_owned(),
+                    query: "ripgrep".to_owned(),
+                    error: None,
+                    can_install: true,
+                },
+            ]
+        );
+
+        let section = Finding::named_install_section(rows).expect("by-name rows render");
+        assert_eq!(
+            text_input_count(&section),
+            0,
+            "the by-name rows carry no text input of their own"
+        );
+        let page = finding.view(&info, &config, &catalog, true, false);
+        assert_eq!(
+            text_input_count(&page),
+            1,
+            "Discover renders exactly one package-name input"
+        );
+    }
+
+    #[test]
+    fn search_with_only_install_only_sources_still_offers_by_name_rows() {
+        let bun = manager_id("builtin:bun");
+        let config = mixed_source_config();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            search_query: "  cowsay ".to_owned(),
+            install_name_errors: HashMap::from([(bun.clone(), "from a previous query".to_owned())]),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        assert!(info.selected_managers.is_empty());
+
+        let action = finding.update(Message::ExecuteSearch, &config, &mut info, &catalog);
+
+        assert!(matches!(action, Action::None), "no search task starts");
+        assert!(info.searching_managers.is_empty());
+        assert_eq!(finding.last_search_query, "cowsay");
+        assert!(
+            finding.install_name_errors.is_empty(),
+            "a new search clears by-name errors"
+        );
+        let rows = finding.named_install_rows(&info, &config, &catalog);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| row.query == "cowsay" && row.can_install)
+        );
+        assert_eq!(
+            button_count(&finding.search_results_view(&info, &config, &catalog, false, false)),
+            2,
+            "the results view renders one Install per by-name row behind the select-a-source hint"
+        );
+
+        let _ = finding.update(
+            Message::PrepareNamedInstall(bun.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert_eq!(
+            finding
+                .pending_install
+                .as_ref()
+                .map(|plan| plan.manager_groups.clone()),
+            Some(vec![(bun.clone(), vec![PackageTarget::new(bun, "cowsay")])])
+        );
+
+        let searchable_only = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager_id(
+                "builtin:cargo",
+            ))],
+            ..updater_core::Config::default()
+        };
+        let mut finding = Finding {
+            search_query: "cowsay".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        let _ = finding.update(
+            Message::ExecuteSearch,
+            &searchable_only,
+            &mut info,
+            &catalog,
+        );
+        assert!(
+            finding.last_search_query.is_empty(),
+            "without an install-only source, no selected source still blocks Search"
+        );
+    }
+
+    #[test]
+    fn search_with_no_results_still_offers_by_name_rows() {
+        let cargo = manager_id("builtin:cargo");
+        let config = mixed_source_config();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            search_query: "no-such-package".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+        info.selected_managers.insert(cargo.clone());
+        let _ = finding.update(Message::ExecuteSearch, &config, &mut info, &catalog);
+        let _ = finding.update(
+            Message::SearchResult {
+                request_id: info.request_generation,
+                manager: cargo,
+                result: Ok(Vec::new()),
+            },
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert!(arrived_result_managers(&info).is_empty(), "zero results");
+        let rows = finding.named_install_rows(&info, &config, &catalog);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.query == "no-such-package"));
+        assert_eq!(
+            button_count(&finding.search_results_view(&info, &config, &catalog, false, false)),
+            2,
+            "the results view renders one Install per by-name row with zero results"
+        );
+    }
+
+    #[test]
+    fn no_configured_managers_keeps_the_open_managers_empty_state() {
+        let finding = Finding {
+            last_search_query: "ripgrep".to_owned(),
+            ..Finding::default()
+        };
+        let info = FindingInfo::default();
+        let config = updater_core::Config::default();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+
+        assert!(
+            finding
+                .named_install_rows(&info, &config, &catalog)
+                .is_empty()
+        );
+        assert_eq!(
+            button_count(&finding.search_results_view(&info, &config, &catalog, false, false)),
+            1,
+            "only the Open Managers button of the no-managers empty state"
+        );
+    }
+
+    #[test]
+    fn by_name_resolution_error_disables_only_its_own_row() {
+        let bun = manager_id("builtin:bun");
+        let nix = manager_id("builtin:nix-profile");
+        let config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(bun.clone()),
+                updater_core::ManagerConfig::new(nix.clone()),
+            ],
+            ..updater_core::Config::default()
+        };
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            last_search_query: "ripgrep".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+
+        let _ = finding.update(
+            Message::PrepareNamedInstall(nix.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        assert!(finding.pending_install.is_none());
+        let nix_error = finding
+            .install_name_errors
+            .get(&nix)
+            .cloned()
+            .expect("nix-profile without a profile setting cannot resolve the name");
+        assert!(!finding.install_name_errors.contains_key(&bun));
+        let rows = finding.named_install_rows(&info, &config, &catalog);
+        let row = |manager: &ManagerId| {
+            rows.iter()
+                .find(|row| &row.manager == manager)
+                .expect("each install-only source has a row")
+        };
+        assert_eq!(row(&nix).error.as_deref(), Some(nix_error.as_str()));
+        assert!(!row(&nix).can_install);
+        assert_eq!(row(&bun).error, None);
+        assert!(row(&bun).can_install);
+    }
+
+    #[test]
+    fn prepare_named_install_plans_against_the_clicked_manager() {
+        let bun = manager_id("builtin:bun");
+        let uv = manager_id("builtin:uv");
+        let cargo = manager_id("builtin:cargo");
+        let config = mixed_source_config();
+        let catalog = crate::manager_catalog::ManagerCatalog::builtin();
+        let mut finding = Finding {
+            last_search_query: "ruff".to_owned(),
+            ..Finding::default()
+        };
+        let mut info = FindingInfo::default();
+
+        let _ = finding.update(
+            Message::PrepareNamedInstall(uv.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
+
+        let plan = finding
+            .pending_install
+            .as_ref()
+            .expect("the clicked row's manager resolves the name");
+        assert_eq!(plan.manager_groups.len(), 1);
+        assert_eq!(plan.manager_groups[0].0, uv, "not the first row ({bun})");
+        assert_eq!(plan.manager_groups[0].1[0].manager_id, uv);
+        assert_eq!(plan.manager_groups[0].1[0].name, "ruff");
+
+        finding.reset_pending_install();
+        let _ = finding.update(
+            Message::PrepareNamedInstall(cargo.clone()),
+            &config,
+            &mut info,
+            &catalog,
+        );
+        assert!(
+            finding.pending_install.is_none(),
+            "a searchable source is not an install-by-name row"
+        );
+        assert_eq!(
+            finding.install_name_errors.get(&cargo).map(String::as_str),
+            Some("Cargo cannot install by name")
         );
     }
 
