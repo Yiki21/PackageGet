@@ -131,6 +131,10 @@ pub enum Message {
     },
     /// Remove result message.
     RemovePackagesResult(OperationOutcome),
+    /// Dismiss the last package-operation notice.
+    DismissOperationNotice,
+    /// Open the Package Managers page, where configuration is fixed.
+    OpenManagers,
 }
 
 /// Information about installed packages passed from app state
@@ -174,8 +178,8 @@ pub struct InstalledInfo {
     pub remove_logs: Vec<String>,
     /// Removal plan frozen when the confirmation opened; Confirm executes exactly this.
     pub pending_remove: Option<PackageActionPlan>,
-    /// Last removal error shown in UI.
-    pub last_remove_error: Option<String>,
+    /// Last package-operation notice shown in UI.
+    pub last_operation_notice: Option<shared::OperationNotice>,
     /// Last inspector action error shown in UI.
     pub inspector_error: Option<String>,
 }
@@ -189,6 +193,8 @@ pub enum Action {
     CancellableRun(iced::Task<Message>, CancellationToken),
     /// Complete a package operation and refresh managers that succeeded.
     PackageOperationFinished { outcome: OperationOutcome },
+    /// Switch the visible page.
+    Navigate(crate::content::ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -510,7 +516,7 @@ impl Installed {
                 if info.selected_packages.is_empty() || info.is_removing {
                     return Action::None;
                 }
-                info.last_remove_error = None;
+                info.last_operation_notice = None;
                 let manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
                         info.installed_packages
@@ -523,8 +529,10 @@ impl Installed {
                 );
                 if manager_groups.is_empty() {
                     info.pending_remove = None;
-                    info.last_remove_error =
-                        Some("Selected packages are no longer available to remove".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Uninstall,
+                        "Selected packages are no longer available to remove".to_owned(),
+                    ));
                     return Action::None;
                 }
                 info.pending_remove = Some(PackageActionPlan { manager_groups });
@@ -587,17 +595,28 @@ impl Installed {
             Message::RemovePackagesResult(outcome) => {
                 info.is_removing = false;
                 info.remove_progress = None;
+                info.last_operation_notice = shared::OperationNotice::from_outcome(&outcome);
+                if let Some(notice) = &info.last_operation_notice {
+                    log::error!(
+                        "Remove packages {}: {}",
+                        if notice.is_stopped() {
+                            "stopped"
+                        } else {
+                            "failed"
+                        },
+                        shared::operation_notice_message(notice).unwrap_or_default()
+                    );
+                }
                 if outcome.is_success() {
                     info.selected_packages.clear();
-                    info.last_remove_error = None;
-                    Action::PackageOperationFinished { outcome }
-                } else {
-                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
-                    log::error!("Failed to remove packages: {}", error);
-                    info.last_remove_error = Some(error);
-                    Action::PackageOperationFinished { outcome }
                 }
+                Action::PackageOperationFinished { outcome }
             }
+            Message::DismissOperationNotice => {
+                info.last_operation_notice = None;
+                Action::None
+            }
+            Message::OpenManagers => Action::Navigate(crate::content::ActiveContentPage::Health),
         }
     }
 
@@ -672,12 +691,14 @@ impl Installed {
         }
         let plan = info.pending_remove.take()?;
         let Some((initial_manager, _)) = plan.manager_groups.first() else {
-            info.last_remove_error =
-                Some("The removal plan does not contain any packages".to_owned());
+            info.last_operation_notice = Some(shared::OperationNotice::failed(
+                PackageAction::Uninstall,
+                "The removal plan does not contain any packages".to_owned(),
+            ));
             return None;
         };
         info.is_removing = true;
-        info.last_remove_error = None;
+        info.last_operation_notice = None;
         info.remove_logs.clear();
         info.remove_progress = Some((
             0,
@@ -864,7 +885,13 @@ impl Installed {
             ]),
             toolbar,
             self.batch_actions_view(info, catalog),
-            self.packages_list_view(info, catalog, show_inspector, inspector_drawer),
+            self.packages_list_view(
+                info,
+                shared::configured_managers(pm_config).len(),
+                catalog,
+                show_inspector,
+                inspector_drawer,
+            ),
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -926,6 +953,7 @@ impl Installed {
                 query: &self.source_query,
                 count_label: "installed",
                 disabled: info.is_removing || !info.has_loading_count,
+                label_exact_lookup: false,
             },
             shared::ManagerSourcePickerMessages {
                 toggle_picker: Message::ToggleSourcePicker,
@@ -988,18 +1016,27 @@ impl Installed {
     fn packages_list_view<'a>(
         &'a self,
         info: &'a InstalledInfo,
+        configured_managers: usize,
         catalog: &'a ManagerCatalog,
         show_inspector: bool,
         inspector_drawer: bool,
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable};
 
-        if !info.has_loading_count {
-            return shared::centered_message(if info.is_loading_count {
-                "Loading package information..."
-            } else {
-                "Waiting to load package information"
-            });
+        if let Some(placeholder) = list_placeholder(configured_managers, info) {
+            return match placeholder {
+                ListPlaceholder::Empty(empty) => {
+                    shared::empty_state_view(empty, Message::OpenManagers).unwrap_or_else(|| {
+                        shared::centered_message(shared::NO_SOURCE_SELECTED_HINT)
+                    })
+                }
+                ListPlaceholder::LoadingCount => {
+                    shared::centered_message("Loading package information...")
+                }
+                ListPlaceholder::WaitingForCount => {
+                    shared::centered_message("Waiting to load package information")
+                }
+            };
         }
 
         let filtered_managers: Vec<_> = info
@@ -1386,12 +1423,13 @@ impl Installed {
         if info.pending_remove.is_some() {
             content = content.push(self.remove_confirmation_view(info, catalog));
         }
-        if let Some(error) = &info.last_remove_error {
-            content = content.push(
-                text(format!("Removal failed: {error}"))
-                    .size(13)
-                    .style(theme::text_error),
-            );
+        if let Some(notice) = &info.last_operation_notice {
+            content = content.push(shared::operation_notice_card(
+                notice,
+                catalog,
+                Message::CopyInspectorText,
+                Message::DismissOperationNotice,
+            ));
         }
 
         content.into()
@@ -1515,6 +1553,35 @@ impl Installed {
     }
 }
 
+/// What the installed list shows instead of packages, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListPlaceholder {
+    Empty(shared::EmptyState),
+    LoadingCount,
+    WaitingForCount,
+}
+
+/// Picks the installed-list placeholder. Missing managers come first, then the
+/// initial load: sources cannot be ticked until it finishes, so asking for a
+/// selection before then would request an action the picker refuses.
+fn list_placeholder(configured_managers: usize, info: &InstalledInfo) -> Option<ListPlaceholder> {
+    if configured_managers == 0 {
+        return Some(ListPlaceholder::Empty(
+            shared::EmptyState::NoManagersConfigured,
+        ));
+    }
+    if !info.has_loading_count {
+        return Some(if info.is_loading_count {
+            ListPlaceholder::LoadingCount
+        } else {
+            ListPlaceholder::WaitingForCount
+        });
+    }
+    info.selected_managers
+        .is_empty()
+        .then_some(ListPlaceholder::Empty(shared::EmptyState::NoSourceSelected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1533,6 +1600,39 @@ mod tests {
             ),
         );
         (Installed::default(), info)
+    }
+
+    #[test]
+    fn list_placeholder_shows_loading_before_asking_for_a_source() {
+        let mut info = InstalledInfo {
+            is_loading_count: true,
+            ..InstalledInfo::default()
+        };
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::LoadingCount)
+        );
+        assert_eq!(
+            list_placeholder(0, &info),
+            Some(ListPlaceholder::Empty(
+                shared::EmptyState::NoManagersConfigured
+            ))
+        );
+
+        info.is_loading_count = false;
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::WaitingForCount)
+        );
+
+        info.has_loading_count = true;
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::Empty(shared::EmptyState::NoSourceSelected))
+        );
+        info.selected_managers
+            .insert(ManagerId::parse("builtin:cargo").unwrap());
+        assert_eq!(list_placeholder(2, &info), None);
     }
 
     #[test]
@@ -1862,5 +1962,100 @@ mod tests {
             Some("gone is no longer installed")
         );
         assert_eq!(target.name, "hello");
+    }
+
+    fn remove_outcome(cancelled: bool, error: Option<&str>) -> OperationOutcome {
+        OperationOutcome {
+            action: PackageAction::Uninstall,
+            completed_packages: if cancelled { 1 } else { 0 },
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: (!cancelled).then(|| ManagerId::parse("builtin:apt").unwrap()),
+            error: error.map(str::to_owned),
+            cancelled,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::System,
+        }
+    }
+
+    #[test]
+    fn cancelled_removal_outcome_is_not_reported_as_a_failure() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo {
+            is_removing: true,
+            ..InstalledInfo::default()
+        };
+
+        let _ = installed.update(
+            Message::RemovePackagesResult(remove_outcome(
+                true,
+                Some("package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(notice, &ManagerCatalog::builtin()),
+            "Removal stopped after 1 of 2 packages"
+        );
+    }
+
+    #[test]
+    fn failed_removal_outcome_names_the_manager_and_dismisses() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo {
+            is_removing: true,
+            ..InstalledInfo::default()
+        };
+
+        let _ = installed.update(
+            Message::RemovePackagesResult(remove_outcome(
+                false,
+                Some("Failed to remove packages from builtin:apt: package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(!notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(notice, &ManagerCatalog::builtin()),
+            "APT: remove failed"
+        );
+        let message = shared::operation_notice_message(notice).expect("detail");
+        assert!(!message.contains("builtin:apt"));
+
+        let _ = installed.update(
+            Message::DismissOperationNotice,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+        assert!(info.last_operation_notice.is_none());
+    }
+
+    #[test]
+    fn open_managers_navigates_to_the_managers_page() {
+        let mut installed = Installed::default();
+        let mut info = InstalledInfo::default();
+
+        let action = installed.update(
+            Message::OpenManagers,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(
+            action,
+            Action::Navigate(crate::content::ActiveContentPage::Health)
+        ));
     }
 }

@@ -142,6 +142,10 @@ pub enum Message {
     CancelUpdate,
     /// Re-scan the failed update source before retrying.
     PrepareFailedUpdateRetry,
+    /// Dismiss the last package-operation notice.
+    DismissOperationNotice,
+    /// Open the Package Managers page, where configuration is fixed.
+    OpenManagers,
 }
 
 /// Whether an updates load may run a privileged metadata sync.
@@ -204,8 +208,8 @@ pub struct UpdatesInfo {
     pub update_progress: Option<(usize, usize, ManagerId, String)>,
     /// Update command logs.
     pub update_logs: Vec<String>,
-    /// Last update error shown in UI.
-    pub last_update_error: Option<String>,
+    /// Last update operation notice shown in UI.
+    pub last_operation_notice: Option<shared::OperationNotice>,
     /// Source that failed during the most recent update operation.
     pub failed_update_manager: Option<ManagerId>,
 }
@@ -286,6 +290,8 @@ pub enum Action {
     CancellableRun(iced::Task<Message>, CancellationToken),
     /// Complete a package operation and refresh managers that succeeded.
     PackageOperationFinished { outcome: OperationOutcome },
+    /// Switch the visible page.
+    Navigate(crate::content::ActiveContentPage),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -511,7 +517,7 @@ impl Updates {
                 {
                     return Action::None;
                 }
-                info.last_update_error = None;
+                info.last_operation_notice = None;
                 info.failed_update_manager = None;
                 let mut manager_groups = collect_selected_package_groups(
                     info.selected_managers.iter().filter_map(|manager| {
@@ -536,8 +542,10 @@ impl Updates {
                     }
                 }
                 if manager_groups.is_empty() {
-                    info.last_update_error =
-                        Some("Selected packages are no longer available to update".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Update,
+                        "Selected packages are no longer available to update".to_owned(),
+                    ));
                     return Action::None;
                 }
                 self.pending_update = Some(UpdatePlan {
@@ -573,19 +581,31 @@ impl Updates {
                 self.reset_pending_updates();
                 info.is_updating = false;
                 info.update_progress = None;
+                info.last_operation_notice = shared::OperationNotice::from_outcome(&outcome);
+                if let Some(notice) = &info.last_operation_notice {
+                    log::error!(
+                        "Update packages {}: {}",
+                        if notice.is_stopped() {
+                            "stopped"
+                        } else {
+                            "failed"
+                        },
+                        shared::operation_notice_message(notice).unwrap_or_default()
+                    );
+                }
                 if outcome.is_success() {
                     info.selected_packages.clear();
-                    info.last_update_error = None;
                     info.failed_update_manager = None;
-                    Action::PackageOperationFinished { outcome }
                 } else {
                     info.failed_update_manager = outcome.failed_manager.clone();
-                    let error = outcome.error.clone().unwrap_or_else(|| outcome.summary());
-                    log::error!("Failed to update packages: {}", error);
-                    info.last_update_error = Some(error);
-                    Action::PackageOperationFinished { outcome }
                 }
+                Action::PackageOperationFinished { outcome }
             }
+            Message::DismissOperationNotice => {
+                info.last_operation_notice = None;
+                Action::None
+            }
+            Message::OpenManagers => Action::Navigate(crate::content::ActiveContentPage::Health),
             Message::RefreshSelected => {
                 let selected: Vec<ManagerId> = info.selected_managers.iter().cloned().collect();
                 if info.is_updating
@@ -726,14 +746,16 @@ impl Updates {
                     return Action::None;
                 }
                 let Some((initial_manager, _)) = plan.packages.manager_groups.first() else {
-                    info.last_update_error =
-                        Some("The update plan does not contain any packages".to_owned());
+                    info.last_operation_notice = Some(shared::OperationNotice::failed(
+                        PackageAction::Update,
+                        "The update plan does not contain any packages".to_owned(),
+                    ));
                     return Action::None;
                 };
 
                 let total = plan.package_count();
                 info.is_updating = true;
-                info.last_update_error = None;
+                info.last_operation_notice = None;
                 info.failed_update_manager = None;
                 info.update_logs.clear();
                 info.update_progress = Some((0, total, initial_manager.clone(), String::new()));
@@ -1060,6 +1082,25 @@ impl Updates {
             ));
         }
 
+        // The empty state reports configuration, not capability coverage, so
+        // "no managers are configured" only appears when that is literally true.
+        let updates_list: iced::Element<'_, Message> = if let Some(empty) = shared::empty_state(
+            shared::configured_managers(pm_config).len(),
+            info.selected_managers.len(),
+        ) {
+            shared::empty_state_view(empty, Message::OpenManagers)
+                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT))
+        } else {
+            self.updates_list_view(
+                info,
+                installed_info,
+                catalog,
+                show_inspector,
+                inspector_drawer,
+                selected_loading_sources,
+            )
+        };
+
         column![
             shared::page_header(
                 "Updates",
@@ -1072,14 +1113,7 @@ impl Updates {
             toolbar,
             self.batch_actions_view(info, pm_config, catalog),
             self.update_confirmation_view(catalog),
-            self.updates_list_view(
-                info,
-                installed_info,
-                catalog,
-                show_inspector,
-                inspector_drawer,
-                selected_loading_sources,
-            ),
+            updates_list,
         ]
         .spacing(theme::spacing::LG)
         .height(iced::Length::Fill)
@@ -1139,6 +1173,7 @@ impl Updates {
                 query: &self.source_query,
                 count_label: "updates",
                 disabled: self.pending_update.is_some() || !info.has_loading_count,
+                label_exact_lookup: false,
             },
             shared::ManagerSourcePickerMessages {
                 toggle_picker: Message::ToggleSourcePicker,
@@ -1216,7 +1251,7 @@ impl Updates {
         }
 
         if info.selected_managers.is_empty() {
-            return shared::centered_message("Please select a package manager to view");
+            return shared::centered_message(shared::NO_SOURCE_SELECTED_HINT);
         }
 
         let filtered_managers: Vec<_> = info
@@ -1805,29 +1840,34 @@ impl Updates {
             .spacing(12)
             .align_y(iced::Alignment::Center);
 
-        if let Some(error) = &info.last_update_error {
-            let retry = info.failed_update_manager.as_ref().map(|_| {
-                button(
-                    text("Re-scan Failed Source")
-                        .size(13)
-                        .font(theme::FONT_SEMIBOLD),
-                )
-                .padding([7, 12])
-                .style(theme::secondary_button(true))
-                .on_press(Message::PrepareFailedUpdateRetry)
-            });
-            let mut error_row = row![
-                text(format!("Update failed: {}", error))
-                    .size(13)
-                    .style(theme::text_error)
-                    .width(iced::Length::Fill)
-            ]
+        if let Some(notice) = &info.last_operation_notice {
+            let retry = if notice.is_stopped() {
+                None
+            } else {
+                info.failed_update_manager.as_ref().map(|_| {
+                    button(
+                        text("Re-scan Failed Source")
+                            .size(13)
+                            .font(theme::FONT_SEMIBOLD),
+                    )
+                    .padding([7, 12])
+                    .style(theme::secondary_button(true))
+                    .on_press(Message::PrepareFailedUpdateRetry)
+                })
+            };
+            let mut notice_row = row![shared::operation_notice_card(
+                notice,
+                catalog,
+                Message::CopyInspectorText,
+                Message::DismissOperationNotice,
+            )]
+            .width(iced::Length::Fill)
             .align_y(iced::Alignment::Center);
             if let Some(retry) = retry {
-                error_row = error_row.push(retry);
+                notice_row = notice_row.push(retry);
             }
 
-            column![actions_row, error_row].spacing(8).into()
+            column![actions_row, notice_row].spacing(8).into()
         } else {
             actions_row.into()
         }
@@ -2201,8 +2241,11 @@ mod tests {
         assert!(updates.pending_update.is_none());
         assert!(!info.is_updating);
         assert_eq!(
-            info.last_update_error.as_deref(),
-            Some("Selected packages are no longer available to update")
+            info.last_operation_notice,
+            Some(shared::OperationNotice::failed(
+                PackageAction::Update,
+                "Selected packages are no longer available to update".to_owned(),
+            ))
         );
     }
 
@@ -2684,5 +2727,91 @@ mod tests {
     fn only_a_privileged_refresh_forces_a_metadata_sync() {
         assert!(!RefreshMode::Local.forces_metadata_sync());
         assert!(RefreshMode::Privileged.forces_metadata_sync());
+    }
+
+    fn update_outcome(cancelled: bool, error: Option<&str>) -> OperationOutcome {
+        OperationOutcome {
+            action: PackageAction::Update,
+            completed_packages: if cancelled { 1 } else { 0 },
+            total_packages: 2,
+            completed_managers: 0,
+            total_managers: 1,
+            failed_manager: (!cancelled).then(|| manager_id("builtin:apt")),
+            error: error.map(str::to_owned),
+            cancelled,
+            manager_outcomes: Vec::new(),
+            scope: updater_manager_api::PackageScope::System,
+        }
+    }
+
+    #[test]
+    fn cancelled_update_outcome_is_not_reported_as_a_failure() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            is_updating: true,
+            ..UpdatesInfo::default()
+        };
+
+        let _ = updates.update(
+            Message::UpdatePackagesResult(update_outcome(
+                true,
+                Some("pkexec authentication was dismissed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(notice.is_stopped());
+        assert!(info.failed_update_manager.is_none());
+        let headline = shared::operation_notice_headline(notice, &ManagerCatalog::builtin());
+        assert_eq!(headline, "Update stopped after 1 of 2 packages");
+        assert!(!headline.to_lowercase().contains("fail"));
+    }
+
+    #[test]
+    fn failed_update_outcome_names_the_manager_and_offers_retry() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo {
+            is_updating: true,
+            ..UpdatesInfo::default()
+        };
+
+        let _ = updates.update(
+            Message::UpdatePackagesResult(update_outcome(
+                false,
+                Some("Failed to update packages from builtin:apt: package manager command failed"),
+            )),
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        let notice = info.last_operation_notice.as_ref().expect("a notice");
+        assert!(!notice.is_stopped());
+        assert_eq!(
+            shared::operation_notice_headline(notice, &ManagerCatalog::builtin()),
+            "APT: update failed"
+        );
+        assert!(info.failed_update_manager.is_some());
+    }
+
+    #[test]
+    fn open_managers_navigates_to_the_managers_page() {
+        let mut updates = Updates::default();
+        let mut info = UpdatesInfo::default();
+
+        let action = updates.update(
+            Message::OpenManagers,
+            &updater_core::Config::default(),
+            &mut info,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(matches!(
+            action,
+            Action::Navigate(crate::content::ActiveContentPage::Health)
+        ));
     }
 }

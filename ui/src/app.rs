@@ -340,6 +340,7 @@ impl App {
                         self.active_operation_started_at = Some(crate::activity::now_timestamp());
                         content_task.map(Message::Content)
                     }
+                    content::Action::Navigate(target) => self.navigate_to(target),
                     content::Action::ReloadPackageData { reload, follow_up } => {
                         let configuration_changed = reload.is_configuration_change();
                         let package_reload = self.reload_package_data(reload);
