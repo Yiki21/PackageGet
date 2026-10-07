@@ -188,6 +188,8 @@ pub async fn execute_package_groups(
     let mut completed_packages = 0;
     let mut completed_managers = 0;
     let mut manager_outcomes = Vec::new();
+    let mut failed_manager = None;
+    let mut operation_error = None;
 
     for (group_index, group) in groups.iter().enumerate() {
         let (manager_id, targets) = *group;
@@ -337,35 +339,63 @@ pub async fn execute_package_groups(
                 PackageAction::Uninstall => "remove",
                 _ => "process",
             };
-            let cancelled = error.kind() == ManagerErrorKind::Cancelled;
+            // A manager may report Cancelled without the user ever pressing
+            // Stop, for example when its output merely mentions a canceled
+            // operation. Only a triggered cancellation token makes the whole
+            // operation a cancellation; otherwise it stays a failure so the
+            // failed manager can be retried.
+            let cancelled =
+                error.kind() == ManagerErrorKind::Cancelled && cancellation.is_cancelled();
             let completed =
                 completed_packages + manager_completed.load(Ordering::Relaxed).min(targets.len());
-            return stopped_operation(
-                action,
-                &groups,
-                group_index,
-                manager_id,
-                targets,
-                completed,
-                completed_managers,
-                total_packages,
-                total_managers,
-                scope,
-                if cancelled {
-                    ManagerOperationStatus::Cancelled
-                } else {
-                    ManagerOperationStatus::Failed
-                },
-                completed.saturating_sub(completed_packages),
-                if cancelled {
-                    detail
-                } else {
-                    format!("Failed to {action_name} packages from {manager_id}: {detail}")
-                },
-                (!cancelled).then(|| manager_id.clone()),
-                cancelled,
-                &mut manager_outcomes,
-            );
+            let error = if cancelled {
+                detail
+            } else {
+                format!("Failed to {action_name} packages from {manager_id}: {detail}")
+            };
+            if cancelled {
+                return stopped_operation(
+                    action,
+                    &groups,
+                    group_index,
+                    manager_id,
+                    targets,
+                    completed,
+                    completed_managers,
+                    total_packages,
+                    total_managers,
+                    scope,
+                    ManagerOperationStatus::Cancelled,
+                    completed.saturating_sub(completed_packages),
+                    error,
+                    None,
+                    true,
+                    &mut manager_outcomes,
+                );
+            }
+            manager_outcomes.push(ManagerOperationOutcome {
+                manager_id: manager_id.clone(),
+                scope: aggregate_scope(targets.iter()),
+                requested_packages: targets.len(),
+                completed_packages: completed.saturating_sub(completed_packages),
+                status: ManagerOperationStatus::Failed,
+                error: Some(error.clone()),
+            });
+            if failed_manager.is_none() {
+                failed_manager = Some(manager_id.clone());
+                operation_error = Some(error.clone());
+            }
+            completed_packages = completed;
+            on_progress(OperationProgress {
+                completed: completed_packages,
+                total: total_packages,
+                manager: manager_id.clone(),
+                current_package: String::new(),
+                command_message: Some(error),
+            });
+            // Keep going so a broken manager does not prevent independent
+            // package managers from completing their updates.
+            continue;
         }
 
         manager_outcomes.push(ManagerOperationOutcome {
@@ -386,8 +416,8 @@ pub async fn execute_package_groups(
         total_packages,
         completed_managers,
         total_managers,
-        failed_manager: None,
-        error: None,
+        failed_manager,
+        error: operation_error,
         cancelled: false,
         manager_outcomes,
         scope,
