@@ -764,6 +764,7 @@ impl Finding {
                         query: &self.source_query,
                         count_label: "results",
                         disabled: self.pending_install.is_some(),
+                        label_exact_lookup: true,
                     },
                     shared::ManagerSourcePickerMessages {
                         toggle_picker: Message::ToggleSourcePicker,

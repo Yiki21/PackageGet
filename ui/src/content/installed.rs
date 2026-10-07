@@ -953,6 +953,7 @@ impl Installed {
                 query: &self.source_query,
                 count_label: "installed",
                 disabled: info.is_removing || !info.has_loading_count,
+                label_exact_lookup: false,
             },
             shared::ManagerSourcePickerMessages {
                 toggle_picker: Message::ToggleSourcePicker,

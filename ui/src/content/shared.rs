@@ -446,6 +446,9 @@ pub struct ManagerSourcePickerState<'a> {
     pub query: &'a str,
     pub count_label: &'static str,
     pub disabled: bool,
+    /// Whether rows qualify exact-identifier sources. Only the Discover picker
+    /// sets this: the qualifier describes search, not installed or update lists.
+    pub label_exact_lookup: bool,
 }
 
 pub struct ManagerSourcePickerMessages<Message> {
@@ -575,6 +578,7 @@ where
                 state.selected_managers,
                 catalog,
                 state.count_label,
+                state.label_exact_lookup,
                 state.disabled,
                 messages.toggle_manager,
             )
@@ -625,6 +629,7 @@ fn manager_source_row<'a, Message>(
     selected_managers: &'a HashSet<ManagerId>,
     catalog: &'a ManagerCatalog,
     count_label: &'static str,
+    label_exact_lookup: bool,
     globally_disabled: bool,
     on_toggle: fn(ManagerId, bool) -> Message,
 ) -> Element<'a, Message>
@@ -646,10 +651,12 @@ where
         ManagerSourceStatus::Failed => theme::text_error,
     };
     // The descriptor decides this, never a manager-ID list in the UI.
-    let exact_lookup = manager_exact_lookup(&manager, catalog);
-    let detail = source_detail_with_lookup(
-        manager_source_detail(entry.status, entry.count, count_label),
-        exact_lookup,
+    let detail = source_row_detail(
+        entry.status,
+        entry.count,
+        count_label,
+        label_exact_lookup,
+        manager_exact_lookup(&manager, catalog),
     );
     let checkbox: Element<'_, Message> = iced::widget::checkbox(selected)
         .size(18)
@@ -1281,6 +1288,22 @@ pub fn source_detail_with_lookup(detail: String, exact_lookup: bool) -> String {
     exact_lookup_label(exact_lookup).map_or(detail.clone(), |label| format!("{detail} · {label}"))
 }
 
+/// Detail line for one source row: the qualifier appears only when the picker
+/// labels exact lookups and the source's descriptor declares one.
+#[must_use]
+pub fn source_row_detail(
+    status: ManagerSourceStatus,
+    count: Option<usize>,
+    count_label: &str,
+    label_exact_lookup: bool,
+    exact_lookup: bool,
+) -> String {
+    source_detail_with_lookup(
+        manager_source_detail(status, count, count_label),
+        label_exact_lookup && exact_lookup,
+    )
+}
+
 /// Hint for the Discover empty state naming the selected exact-identifier
 /// sources, or `None` when every selected source is an ordinary catalog search.
 pub fn exact_lookup_search_hint(
@@ -1908,7 +1931,7 @@ mod tests {
         PackageDetailState, desktop_open_commands, empty_state, exact_lookup_label,
         exact_lookup_search_hint, is_installable_search_result, is_stopped_waiting_error,
         manager_source_detail, operation_notice_headline, operation_notice_message, selection_key,
-        source_detail_with_lookup, stopped_waiting_error, validate_http_url,
+        source_detail_with_lookup, source_row_detail, stopped_waiting_error, validate_http_url,
     };
     use updater_manager_api::{
         ManagerCapability, ManagerConfig, ManagerError, ManagerErrorKind, ManagerId, PackageAction,
@@ -2193,6 +2216,34 @@ mod tests {
             false,
         );
         assert_eq!(catalog, "3 results");
+    }
+
+    #[test]
+    fn exact_lookup_qualifier_only_appears_where_the_picker_labels_it() {
+        // Installed and Updates pickers do not label exact lookups, even for
+        // a source whose descriptor declares one.
+        assert_eq!(
+            source_row_detail(
+                ManagerSourceStatus::Ready,
+                Some(3),
+                "installed",
+                false,
+                true
+            ),
+            "3 installed"
+        );
+        assert_eq!(
+            source_row_detail(ManagerSourceStatus::Ready, Some(2), "updates", false, true),
+            "2 updates"
+        );
+        assert_eq!(
+            source_row_detail(ManagerSourceStatus::Ready, Some(3), "results", true, true),
+            format!("3 results · {}", super::EXACT_LOOKUP_LABEL)
+        );
+        assert_eq!(
+            source_row_detail(ManagerSourceStatus::Ready, Some(3), "results", true, false),
+            "3 results"
+        );
     }
 
     #[test]

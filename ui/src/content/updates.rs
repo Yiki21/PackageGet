@@ -1173,6 +1173,7 @@ impl Updates {
                 query: &self.source_query,
                 count_label: "updates",
                 disabled: self.pending_update.is_some() || !info.has_loading_count,
+                label_exact_lookup: false,
             },
             shared::ManagerSourcePickerMessages {
                 toggle_picker: Message::ToggleSourcePicker,
