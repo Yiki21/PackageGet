@@ -627,6 +627,8 @@ impl App {
                         Ok(updates) => {
                             self.updates_info.init_errors.remove(&manager);
                             self.updates_info
+                                .mark_checked(manager.clone(), crate::activity::now_timestamp());
+                            self.updates_info
                                 .updates_by_manager
                                 .insert(manager, (updates.len(), updates));
                         }
@@ -1056,12 +1058,7 @@ impl App {
             return crate::shortcut::capture(page.into());
         }
 
-        let update_count = self
-            .updates_info
-            .updates_by_manager
-            .values()
-            .map(|(count, _)| *count)
-            .sum();
+        let update_count = self.updates_info.current_update_count();
         let sidebar_summary = sidebar::Summary {
             update_count,
             updates_loading: self.updates_info.is_loading_count
@@ -1514,6 +1511,8 @@ impl App {
                 self.updates_info.updates_by_manager.clear();
                 self.updates_info.selected_packages.clear();
                 self.updates_info.loading_updates.clear();
+                self.updates_info.refresh_modes.clear();
+                self.updates_info.checked_at.clear();
                 self.updates_info.load_errors.clear();
                 self.updates_info.init_errors.clear();
                 self.updates_info.init_logs.clear();
@@ -1571,6 +1570,12 @@ impl App {
             .retain(|(manager, _)| !affected.contains(manager));
         self.updates_info
             .loading_updates
+            .retain(|manager, _| !affected.contains(manager));
+        self.updates_info
+            .refresh_modes
+            .retain(|manager, _| !affected.contains(manager));
+        self.updates_info
+            .checked_at
             .retain(|manager, _| !affected.contains(manager));
         self.updates_info
             .load_errors
@@ -1639,7 +1644,7 @@ impl App {
                         &mut self.updates_info,
                         manager.clone(),
                         &self.manager_catalog,
-                        true,
+                        content::RefreshMode::Privileged,
                     )
                     .map(content::Message::Updates)
                     .map(Message::Content),
@@ -1717,7 +1722,7 @@ impl App {
                         &mut self.updates_info,
                         manager,
                         &self.manager_catalog,
-                        true,
+                        content::RefreshMode::Local,
                     )
                     .map(content::Message::Updates)
                     .map(Message::Content),
@@ -2155,6 +2160,28 @@ mod tests {
     }
 
     #[test]
+    fn successful_init_updates_count_stamps_checked_at() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        app.package_data_generation = 2;
+        app.updates_info.is_loading_count = true;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation: 2,
+            manager: manager.clone(),
+            result: Ok(Vec::new()),
+        });
+
+        let checked_at = app
+            .updates_info
+            .checked_at
+            .get(&manager)
+            .expect("a successful check records its time");
+        assert!(chrono::DateTime::parse_from_rfc3339(checked_at).is_ok());
+        assert_eq!(app.updates_info.current_update_count(), 0);
+    }
+
+    #[test]
     fn startup_defers_package_scans_until_their_page_is_opened() {
         let mut app = app();
         let manager = manager_id("builtin:cargo");
@@ -2282,6 +2309,54 @@ mod tests {
             app.installed_info
                 .selected_packages
                 .contains(&(npm, "typescript".to_owned()))
+        );
+    }
+
+    #[test]
+    fn post_operation_updates_reload_does_not_force_a_privileged_refresh() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        app.pm_config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(cargo.clone())],
+            ..updater_core::Config::default()
+        };
+        app.installed_info.has_loading_count = true;
+        app.updates_info.has_loading_count = true;
+        app.updates_info
+            .updates_by_manager
+            .insert(cargo.clone(), (1, Vec::new()));
+        let outcome = updater_core::OperationOutcome {
+            action: updater_manager_api::PackageAction::Update,
+            completed_packages: 1,
+            total_packages: 1,
+            completed_managers: 1,
+            total_managers: 1,
+            failed_manager: None,
+            error: None,
+            cancelled: false,
+            manager_outcomes: vec![updater_core::ManagerOperationOutcome {
+                manager_id: cargo.clone(),
+                scope: updater_manager_api::PackageScope::User,
+                requested_packages: 1,
+                completed_packages: 1,
+                status: updater_core::ManagerOperationStatus::Succeeded,
+                error: None,
+            }],
+            scope: updater_manager_api::PackageScope::User,
+        };
+
+        let _ = app.refresh_package_managers(&outcome);
+
+        assert_eq!(
+            app.updates_info.refresh_modes.get(&cargo),
+            Some(&content::RefreshMode::Local),
+            "local state is authoritative after a write, so no second metadata sync"
+        );
+        assert!(
+            app.updates_info
+                .refresh_modes
+                .values()
+                .all(|mode| *mode == content::RefreshMode::Local)
         );
     }
 
