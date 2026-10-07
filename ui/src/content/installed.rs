@@ -1023,18 +1023,20 @@ impl Installed {
     ) -> iced::Element<'a, Message> {
         use iced::widget::{column, container, row, scrollable};
 
-        if let Some(empty) = shared::empty_state(configured_managers, info.selected_managers.len())
-        {
-            return shared::empty_state_view(empty, Message::OpenManagers)
-                .unwrap_or_else(|| shared::centered_message(shared::NO_SOURCE_SELECTED_HINT));
-        }
-
-        if !info.has_loading_count {
-            return shared::centered_message(if info.is_loading_count {
-                "Loading package information..."
-            } else {
-                "Waiting to load package information"
-            });
+        if let Some(placeholder) = list_placeholder(configured_managers, info) {
+            return match placeholder {
+                ListPlaceholder::Empty(empty) => {
+                    shared::empty_state_view(empty, Message::OpenManagers).unwrap_or_else(|| {
+                        shared::centered_message(shared::NO_SOURCE_SELECTED_HINT)
+                    })
+                }
+                ListPlaceholder::LoadingCount => {
+                    shared::centered_message("Loading package information...")
+                }
+                ListPlaceholder::WaitingForCount => {
+                    shared::centered_message("Waiting to load package information")
+                }
+            };
         }
 
         let filtered_managers: Vec<_> = info
@@ -1551,6 +1553,35 @@ impl Installed {
     }
 }
 
+/// What the installed list shows instead of packages, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListPlaceholder {
+    Empty(shared::EmptyState),
+    LoadingCount,
+    WaitingForCount,
+}
+
+/// Picks the installed-list placeholder. Missing managers come first, then the
+/// initial load: sources cannot be ticked until it finishes, so asking for a
+/// selection before then would request an action the picker refuses.
+fn list_placeholder(configured_managers: usize, info: &InstalledInfo) -> Option<ListPlaceholder> {
+    if configured_managers == 0 {
+        return Some(ListPlaceholder::Empty(
+            shared::EmptyState::NoManagersConfigured,
+        ));
+    }
+    if !info.has_loading_count {
+        return Some(if info.is_loading_count {
+            ListPlaceholder::LoadingCount
+        } else {
+            ListPlaceholder::WaitingForCount
+        });
+    }
+    info.selected_managers
+        .is_empty()
+        .then_some(ListPlaceholder::Empty(shared::EmptyState::NoSourceSelected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1569,6 +1600,39 @@ mod tests {
             ),
         );
         (Installed::default(), info)
+    }
+
+    #[test]
+    fn list_placeholder_shows_loading_before_asking_for_a_source() {
+        let mut info = InstalledInfo {
+            is_loading_count: true,
+            ..InstalledInfo::default()
+        };
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::LoadingCount)
+        );
+        assert_eq!(
+            list_placeholder(0, &info),
+            Some(ListPlaceholder::Empty(
+                shared::EmptyState::NoManagersConfigured
+            ))
+        );
+
+        info.is_loading_count = false;
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::WaitingForCount)
+        );
+
+        info.has_loading_count = true;
+        assert_eq!(
+            list_placeholder(2, &info),
+            Some(ListPlaceholder::Empty(shared::EmptyState::NoSourceSelected))
+        );
+        info.selected_managers
+            .insert(ManagerId::parse("builtin:cargo").unwrap());
+        assert_eq!(list_placeholder(2, &info), None);
     }
 
     #[test]
