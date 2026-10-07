@@ -22,8 +22,14 @@ pub struct StatusPanel {
     progress_target: f32,
     /// Last frame/update timestamp.
     last_frame: Instant,
-    /// Current status text shown to user.
+    /// Current status text shown to user, without the elapsed-time suffix.
     status_label: String,
+    /// Status text as rendered, including the current step's elapsed time.
+    display_label: String,
+    /// Start of the current progress step, used for the elapsed-time suffix.
+    step_started_at: Instant,
+    /// Whole seconds of the current step already reflected in `display_label`.
+    step_elapsed_secs: u64,
     /// Current interpolated progress value in [0, 1].
     progress: f32,
     /// Merged command logs displayed in panel.
@@ -34,6 +40,10 @@ pub struct StatusPanel {
     activity_phase: f32,
     /// Whether any package-manager work is currently active.
     is_active: bool,
+    /// Whether the active work belongs to a package operation this panel can stop.
+    is_stoppable: bool,
+    /// Whether the rendered label currently carries an elapsed-time suffix.
+    display_label_active: bool,
     /// Whether the active write should stop before the next manager starts.
     cancellation_requested: bool,
     /// Whether command output is expanded.
@@ -45,6 +55,48 @@ pub struct StatusPanel {
     /// Command output captured when the most recent operation completed.
     outcome_logs: Vec<String>,
 }
+
+/// Whether the active operation's writer should stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Stop the active operation before its next manager starts.
+    Stop,
+    /// Toggle the live command-output drawer.
+    ToggleOutput,
+    /// Dismiss the completed-operation summary.
+    DismissOutcome,
+}
+
+impl Action {
+    /// Message this action sends when pressed.
+    pub const fn message(self) -> Message {
+        match self {
+            Self::Stop => Message::StopOperation,
+            Self::ToggleOutput => Message::ToggleDetails,
+            Self::DismissOutcome => Message::DismissOutcome,
+        }
+    }
+
+    /// Whether this action is the panel's primary control for the active operation.
+    const fn is_primary(self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
+/// Label of the History button in the application footer.
+pub const FOOTER_HISTORY_LABEL: &str = "History";
+/// Label of the output drawer toggle while the drawer is collapsed.
+pub const SHOW_OUTPUT_LABEL: &str = "Show output";
+/// Label of the output drawer toggle while the drawer is expanded.
+pub const HIDE_OUTPUT_LABEL: &str = "Hide output";
+/// Label of the Stop action while the operation is still running.
+const STOP_LABEL: &str = "Stop";
+/// Label of the Stop action once cancellation is already requested.
+const STOPPING_LABEL: &str = "Stopping...";
+/// Label of the completed-operation dismiss action.
+const DISMISS_LABEL: &str = "Dismiss";
+/// Status label shown while the active manager command is terminating.
+const STOPPING_STATUS: &str = "Stopping current manager...";
 
 /// Messages handled by the status panel.
 ///
@@ -58,6 +110,8 @@ pub enum Message {
     Sync(Instant),
     /// Toggle command-output details.
     ToggleDetails,
+    /// Stop the active operation before its next manager starts.
+    StopOperation,
     /// Dismiss the completed-operation summary.
     DismissOutcome,
 }
@@ -81,7 +135,9 @@ impl Message {
     fn at(self) -> Instant {
         match self {
             Message::Tick(at) | Message::Sync(at) => at,
-            Message::ToggleDetails | Message::DismissOutcome => Instant::now(),
+            Message::ToggleDetails | Message::StopOperation | Message::DismissOutcome => {
+                Instant::now()
+            }
         }
     }
 }
@@ -94,11 +150,16 @@ impl StatusPanel {
             progress_target: 0.0,
             last_frame: now,
             status_label: "Idle".to_string(),
+            display_label: "Idle".to_string(),
+            step_started_at: now,
+            step_elapsed_secs: 0,
             progress: 1.0,
             command_logs: Vec::new(),
             progress_counts: None,
             activity_phase: 0.0,
             is_active: false,
+            is_stoppable: false,
+            display_label_active: false,
             cancellation_requested: false,
             details_expanded: false,
             drawer_animation: Animation::new(0.0).duration(Duration::from_millis(180)),
@@ -171,13 +232,21 @@ impl StatusPanel {
                 .go_mut(if self.details_expanded { 1.0 } else { 0.0 }, at);
         }
 
+        let mut label_step_changed = false;
         if should_refresh_snapshot {
-            self.status_label = if self.cancellation_requested && is_active {
-                "Stopping current manager...".to_owned()
+            let base_label = if self.cancellation_requested && is_active {
+                STOPPING_STATUS.to_owned()
             } else {
                 status_label(installed_info, updates_info, finding_info, catalog)
             };
-            self.progress_counts = progress_counts(installed_info, updates_info, finding_info);
+            let counts = progress_counts(installed_info, updates_info, finding_info);
+            if base_label != self.status_label || counts != self.progress_counts {
+                self.step_started_at = at;
+                self.step_elapsed_secs = 0;
+                label_step_changed = true;
+            }
+            self.status_label = base_label;
+            self.progress_counts = counts;
             if is_active {
                 rebuild_command_logs(
                     &mut self.command_logs,
@@ -195,11 +264,58 @@ impl StatusPanel {
                 self.drawer_animation.go_mut(0.0, at);
             }
         }
+
+        // The elapsed-time suffix is the panel's liveness signal while an
+        // operation runs, so it must advance on frame ticks too, not only on
+        // progress messages. Rebuild it only when the step changes or the whole
+        // second ticks, so every other frame stays allocation-free.
+        let step_elapsed_secs = at.saturating_duration_since(self.step_started_at).as_secs();
+        if label_step_changed
+            || step_elapsed_secs != self.step_elapsed_secs
+            || is_active != self.display_label_active
+        {
+            self.step_elapsed_secs = step_elapsed_secs;
+            self.display_label_active = is_active;
+            self.display_label =
+                compose_display_label(&self.status_label, step_elapsed_secs, is_active);
+        }
+    }
+
+    /// Returns the actions the panel currently offers, in display order.
+    ///
+    /// Used by both `render` and its tests so the rendered action row cannot
+    /// drift from the asserted one.
+    pub fn actions(&self) -> impl Iterator<Item = Action> + '_ {
+        let stop = (self.is_active && self.is_stoppable).then_some(Action::Stop);
+        let toggle = (!self.command_logs.is_empty()).then_some(Action::ToggleOutput);
+        let dismiss = (self.outcome.is_some() && !self.is_active).then_some(Action::DismissOutcome);
+
+        stop.into_iter().chain(toggle).chain(dismiss)
+    }
+
+    /// Label rendered for one action in the panel's current state.
+    pub fn action_label(&self, action: Action) -> &'static str {
+        match action {
+            Action::Stop if self.cancellation_requested => STOPPING_LABEL,
+            Action::Stop => STOP_LABEL,
+            Action::ToggleOutput if self.details_expanded => HIDE_OUTPUT_LABEL,
+            Action::ToggleOutput => SHOW_OUTPUT_LABEL,
+            Action::DismissOutcome => DISMISS_LABEL,
+        }
+    }
+
+    /// Whether one action can be pressed in the panel's current state.
+    pub fn action_enabled(&self, action: Action) -> bool {
+        match action {
+            Action::Stop => !self.cancellation_requested,
+            Action::ToggleOutput | Action::DismissOutcome => true,
+        }
     }
 
     /// Clears cancellation state when a new package operation starts.
     pub fn begin_package_operation(&mut self) {
         self.cancellation_requested = false;
+        self.is_stoppable = true;
     }
 
     /// Marks the active operation as terminating its current manager command.
@@ -210,6 +326,7 @@ impl StatusPanel {
     /// Records a package-operation result until it is dismissed or superseded.
     pub fn record_outcome(&mut self, outcome: OperationOutcome) {
         self.cancellation_requested = false;
+        self.is_stoppable = false;
         self.outcome_logs.clone_from(&self.command_logs);
         self.outcome = Some(outcome);
     }
@@ -241,6 +358,35 @@ impl StatusPanel {
     }
 }
 
+/// Formats whole seconds as a compact elapsed-time suffix.
+fn format_elapsed(total_secs: u64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+/// Appends the current step's elapsed time while the operation is active.
+fn compose_display_label(base: &str, elapsed_secs: u64, is_active: bool) -> String {
+    if !is_active || elapsed_secs == 0 {
+        return base.to_owned();
+    }
+
+    format!("{base} · {}", format_elapsed(elapsed_secs))
+}
+
+/// Whether there is user-visible work for the panel to show.
+///
+/// `UpdatesInfo::background_loading_count` is deliberately absent: a scheduled
+/// read-only update check must not slide the panel open or subscribe to window
+/// frames when the user did nothing.
 fn has_active_work(
     installed_info: &InstalledInfo,
     updates_info: &UpdatesInfo,
@@ -503,36 +649,22 @@ fn render(panel: &StatusPanel) -> iced::Element<'_, Message> {
     .spacing(8)
     .align_y(iced::Alignment::Center);
 
-    if !panel.command_logs.is_empty() {
+    for action in panel.actions() {
+        let enabled = panel.action_enabled(action);
         status_actions = status_actions.push(
             button(
-                text(if panel.details_expanded {
-                    "Hide activity"
-                } else {
-                    "Activity"
-                })
-                .size(12),
+                text(panel.action_label(action)).size(if action.is_primary() { 13 } else { 12 }),
             )
-            .padding([5, 9])
-            .style(crate::theme::secondary_button(true))
-            .on_press(Message::ToggleDetails),
+            .padding(if action.is_primary() { [6, 12] } else { [5, 9] })
+            .style(crate::theme::secondary_button(enabled))
+            .on_press_maybe(enabled.then_some(action.message())),
         );
     }
 
-    if panel.outcome.is_some() && !panel.is_active {
-        status_actions = status_actions.push(
-            button(text("Dismiss").size(12))
-                .padding([5, 9])
-                .style(crate::theme::secondary_button(true))
-                .on_press(Message::DismissOutcome),
-        );
-    }
-
-    let status_text = panel
-        .outcome
-        .as_ref()
-        .filter(|_| !panel.is_active)
-        .map_or_else(|| panel.status_label.clone(), OperationOutcome::summary);
+    let status_text = match panel.outcome.as_ref().filter(|_| !panel.is_active) {
+        Some(outcome) => outcome.summary(),
+        None => panel.display_label.clone(),
+    };
 
     let mut panel_content = column![
         row![
@@ -560,6 +692,21 @@ fn render(panel: &StatusPanel) -> iced::Element<'_, Message> {
 
     if panel.is_active {
         panel_content = panel_content.push(progress_widget);
+
+        // Show the newest command line without requiring the output drawer, so
+        // a long package step has a second liveness signal beside the clock.
+        if !panel.details_expanded
+            && let Some(latest) = panel.command_logs.last()
+        {
+            panel_content = panel_content.push(
+                text(latest.as_str())
+                    .size(11)
+                    .font(crate::theme::FONT_MONO)
+                    .style(crate::theme::text_on_surface_alt)
+                    .width(Length::Fill)
+                    .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
+            );
+        }
     }
 
     let drawer_progress = panel
@@ -585,7 +732,10 @@ fn render(panel: &StatusPanel) -> iced::Element<'_, Message> {
     }
 
     let base_height = if panel.is_active { 58.0 } else { 42.0 };
-    let panel_height = base_height + drawer_progress * 174.0;
+    let hidden_drawer_preview =
+        panel.is_active && !panel.details_expanded && !panel.command_logs.is_empty();
+    let panel_height =
+        base_height + drawer_progress * 174.0 + if hidden_drawer_preview { 18.0 } else { 0.0 };
 
     container(panel_content)
         .padding([7, 16])
@@ -671,6 +821,19 @@ fn activity_capsule_bar<Message: 'static>(
 mod tests {
     use super::*;
 
+    fn active_updates_info(completed: usize, total: usize, package: &str) -> UpdatesInfo {
+        UpdatesInfo {
+            is_updating: true,
+            update_progress: Some((
+                completed,
+                total,
+                ManagerId::parse("builtin:cargo").unwrap(),
+                package.to_owned(),
+            )),
+            ..UpdatesInfo::default()
+        }
+    }
+
     #[test]
     fn cancellation_status_describes_the_manager_boundary() {
         let now = Instant::now();
@@ -700,5 +863,208 @@ mod tests {
 
         assert_eq!(panel.status_label, "Stopping current manager...");
         assert!(panel.cancellation_requested);
+    }
+
+    #[test]
+    fn active_partial_progress_keeps_liveness_signal() {
+        let now = Instant::now();
+        let mut panel = StatusPanel::new(now);
+        let installed = InstalledInfo::default();
+        let updates = active_updates_info(1, 3, "firefox");
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+        let synced_label = panel.display_label.clone();
+
+        // A second and a second later the only input is the frame tick that a
+        // frozen bar would otherwise not produce any visible change for.
+        panel.update(
+            Message::Tick(now + Duration::from_secs(1)),
+            &installed,
+            &updates,
+            &finding,
+            &catalog,
+        );
+        let after_one_second = panel.display_label.clone();
+        panel.update(
+            Message::Tick(now + Duration::from_secs(2)),
+            &installed,
+            &updates,
+            &finding,
+            &catalog,
+        );
+        let after_two_seconds = panel.display_label.clone();
+
+        assert!(
+            panel.progress > 0.0 && panel.progress < 1.0,
+            "partial progress"
+        );
+        assert!(
+            synced_label.contains("Updating 1/3: firefox"),
+            "unexpected base label: {synced_label}"
+        );
+        assert_ne!(synced_label, after_one_second);
+        assert_ne!(after_one_second, after_two_seconds);
+        assert!(after_one_second.ends_with("· 1s"), "{after_one_second}");
+        assert!(after_two_seconds.ends_with("· 2s"), "{after_two_seconds}");
+    }
+
+    #[test]
+    fn elapsed_suffix_is_dropped_when_the_operation_ends() {
+        let now = Instant::now();
+        let mut panel = StatusPanel::new(now);
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &active_updates_info(1, 3, "firefox"),
+            &finding,
+            &catalog,
+        );
+        panel.update(
+            Message::Tick(now + Duration::from_secs(5)),
+            &installed,
+            &active_updates_info(1, 3, "firefox"),
+            &finding,
+            &catalog,
+        );
+        assert!(panel.display_label.ends_with("· 5s"));
+
+        panel.update(
+            Message::Sync(now + Duration::from_secs(6)),
+            &installed,
+            &UpdatesInfo::default(),
+            &finding,
+            &catalog,
+        );
+
+        assert_eq!(panel.display_label, "Idle");
+    }
+
+    #[test]
+    fn stop_action_is_offered_while_active_and_absent_when_idle() {
+        let now = Instant::now();
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+        let updates = active_updates_info(1, 3, "firefox");
+
+        let mut panel = StatusPanel::new(now);
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert!(
+            !panel.actions().any(|action| action == Action::Stop),
+            "a read-only scan is not stoppable"
+        );
+
+        panel.begin_package_operation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+        let actions: Vec<_> = panel.actions().collect();
+
+        assert!(actions.contains(&Action::Stop));
+        assert_eq!(panel.action_label(Action::Stop), "Stop");
+        assert!(matches!(Action::Stop.message(), Message::StopOperation));
+        assert!(panel.action_enabled(Action::Stop));
+
+        panel.request_cancellation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert_eq!(panel.action_label(Action::Stop), "Stopping...");
+        assert!(!panel.action_enabled(Action::Stop));
+
+        let mut idle = StatusPanel::new(now);
+        idle.update(
+            Message::Sync(now),
+            &installed,
+            &UpdatesInfo::default(),
+            &finding,
+            &catalog,
+        );
+
+        assert!(!idle.actions().any(|action| action == Action::Stop));
+        assert_eq!(idle.actions().count(), 0);
+    }
+
+    #[test]
+    fn visible_action_labels_are_unique_per_screen_state() {
+        let now = Instant::now();
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let catalog = ManagerCatalog::builtin();
+        let updates = active_updates_info(1, 3, "firefox");
+
+        let mut panel = StatusPanel::new(now);
+        panel.begin_package_operation();
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        let labels: Vec<_> = panel
+            .actions()
+            .map(|action| panel.action_label(action))
+            .collect();
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+
+        assert_eq!(labels.len(), unique.len(), "duplicate labels: {labels:?}");
+        // The footer's history button must not share a label with any panel
+        // control, since both are on screen during an operation.
+        assert!(!labels.contains(&FOOTER_HISTORY_LABEL));
+        assert_eq!(panel.action_label(Action::ToggleOutput), SHOW_OUTPUT_LABEL);
+
+        panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
+
+        assert_eq!(panel.action_label(Action::Stop), "Stop");
+    }
+
+    #[test]
+    fn background_update_check_keeps_the_panel_closed() {
+        let now = Instant::now();
+        let mut panel = StatusPanel::new(now);
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let updates = UpdatesInfo {
+            background_loading_count: true,
+            init_progress: Some((0, 3)),
+            ..UpdatesInfo::default()
+        };
+
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &updates,
+            &finding,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(!has_active_work(&installed, &updates, &finding));
+        assert!(!panel.is_visible());
+        assert_eq!(panel.status_label, "Idle");
+
+        // The same scan is user-visible once the Updates page adopts it.
+        let adopted = UpdatesInfo {
+            is_loading_count: true,
+            ..updates
+        };
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &adopted,
+            &finding,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(panel.is_visible());
+    }
+
+    #[test]
+    fn elapsed_time_is_formatted_compactly() {
+        assert_eq!(format_elapsed(0), "0s");
+        assert_eq!(format_elapsed(45), "45s");
+        assert_eq!(format_elapsed(60), "1m 0s");
+        assert_eq!(format_elapsed(134), "2m 14s");
+        assert_eq!(format_elapsed(3600), "1h 0m");
+        assert_eq!(format_elapsed(7380), "2h 3m");
     }
 }

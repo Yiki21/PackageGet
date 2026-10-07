@@ -23,6 +23,8 @@ pub enum Shortcut {
     NavigateSettings,
     FocusPageSearch,
     Dismiss,
+    /// Release focus without dismissing the current transient surface.
+    BlurInput,
     PrimaryAction,
     SelectAll,
     MoveSelection(SelectionDirection),
@@ -209,7 +211,13 @@ fn shortcut_after_children(event: &Event, captured: bool) -> Option<Shortcut> {
     };
 
     if !*repeat && *modifiers == Modifiers::NONE && matches!(key, Key::Named(key::Named::Escape)) {
-        return Some(Shortcut::Dismiss);
+        // A focused text input swallows Escape to drop its own focus. Let it
+        // finish that job instead of also dismissing the page below.
+        return Some(if captured {
+            Shortcut::BlurInput
+        } else {
+            Shortcut::Dismiss
+        });
     }
 
     if captured {
@@ -306,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_is_available_after_a_text_input_consumes_it() {
+    fn escape_from_text_input_is_reported_as_blur() {
         let escape = key_event(
             Key::Named(key::Named::Escape),
             key::Physical::Unidentified(NativeCode::Unidentified),
@@ -315,6 +323,10 @@ mod tests {
 
         assert_eq!(
             shortcut_after_children(&escape, true),
+            Some(Shortcut::BlurInput)
+        );
+        assert_eq!(
+            shortcut_after_children(&escape, false),
             Some(Shortcut::Dismiss)
         );
     }

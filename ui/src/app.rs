@@ -35,6 +35,9 @@ impl LayoutMode {
     }
 }
 
+/// How often the background read-only update count check runs.
+const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Root GUI state for the updater application.
 #[derive(Debug, Clone)]
 pub struct App {
@@ -86,6 +89,11 @@ pub struct App {
     /// Managers whose in-flight updates initialization must not overwrite a
     /// newer post-operation refresh.
     updates_refresh_overrides: HashSet<ManagerId>,
+    /// Update count that the user has already been notified about.
+    ///
+    /// `None` means no non-zero count has been announced yet, so the next
+    /// non-zero discovery notifies once.
+    notified_update_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,8 +127,6 @@ pub enum Message {
     Content(content::Message),
     /// Status panel message.
     StatusPanel(status_panel::Message),
-    /// Stop the active operation before its next manager starts.
-    CancelActiveOperation,
     /// Show or hide the Activity Center.
     ToggleActivityCenter,
     /// Clear the bounded operation history.
@@ -149,6 +155,8 @@ pub enum Message {
     CancelPendingSettingsExit,
     /// Application-level keyboard shortcut.
     Shortcut(Shortcut),
+    /// Scheduled read-only check for newly available updates.
+    ScheduledUpdateCheck,
     /// Configuration load result.
     ConfigLoaded(Result<updater_core::Config, updater_core::error::CoreError>),
     /// Retry strict configuration loading.
@@ -219,6 +227,31 @@ pub enum Message {
     },
 }
 
+/// Keyboard hint shown in the footer for one page.
+///
+/// Every page advertises the page-switch shortcut and how to close the current
+/// transient surface; list pages additionally advertise moving and selecting,
+/// and only pages with a search box advertise `/` as the focus control.
+pub(crate) fn footer_shortcuts(page: content::ActiveContentPage) -> &'static str {
+    match page {
+        content::ActiveContentPage::Finding => {
+            "Ctrl+K Search  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Install"
+        }
+        content::ActiveContentPage::Updates => {
+            "Ctrl+R Refresh  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Update"
+        }
+        content::ActiveContentPage::Installed => {
+            "Ctrl+R Refresh  ·  ↑↓ Move  ·  Space Select  ·  Esc Close  ·  / Focus  ·  Alt+1–5 Pages  ·  Ctrl+Enter Remove"
+        }
+        content::ActiveContentPage::Health => {
+            "Ctrl+R Recheck  ·  Esc Close  ·  Alt+1–5 Pages  ·  Ctrl+Enter Save"
+        }
+        content::ActiveContentPage::Settings => {
+            "Tab Move Focus  ·  Esc Close  ·  Alt+1–5 Pages  ·  Ctrl+Enter Save"
+        }
+    }
+}
+
 impl App {
     /// Creates app state and starts config loading.
     pub fn new() -> (Self, Task<Message>) {
@@ -250,6 +283,7 @@ impl App {
             package_data_generation: 0,
             installed_refresh_overrides: HashSet::new(),
             updates_refresh_overrides: HashSet::new(),
+            notified_update_count: None,
         };
 
         let task = Task::batch(vec![
@@ -270,6 +304,9 @@ impl App {
             self.status_panel
                 .subscription(&self.installed_info, &self.updates_info, &self.finding_info)
                 .map(Message::StatusPanel),
+            // A fixed-interval read-only check so the Updates badge can appear
+            // without the user opening the Updates page first.
+            iced::time::every(UPDATE_CHECK_INTERVAL).map(|_| Message::ScheduledUpdateCheck),
             iced::window::close_requests().map(Message::CloseRequested),
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
@@ -279,7 +316,14 @@ impl App {
     /// Handles one app message and returns follow-up tasks.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let at = Instant::now();
-        let is_animation_message = matches!(&message, Message::StatusPanel(_));
+        // `StopOperation` changes panel state that the synced label must
+        // reflect, so it is routed like an ordinary message rather than an
+        // animation-only tick.
+        let is_animation_message = matches!(
+            &message,
+            Message::StatusPanel(panel_msg)
+                if !matches!(panel_msg, status_panel::Message::StopOperation)
+        );
         let task = if let Message::Shortcut(shortcut) = message {
             self.handle_shortcut(shortcut)
         } else {
@@ -331,6 +375,12 @@ impl App {
                     &mut self.manager_health,
                     &self.manager_catalog,
                 );
+                if self.updates_info.background_loading_count {
+                    // A source the user reloads during a scheduled check must
+                    // keep that fresher result over the check's older read.
+                    self.updates_refresh_overrides
+                        .extend(self.updates_info.loading_updates.keys().cloned());
+                }
 
                 task = match action {
                     content::Action::Run(content_task) => content_task.map(Message::Content),
@@ -373,6 +423,9 @@ impl App {
                 };
             }
             Message::StatusPanel(panel_msg) => {
+                if matches!(panel_msg, status_panel::Message::StopOperation) {
+                    self.cancel_active_operation();
+                }
                 self.status_panel.update(
                     panel_msg,
                     &self.installed_info,
@@ -380,12 +433,6 @@ impl App {
                     &self.finding_info,
                     &self.manager_catalog,
                 );
-            }
-            Message::CancelActiveOperation => {
-                if let Some(cancellation) = &self.active_operation_cancellation {
-                    cancellation.cancel();
-                    self.status_panel.request_cancellation();
-                }
             }
             Message::ToggleActivityCenter => {
                 self.activity_center_open = !self.activity_center_open;
@@ -412,6 +459,9 @@ impl App {
                 if let Err(error) = result {
                     log::warn!("Failed to show completion notification: {error}");
                 }
+            }
+            Message::ScheduledUpdateCheck => {
+                task = self.scheduled_update_check();
             }
             Message::ToggleSidebar => self.sidebar_expanded = !self.sidebar_expanded,
             Message::ToggleInspectorDrawer => {
@@ -459,7 +509,13 @@ impl App {
                         self.content.settings.sync_from_config(&config);
                         self.pm_config = config;
                         self.manager_health.invalidate();
-                        self.reload_package_data(content::PackageDataReload::Startup)
+                        // `reload_package_data` mutates state synchronously, so
+                        // the scheduled check that follows always sees the new
+                        // package-data generation.
+                        Task::batch(vec![
+                            self.reload_package_data(content::PackageDataReload::Startup),
+                            Task::done(Message::ScheduledUpdateCheck),
+                        ])
                     }
                     Err(error) => {
                         let (load_error, recovery_error) = match &self.config_load_state {
@@ -645,7 +701,7 @@ impl App {
             }
             Message::InitUpdatesFinished { generation } => {
                 if generation == self.package_data_generation {
-                    self.finish_init_updates_counts();
+                    task = self.finish_init_updates_counts();
                 }
             }
             Message::Shortcut(_) => unreachable!("shortcuts are handled before routed messages"),
@@ -666,23 +722,19 @@ impl App {
         }
 
         if matches!(shortcut, Shortcut::Dismiss) {
-            let dismissed = self.pending_settings_exit.take().is_some()
+            // Innermost surface first; the chain short-circuits, so one press
+            // closes one thing. Dismiss must not steal focus back into the page
+            // search box, so it never refocuses anything: the user asked to
+            // close something, not to start typing again, and `/` remains the
+            // documented way to focus search.
+            let _dismissed = self.pending_settings_exit.take().is_some()
                 || self
                     .content
                     .dismiss_active_transient(&mut self.installed_info)
                 || self.status_panel.dismiss_top_surface()
                 || std::mem::replace(&mut self.activity_center_open, false);
 
-            return match (dismissed, self.content.active_content) {
-                (
-                    true,
-                    ActiveContentPage::Finding
-                    | ActiveContentPage::Updates
-                    | ActiveContentPage::Installed
-                    | ActiveContentPage::Health,
-                ) => self.focus_search(self.content.active_content),
-                _ => Task::none(),
-            };
+            return Task::none();
         }
 
         match shortcut {
@@ -738,6 +790,11 @@ impl App {
             }
             Shortcut::FocusNext => iced::widget::operation::focus_next(),
             Shortcut::FocusPrevious => iced::widget::operation::focus_previous(),
+            // The focused text input already dropped its own focus before the
+            // shortcut was published, and iced exposes no `unfocus` task
+            // operation, so there is nothing left to do but leave the page's
+            // inspected row and drawers alone.
+            Shortcut::BlurInput => Task::none(),
             Shortcut::Dismiss => Task::none(),
         }
     }
@@ -768,11 +825,17 @@ impl App {
             content::ActiveContentPage::Updates
                 if !self.updates_info.has_loading_count && !self.updates_info.is_loading_count =>
             {
+                // A scheduled check may already be running. Adopt it, so the
+                // page shows its loading state without a second concurrent
+                // scan of the same managers.
+                let scheduled = self.updates_info.background_loading_count;
                 self.updates_info.is_loading_count = true;
-                tasks.push(self.start_init_updates_counts_task(
-                    self.pm_config.clone(),
-                    self.package_data_generation,
-                ));
+                if !scheduled {
+                    tasks.push(self.start_init_updates_counts_task(
+                        self.pm_config.clone(),
+                        self.package_data_generation,
+                    ));
+                }
             }
             content::ActiveContentPage::Installed
                 if !self.installed_info.has_loading_count
@@ -826,6 +889,68 @@ impl App {
         )
     }
 
+    fn cancel_active_operation(&mut self) {
+        if let Some(cancellation) = &self.active_operation_cancellation {
+            cancellation.cancel();
+            self.status_panel.request_cancellation();
+        }
+    }
+
+    /// Runs the read-only update count check when nothing else is in flight.
+    ///
+    /// This deliberately reuses the lazy per-page initialization path, which
+    /// calls `list_updates(.., refresh = false)`, so it can never trigger a
+    /// privileged database refresh or a write.
+    fn scheduled_update_check(&mut self) -> Task<Message> {
+        if !matches!(self.config_load_state, ConfigLoadState::Ready) {
+            return Task::none();
+        }
+        if !self.has_idle_update_scan() {
+            return Task::none();
+        }
+
+        // A scheduled check is background work: it must not pull the status
+        // panel open with a progress bar the user never asked for.
+        self.updates_info.background_loading_count = true;
+        self.start_init_updates_counts_task(self.pm_config.clone(), self.package_data_generation)
+    }
+
+    /// Whether a background update count scan may start right now.
+    ///
+    /// Reuses the same guards the Updates page uses: an in-flight count scan or
+    /// per-source load blocks a new one, and so does any other active work so a
+    /// background scan cannot race an operation's own manager refresh.
+    fn has_idle_update_scan(&self) -> bool {
+        !self.updates_info.is_loading_count
+            && !self.updates_info.background_loading_count
+            && self.updates_info.loading_updates.is_empty()
+            && !self.installed_info.is_loading_count
+            && self.installed_info.loading_installed.is_empty()
+            && !self.finding_info.is_installing
+            && !self.updates_info.is_updating
+            && !self.installed_info.is_removing
+            && !self.installed_info.is_updating
+            && self.finding_info.searching_managers.is_empty()
+    }
+
+    /// Builds the native notification task for a completed or discovered result.
+    fn notification_task(title: &'static str, body: String) -> Task<Message> {
+        Task::future(async move {
+            tokio::task::spawn_blocking(move || {
+                notify_rust::Notification::new()
+                    .summary(title)
+                    .body(&body)
+                    .appname("Updater")
+                    .show()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        })
+        .then(|result| Task::done(Message::NotificationFinished(result)))
+    }
+
     fn record_operation(
         &mut self,
         outcome: &content::OperationOutcome,
@@ -851,21 +976,7 @@ impl App {
         } else {
             "Updater operation stopped"
         };
-        let body = outcome.summary();
-        let notification = Task::future(async move {
-            tokio::task::spawn_blocking(move || {
-                notify_rust::Notification::new()
-                    .summary(title)
-                    .body(&body)
-                    .appname("Updater")
-                    .show()
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            })
-            .await
-            .map_err(|error| error.to_string())?
-        })
-        .then(|result| Task::done(Message::NotificationFinished(result)));
+        let notification = Self::notification_task(title, outcome.summary());
         Task::batch(vec![persist, notification])
     }
 
@@ -887,6 +998,30 @@ impl App {
 
     fn layout_mode(&self) -> LayoutMode {
         LayoutMode::from_width(self.window_size.width)
+    }
+
+    /// Builds the sidebar summary, including the at-a-glance update badge count.
+    pub fn sidebar_summary(&self) -> sidebar::Summary {
+        let update_count = self.updates_info.current_update_count();
+        sidebar::Summary {
+            update_count,
+            // The loading glyph belongs to the first-ever scan. A later
+            // background check must not hide a count the user can already see,
+            // while a load the user asked for looks the same as it always did.
+            updates_loading: self.updates_info.is_loading_count
+                || (self.updates_info.background_loading_count
+                    && !self.updates_info.has_loading_count)
+                || !self.updates_info.loading_updates.is_empty(),
+            updates_failed: !self.updates_info.init_errors.is_empty()
+                || !self.updates_info.load_errors.is_empty(),
+            health_checking: self.manager_health.is_checking(),
+            health_has_issues: self.manager_health.has_issues(
+                &self.pm_config,
+                &self.installed_info,
+                &self.updates_info,
+            ),
+            settings_dirty: self.content.settings.is_dirty(),
+        }
     }
 
     fn load_config_task(
@@ -1059,21 +1194,7 @@ impl App {
             return crate::shortcut::capture(page.into());
         }
 
-        let update_count = self.updates_info.current_update_count();
-        let sidebar_summary = sidebar::Summary {
-            update_count,
-            updates_loading: self.updates_info.is_loading_count
-                || !self.updates_info.loading_updates.is_empty(),
-            updates_failed: !self.updates_info.init_errors.is_empty()
-                || !self.updates_info.load_errors.is_empty(),
-            health_checking: self.manager_health.is_checking(),
-            health_has_issues: self.manager_health.has_issues(
-                &self.pm_config,
-                &self.installed_info,
-                &self.updates_info,
-            ),
-            settings_dirty: self.content.settings.is_dirty(),
-        };
+        let sidebar_summary = self.sidebar_summary();
         let mode = self.layout_mode();
         let compact_sidebar = mode == LayoutMode::Medium;
         let show_sidebar = mode != LayoutMode::Narrow || self.sidebar_expanded;
@@ -1170,56 +1291,16 @@ impl App {
 
         let shortcuts = iced::widget::container(
             row![
-                iced::widget::text(match self.content.active_content {
-                    content::ActiveContentPage::Finding => {
-                        "Ctrl+K Search  ·  Ctrl+R Refresh  ·  / Focus  ·  Ctrl+Enter Install"
-                    }
-                    content::ActiveContentPage::Updates => {
-                        "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Update"
-                    }
-                    content::ActiveContentPage::Installed => {
-                        "Ctrl+R Refresh  ·  / Focus  ·  Ctrl+A Select All  ·  Ctrl+Enter Remove"
-                    }
-                    content::ActiveContentPage::Health => {
-                        "Ctrl+R Recheck  ·  / Focus  ·  Ctrl+Enter Save"
-                    }
-                    content::ActiveContentPage::Settings => {
-                        "Alt+1–5 Navigate  ·  Tab Move Focus  ·  Ctrl+Enter Save"
-                    }
-                })
-                .size(11)
-                .style(crate::theme::text_on_surface_alt)
-                .width(Length::Fill),
-                iced::widget::button(iced::widget::text("Activity").size(11))
-                    .padding([3, 8])
-                    .style(crate::theme::secondary_button(true))
-                    .on_press(Message::ToggleActivityCenter),
+                iced::widget::text(footer_shortcuts(self.content.active_content))
+                    .size(11)
+                    .style(crate::theme::text_on_surface_alt)
+                    .width(Length::Fill),
                 iced::widget::button(
-                    iced::widget::text(
-                        if self
-                            .active_operation_cancellation
-                            .as_ref()
-                            .is_some_and(content::CancellationToken::is_cancelled)
-                        {
-                            "Stopping..."
-                        } else {
-                            "Stop Operation"
-                        },
-                    )
-                    .size(11),
+                    iced::widget::text(status_panel::FOOTER_HISTORY_LABEL).size(11)
                 )
                 .padding([3, 8])
-                .style(crate::theme::secondary_button(
-                    self.active_operation_cancellation
-                        .as_ref()
-                        .is_some_and(|token| !token.is_cancelled())
-                ))
-                .on_press_maybe(
-                    self.active_operation_cancellation
-                        .as_ref()
-                        .is_some_and(|token| !token.is_cancelled())
-                        .then_some(Message::CancelActiveOperation)
-                ),
+                .style(crate::theme::secondary_button(true))
+                .on_press(Message::ToggleActivityCenter),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1389,11 +1470,45 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn finish_init_updates_counts(&mut self) {
+    fn finish_init_updates_counts(&mut self) -> Task<Message> {
         self.updates_info.is_loading_count = false;
+        self.updates_info.background_loading_count = false;
         self.updates_info.has_loading_count = true;
         self.updates_info.init_progress = None;
         self.updates_refresh_overrides.clear();
+
+        self.notify_new_update_count()
+    }
+
+    /// Raises one notification when a scan discovers a non-zero update count.
+    ///
+    /// Gated on the existing notification preference, and raised only on the
+    /// transition from nothing to something: a repeated background check, or
+    /// one that finds a few more updates than the previous scan, stays silent.
+    fn notify_new_update_count(&mut self) -> Task<Message> {
+        let update_count: usize = self
+            .updates_info
+            .updates_by_manager
+            .values()
+            .map(|(count, _)| *count)
+            .sum();
+
+        if update_count == 0 {
+            // A later non-zero discovery should be able to notify again.
+            self.notified_update_count = None;
+            return Task::none();
+        }
+        if !self.pm_config.notifications_enabled || self.notified_update_count.is_some() {
+            return Task::none();
+        }
+
+        self.notified_update_count = Some(update_count);
+        let body = if update_count == 1 {
+            "1 package update is available".to_owned()
+        } else {
+            format!("{update_count} package updates are available")
+        };
+        Self::notification_task("Updater found package updates", body)
     }
 
     fn push_init_log(
@@ -1519,6 +1634,7 @@ impl App {
                 self.updates_info.init_logs.clear();
                 self.updates_info.has_loading_count = false;
                 self.updates_info.is_loading_count = false;
+                self.updates_info.background_loading_count = false;
                 self.content.updates.reset_pending_updates();
                 self.updates_refresh_overrides.clear();
 
@@ -1543,8 +1659,9 @@ impl App {
         let affected = changes.affected_managers();
         let installed_initialized =
             self.installed_info.has_loading_count || self.installed_info.is_loading_count;
-        let updates_initialized =
-            self.updates_info.has_loading_count || self.updates_info.is_loading_count;
+        let updates_initialized = self.updates_info.has_loading_count
+            || self.updates_info.is_loading_count
+            || self.updates_info.background_loading_count;
 
         self.installed_info
             .installed_packages
@@ -1604,7 +1721,7 @@ impl App {
             self.installed_refresh_overrides
                 .extend(affected.iter().cloned());
         }
-        if self.updates_info.is_loading_count {
+        if self.updates_info.is_loading_count || self.updates_info.background_loading_count {
             self.updates_refresh_overrides
                 .extend(affected.iter().cloned());
         }
@@ -1708,13 +1825,16 @@ impl App {
                 );
             }
 
-            if (self.updates_info.has_loading_count || self.updates_info.is_loading_count)
+            if (self.updates_info.has_loading_count
+                || self.updates_info.is_loading_count
+                || self.updates_info.background_loading_count)
                 && capabilities
                     .is_some_and(|capabilities| capabilities.contains(ManagerCapability::Updates))
             {
                 self.updates_info.init_errors.remove(&manager);
                 self.updates_info.load_errors.remove(&manager);
-                if self.updates_info.is_loading_count {
+                if self.updates_info.is_loading_count || self.updates_info.background_loading_count
+                {
                     self.updates_refresh_overrides.insert(manager.clone());
                 }
                 tasks.push(
@@ -1819,8 +1939,7 @@ impl App {
         let total = managers.len();
         self.updates_info.init_progress = Some((0, total));
         if total == 0 {
-            self.finish_init_updates_counts();
-            return Task::none();
+            return self.finish_init_updates_counts();
         }
 
         let registry = self.manager_catalog.registry();
@@ -2205,6 +2324,487 @@ mod tests {
         assert!(app.updates_info.is_loading_count);
         assert_eq!(app.updates_info.init_progress, Some((0, 1)));
         assert!(!app.installed_info.is_loading_count);
+    }
+
+    #[test]
+    fn scheduled_update_check_is_ignored_while_a_scan_is_in_flight() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+
+        // A count scan already running must not be restarted or have its
+        // progress reset by a background tick, whether the page or an earlier
+        // scheduled check started it.
+        for in_flight in ["page", "schedule"] {
+            app.updates_info.background_loading_count = in_flight == "schedule";
+            app.updates_info.is_loading_count = in_flight == "page";
+            app.updates_info.init_progress = Some((1, 3));
+
+            let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+            assert!(
+                app.updates_info.is_loading_count || app.updates_info.background_loading_count,
+                "{in_flight} scan was cleared"
+            );
+            assert_eq!(app.updates_info.init_progress, Some((1, 3)));
+        }
+
+        // Once the scan drained, the same message starts a fresh count.
+        app.updates_info.is_loading_count = false;
+        app.updates_info.background_loading_count = false;
+        app.updates_info.init_progress = None;
+
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        assert!(app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert_eq!(app.updates_info.init_progress, Some((0, 1)));
+    }
+
+    #[test]
+    fn scheduled_update_check_does_not_start_during_a_package_operation() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        app.updates_info.is_updating = true;
+
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        assert!(!app.updates_info.is_loading_count);
+        assert!(!app.updates_info.background_loading_count);
+        assert!(app.updates_info.init_progress.is_none());
+    }
+
+    #[test]
+    fn scheduled_update_check_leaves_the_status_panel_closed() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        // The scan runs, but as background work: no panel, no progress bar.
+        assert!(app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert!(!app.status_panel.is_visible());
+        // The first-ever scan still shows the badge's loading glyph.
+        assert!(app.sidebar_summary().updates_loading);
+
+        // Opening the Updates page adopts that scan rather than starting a
+        // second one, and only then does it become user-visible work.
+        let _ = app.activate_page(content::ActiveContentPage::Updates);
+
+        assert!(app.updates_info.is_loading_count);
+        assert!(app.updates_info.background_loading_count);
+        assert_eq!(app.updates_info.init_progress, Some((0, 1)));
+    }
+
+    #[test]
+    fn a_known_update_count_survives_a_background_rescan() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert!(app.updates_info.has_loading_count);
+        let settled = app.sidebar_summary();
+        assert_eq!(settled.update_count, 1);
+        assert!(!settled.updates_loading);
+
+        // A later scheduled check must not trade the visible count for the
+        // loading glyph.
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        assert!(app.updates_info.background_loading_count);
+        let rescanning = app.sidebar_summary();
+        assert_eq!(rescanning.update_count, 1);
+        assert!(
+            !rescanning.updates_loading,
+            "a background rescan hid the known count"
+        );
+    }
+
+    #[test]
+    fn a_source_reloaded_during_a_background_check_keeps_its_fresh_result() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        // The user reloads the source while the scheduled check is running.
+        app.updates_info.loading_updates.insert(manager.clone(), 1);
+        let _ = app.update_message(Message::Content(content::Message::Settings(
+            content::SettingsMessage::NotificationsChanged(true),
+        )));
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "stale"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+
+        assert!(
+            !app.updates_info.updates_by_manager.contains_key(&manager),
+            "the background check's older read replaced the user's reload"
+        );
+    }
+
+    #[test]
+    fn configuration_reload_clears_an_in_flight_background_check() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config.clone())));
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        // The reload bumps the generation, so the old scan's finish message is
+        // ignored. A stuck flag would block every later scheduled check.
+        let _ = app.reload_package_data(content::PackageDataReload::Startup);
+
+        assert!(!app.updates_info.background_loading_count);
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+    }
+
+    #[test]
+    fn background_check_flag_clears_when_its_scan_finishes() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager,
+            result: Ok(Vec::new()),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert!(!app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert!(app.updates_info.has_loading_count);
+        assert!(!app.sidebar_summary().updates_loading);
+        // The guard released, so the next tick may scan again.
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+    }
+
+    #[test]
+    fn a_user_started_update_load_keeps_the_badge_loading_until_it_finishes() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm),
+            ],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.activate_page(content::ActiveContentPage::Updates);
+        assert!(app.sidebar_summary().updates_loading);
+
+        // One source reporting does not end a load the user asked for.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: cargo,
+            result: Ok(Vec::new()),
+        });
+        assert!(app.updates_info.has_loading_count);
+        assert!(app.sidebar_summary().updates_loading);
+
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+        assert!(!app.sidebar_summary().updates_loading);
+    }
+
+    #[test]
+    fn discovered_update_count_reaches_the_sidebar_badge() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+
+        assert_eq!(app.sidebar_summary().update_count, 0);
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation: app.package_data_generation,
+            manager,
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager_id("builtin:cargo"), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+
+        assert_eq!(app.sidebar_summary().update_count, 1);
+    }
+
+    #[test]
+    fn a_failed_count_scan_drops_out_of_the_sidebar_badge() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+        assert_eq!(app.sidebar_summary().update_count, 1);
+
+        // The cache keeps the previous count so the source can show it as last
+        // known, but the badge must not present it as a current total.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager,
+            result: Err("package manager command failed".to_owned()),
+        });
+
+        assert_eq!(app.updates_info.current_update_count(), 0);
+        assert_eq!(app.sidebar_summary().update_count, 0);
+    }
+
+    #[test]
+    fn update_discovery_notification_is_gated_on_the_preference() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(Vec::new()),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+        assert_eq!(app.notified_update_count, None);
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+        app.updates_info.is_loading_count = true;
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        // Notifications are disabled by default, so nothing was announced.
+        assert_eq!(app.notified_update_count, None);
+
+        app.pm_config.notifications_enabled = true;
+        app.updates_info.is_loading_count = true;
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert_eq!(app.notified_update_count, Some(1));
+
+        // A scan that finds a few more updates than the announced set is not a
+        // fresh discovery, so it stays silent too.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![
+                PackageUpdate::new(
+                    updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                    "1.0",
+                    "2.0",
+                ),
+                PackageUpdate::new(
+                    updater_manager_api::PackageTarget::new(manager.clone(), "vim"),
+                    "8.0",
+                    "9.0",
+                ),
+            ]),
+        });
+        app.updates_info.is_loading_count = true;
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert_eq!(app.notified_update_count, Some(1));
+
+        // Draining back to zero re-arms the next discovery.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager,
+            result: Ok(Vec::new()),
+        });
+        app.updates_info.is_loading_count = true;
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert_eq!(app.notified_update_count, None);
+    }
+
+    #[test]
+    fn blur_keeps_transients_that_dismiss_clears() {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        app.activity_center_open = true;
+        app.status_panel
+            .record_outcome(updater_core::OperationOutcome {
+                action: updater_manager_api::PackageAction::Install,
+                completed_packages: 1,
+                total_packages: 1,
+                completed_managers: 1,
+                total_managers: 1,
+                failed_manager: None,
+                error: None,
+                cancelled: false,
+                manager_outcomes: Vec::new(),
+                scope: updater_manager_api::PackageScope::User,
+            });
+
+        // Esc captured by the focused search box only blurs it: the inspected
+        // row and the completed-operation surface must survive.
+        let _ = app.handle_shortcut(Shortcut::BlurInput);
+
+        assert!(
+            app.activity_center_open,
+            "blurring the search box must not dismiss the page behind it"
+        );
+        assert!(
+            app.status_panel.is_visible(),
+            "blurring the search box must not drop the operation summary"
+        );
+
+        // Esc anywhere else still dismisses, innermost surface first. The
+        // dismiss chain short-circuits, so each surface needs its own press.
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(
+            !app.status_panel.is_visible(),
+            "dismissing outside the search box still clears the operation summary"
+        );
+
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(!app.activity_center_open);
+    }
+
+    #[test]
+    fn blur_keeps_the_inspected_row_that_dismiss_clears() {
+        let mut app = app();
+        let _ = app.update_message(Message::ConfigLoaded(Ok(updater_core::Config::default())));
+        app.content.active_content = content::ActiveContentPage::Finding;
+        let _ = app.update_message(Message::Content(content::Message::Finding(
+            content::FindingMessage::InspectPackage(
+                manager_id("builtin:cargo"),
+                "alpha".to_owned(),
+            ),
+        )));
+        assert!(app.content.finding.has_inspector_selection());
+
+        // Esc captured by the focused search box only blurs it.
+        let _ = app.handle_shortcut(Shortcut::BlurInput);
+
+        assert!(
+            app.content.finding.has_inspector_selection(),
+            "blurring the search box must keep the inspected row"
+        );
+
+        // Esc anywhere else still dismisses the inspected row.
+        let _ = app.handle_shortcut(Shortcut::Dismiss);
+
+        assert!(!app.content.finding.has_inspector_selection());
+    }
+
+    #[test]
+    fn footer_hints_document_the_keyboard_controls() {
+        for page in [
+            content::ActiveContentPage::Finding,
+            content::ActiveContentPage::Updates,
+            content::ActiveContentPage::Installed,
+            content::ActiveContentPage::Health,
+            content::ActiveContentPage::Settings,
+        ] {
+            let hint = footer_shortcuts(page);
+            assert!(
+                hint.contains("Esc Close"),
+                "{page:?} footer omits Esc: {hint}"
+            );
+            assert!(
+                hint.contains("Alt+1–5 Pages"),
+                "{page:?} footer omits the page-switch shortcut: {hint}"
+            );
+        }
+
+        for page in [
+            content::ActiveContentPage::Finding,
+            content::ActiveContentPage::Updates,
+            content::ActiveContentPage::Installed,
+        ] {
+            let hint = footer_shortcuts(page);
+            assert!(hint.contains("↑↓ Move"), "{page:?} footer omits movement");
+            assert!(
+                hint.contains("Space Select"),
+                "{page:?} footer omits selection"
+            );
+        }
     }
 
     #[test]

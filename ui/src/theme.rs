@@ -98,7 +98,8 @@ pub mod palette {
 
     pub const GRAY_2: Color = Color::from_rgb8(233, 236, 239);
     pub const GRAY_4: Color = Color::from_rgb8(206, 212, 218);
-    pub const GRAY_6: Color = Color::from_rgb8(134, 142, 150);
+    /// Secondary text that meets WCAG AA on every light surface.
+    pub const GRAY_6_TEXT: Color = Color::from_rgb8(102, 110, 118);
     pub const GRAY_7: Color = Color::from_rgb8(73, 80, 87);
     pub const GRAY_9: Color = Color::from_rgb8(33, 37, 41);
 
@@ -117,7 +118,8 @@ pub mod palette {
     pub const APP_SIDEBAR: Color = Color::from_rgb8(247, 249, 255);
     pub const APP_GROUPED: Color = Color::from_rgb8(250, 251, 255);
 
-    pub const ORANGE_9: Color = Color::from_rgb8(217, 72, 15);
+    /// Warning text that meets WCAG AA on every light surface.
+    pub const ORANGE_9_TEXT: Color = Color::from_rgb8(194, 65, 12);
 
     pub const RED_0: Color = Color::from_rgb8(255, 245, 245);
     pub const RED_8: Color = Color::from_rgb8(224, 49, 49);
@@ -147,11 +149,13 @@ pub mod colors {
     pub const ON_SURFACE: Color = palette::GRAY_9;
     pub const ON_SURFACE_IDLE: Color = palette::GRAY_7;
     pub const ON_SURFACE_MUTED: Color = palette::GRAY_7;
-    pub const ON_SURFACE_ALT: Color = palette::GRAY_6;
+    pub const ON_SURFACE_ALT: Color = palette::GRAY_6_TEXT;
 
     pub const SUCCESS: Color = palette::TEAL_9;
-    pub const WARNING: Color = palette::ORANGE_9;
-    pub const ERROR: Color = palette::RED_8;
+    pub const WARNING: Color = palette::ORANGE_9_TEXT;
+    /// Error text is `RED_9` rather than `RED_8`: `RED_8` is only 4.29:1 on the
+    /// sidebar and 4.36:1 on muted surfaces, both under the 4.5:1 AA floor.
+    pub const ERROR: Color = palette::RED_9;
     pub const ERROR_SOFT: Color = palette::RED_0;
 
     pub const DISCOVER: Color = palette::VIOLET_7;
@@ -160,7 +164,7 @@ pub mod colors {
     pub const UPDATES_SOFT: Color = palette::TEAL_0;
     pub const INSTALLED: Color = palette::BLUE_8;
     pub const INSTALLED_SOFT: Color = palette::BLUE_0;
-    pub const HEALTH: Color = palette::ORANGE_9;
+    pub const HEALTH: Color = palette::ORANGE_9_TEXT;
     pub const HEALTH_SOFT: Color = Color::from_rgb8(255, 249, 219);
     pub const SETTINGS: Color = palette::GRAPE_8;
     pub const SETTINGS_SOFT: Color = palette::GRAPE_0;
@@ -807,5 +811,85 @@ pub fn action_button(
             },
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{colors, palette};
+    use iced::Color;
+
+    /// WCAG 2.1 AA contrast floor for text below 18px, or below 14px bold.
+    const AA_CONTRAST: f32 = 4.5;
+
+    /// Backgrounds that light-theme text is actually drawn on.
+    const LIGHT_SURFACES: [(&str, Color); 4] = [
+        ("BACKGROUND", colors::BACKGROUND),
+        ("SIDEBAR", colors::SIDEBAR),
+        ("SURFACE_MUTED", colors::SURFACE_MUTED),
+        ("ACCENT_SOFT selected row", colors::ACCENT_SOFT),
+    ];
+
+    /// Light-theme tokens used for text below 18px.
+    const LIGHT_TEXT_TOKENS: [(&str, Color); 8] = [
+        ("ON_SURFACE", colors::ON_SURFACE),
+        ("ON_SURFACE_IDLE", colors::ON_SURFACE_IDLE),
+        ("ON_SURFACE_MUTED", colors::ON_SURFACE_MUTED),
+        ("ON_SURFACE_ALT", colors::ON_SURFACE_ALT),
+        ("ACCENT", colors::ACCENT),
+        ("SUCCESS", colors::SUCCESS),
+        ("WARNING", colors::WARNING),
+        ("ERROR", colors::ERROR),
+    ];
+
+    #[test]
+    fn light_text_colors_meet_wcag_aa() {
+        for (text_name, text) in LIGHT_TEXT_TOKENS {
+            for (surface_name, surface) in LIGHT_SURFACES {
+                let ratio = text.relative_contrast(surface);
+                assert!(
+                    ratio >= AA_CONTRAST,
+                    "{text_name} on {surface_name} is {ratio:.3}:1, below {AA_CONTRAST}:1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_page_accents_meet_wcag_aa() {
+        // Each page accent also paints small text via its own token.
+        let accents = [
+            ("HEALTH", colors::HEALTH),
+            ("UPDATES", colors::UPDATES),
+            ("INSTALLED", colors::INSTALLED),
+            ("DISCOVER", colors::DISCOVER),
+            ("SETTINGS", colors::SETTINGS),
+        ];
+        for (text_name, text) in accents {
+            for (surface_name, surface) in LIGHT_SURFACES {
+                let ratio = text.relative_contrast(surface);
+                assert!(
+                    ratio >= AA_CONTRAST,
+                    "{text_name} on {surface_name} is {ratio:.3}:1, below {AA_CONTRAST}:1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_secondary_text_stays_lighter_than_muted_text() {
+        let on_surface = colors::ON_SURFACE.relative_luminance();
+        let muted = colors::ON_SURFACE_MUTED.relative_luminance();
+        let alt = colors::ON_SURFACE_ALT.relative_luminance();
+
+        assert!(on_surface < muted, "primary text must be the darkest step");
+        assert!(
+            palette::GRAY_6_TEXT.relative_luminance() > palette::GRAY_7.relative_luminance(),
+            "readable secondary text must stay lighter than muted text"
+        );
+        assert!(
+            muted < alt,
+            "secondary text must stay lighter than muted text"
+        );
     }
 }
