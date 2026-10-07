@@ -102,7 +102,7 @@ If the repository has published a release for your platform, download one of the
 - Linux native packages: `.deb`, `.rpm`, or Arch Linux `.pkg.tar.zst`
 - Linux portable packages: glibc/musl `.tar.gz` or glibc `.AppImage`, for x86_64 and aarch64
 - Windows x86_64: portable `.zip` or per-user setup `.exe`
-- macOS arm64/x86_64: `.app.zip` or `.dmg`
+- macOS arm64 (Apple Silicon): `.app.zip` or `.dmg`
 
 GitHub Actions builds these packages automatically. Windows and macOS artifacts are currently unsigned: SmartScreen or Gatekeeper may block or warn on first launch. Verify the downloaded file against `SHA256SUMS`; do not treat the absence of a warning as signature verification.
 

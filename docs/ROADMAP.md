@@ -192,8 +192,8 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 
 1.  保留并验证 Linux amd64/arm64 .deb/.rpm与Arch x86_64 `.pkg.tar.zst`，同时打包Polkit policy与固定特权helper并验证X11/Wayland desktop entry；修正 RPM package 选择器。
 2.  通过通用 Rust 二进制打包工具配置 Windows x86_64 便携 .zip 与安装包，增加 .ico、版本信息和 application identity。
-3.  生成 macOS Apple Silicon/Intel .app 和 .dmg，增加 .icns、Info.plist、bundle ID、最低系统版本说明；首轮 artifact 和 README 明确标注
-    unsigned/Gatekeeper/SmartScreen 限制。
+3.  生成 macOS Apple Silicon .app 和 .dmg，增加 .icns、Info.plist、bundle ID、最低系统版本说明；首轮 artifact 和 README 明确标注
+    unsigned/Gatekeeper/SmartScreen 限制。1.3.0 起不再构建 Intel（x86_64）macOS 产物，只发布 arm64；Intel Mac 用户继续使用 1.2.2。
 4.  .github/workflows/package.yml 增加 Windows/macOS runner、架构化 artifact 名称、checksums 和 release 汇总；签名/notarization job
     预留清晰输入，但在没有证书/secrets 时不伪装成已签名发布。
 5.  更新 README 和 manager-authoring 文档，按平台列出实际支持的 manager、提权模型、安装方式和限制。
@@ -420,7 +420,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
 - updater_core：registry重复ID/稳定排序、Config schema校验、未知ID保留、原子替换、串行manager ordering、stop-on-failure、partial success、在下一组前取消。
 - updater-managers：每个 manager 的离线 parser fixture、命令构造、平台注册；真实网络/本机 package manager 测试保持 opt-in。
 - updater：breakpoint/layout、dirty Settings、stale request rejection、确认计划冻结、Activity retention/redaction、status outcome、shortcut capture。
-- CI target matrix 至少覆盖 Linux Wayland/X11 编译、Windows x86_64、macOS arm64/x86_64；平台 smoke test
+- CI target matrix 至少覆盖 Linux Wayland/X11 编译、Windows x86_64、macOS arm64；平台 smoke test
   只启动窗口/加载配置并受控退出，不执行真实安装、更新或卸载。
 
 本地串行命令
@@ -441,7 +441,7 @@ rc/status_panel.rs、ui/src/activity.rs、manager API package model、command ex
      2. UI：Light/Dark/High Contrast × Wide/Medium/Narrow，检查 page accents、toolbar、sidebar sheet、inspector、Activity/status、键盘操作和 Settings dirty
      prompt。
      3. Windows：Winget 检测、只读 search/list/update scan、非管理员与需要提权场景、便携包和安装包启动。
-     4. macOS：Apple Silicon/Intel 构建产物启动、Homebrew 检测及只读流程、.app/.dmg 资源与未签名提示。
+     4. macOS：Apple Silicon 构建产物启动、Homebrew 检测及只读流程、.app/.dmg 资源与未签名提示。
      5. 操作确认：使用受控测试 manager 驱动 install/update/remove、partial failure、retry、stale response 和 cancellation
      lifecycle；真实系统事务只在明确授权的隔离环境中验证。
 
