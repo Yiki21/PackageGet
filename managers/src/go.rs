@@ -31,6 +31,9 @@ const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 /// Maximum number of `go list -m` lookups in flight during an update scan.
 const UPDATE_LOOKUP_CONCURRENCY: usize = 4;
+/// Shown when a Go search query is not an exact module path.
+const EXACT_MODULE_PATH_MESSAGE: &str =
+    "Go search needs an exact module path, for example golang.org/x/tools/gopls";
 
 /// Direct `updater-manager-api` implementation for Go-installed binaries.
 #[derive(Debug, Clone)]
@@ -552,7 +555,10 @@ impl PackageManager for GoManager {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let versions = self.versions(config, query).await?;
+        let versions = match self.versions(config, query).await {
+            Ok(versions) => versions,
+            Err(error) => return Err(module_path_search_error(query, error)),
+        };
         let installed = self
             .installed_binaries(config)
             .await?
@@ -1017,9 +1023,39 @@ fn protocol(message: &str, detail: &str) -> ManagerError {
 
 /// Keeps a per-binary lookup failure's classification while naming the binary
 /// it belongs to.
+///
+/// The original detail is preserved because it carries the failing command and
+/// its stderr, which is what tells an expired module apart from an
+/// unreachable proxy or a missing credential.
 fn degraded_lookup(binary: &str, module: &str, error: ManagerError) -> ManagerError {
-    let detail = format!("{binary} ({module})");
+    let detail = match error.detail() {
+        Some(cause) => format!("{binary} ({module}): {cause}"),
+        None => format!("{binary} ({module})"),
+    };
     ManagerError::new(error.kind(), error.message().to_owned()).with_detail(detail)
+}
+
+/// Rewrites the failure of a module lookup made from the search box.
+///
+/// Go has no catalog to search: `search` resolves one exact module path, so an
+/// ordinary word such as `lint` reaches `go list` and fails with Go's
+/// malformed-module-path wording. Naming the requirement is more useful than a
+/// bare command failure. Timeouts, network failures and a missing `go` binary
+/// keep their original error.
+fn module_path_search_error(query: &str, error: ManagerError) -> ManagerError {
+    let query_is_not_a_module_path = validate_go_path(query, "").is_err()
+        || error.detail().is_some_and(|detail| {
+            detail.contains("malformed module path")
+                || detail.contains("missing dot in first path element")
+        });
+    if !query_is_not_a_module_path {
+        return error;
+    }
+    match error.detail() {
+        Some(detail) => ManagerError::new(error.kind(), EXACT_MODULE_PATH_MESSAGE)
+            .with_detail(detail.to_owned()),
+        None => ManagerError::new(error.kind(), EXACT_MODULE_PATH_MESSAGE),
+    }
 }
 
 fn fs_error(message: &str, error: std::io::Error) -> ManagerError {

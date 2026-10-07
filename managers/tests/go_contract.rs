@@ -328,8 +328,48 @@ exit 11
     assert_ne!(error.kind(), ManagerErrorKind::Protocol);
 }
 
+/// Go has no catalog to search, so a plain word such as `lint` reaches
+/// `go list` and fails. The message must name the exact-module-path
+/// requirement instead of reporting a bare command failure, while keeping
+/// Go's own diagnostics in the detail.
+#[cfg(unix)]
+#[tokio::test]
+async fn non_module_go_search_explains_the_exact_module_path_requirement() {
+    let manager = GoManager::new();
+    let bin = tempdir().expect("create GOBIN");
+    let (_directory, executable) = fake_go(
+        r#"#!/bin/sh
+if [ "$1" = "list" ] && [ "$2" = "-m" ] && [ "$3" = "-versions" ] && [ "$4" = "-json" ]; then
+  printf '%s\n' "go: malformed module path \"$5\": missing dot in first path element" >&2
+  exit 1
+fi
+exit 12
+"#,
+    );
+    let config = config(&manager, &executable, bin.path());
+
+    let error = manager
+        .search(&config, "lint")
+        .await
+        .expect_err("a plain word is not a Go module path");
+    assert!(
+        error.message().contains("exact module path"),
+        "search must name the exact module path requirement: {error:?}"
+    );
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+    assert!(
+        error
+            .detail()
+            .is_some_and(|detail| detail.contains("missing dot in first path element")),
+        "the detail must keep Go's own diagnostic: {error:?}"
+    );
+}
+
 /// A fake `go` whose installed binaries are `atool`, `mtool`, and `ztool`,
-/// where only `mtool`'s latest-version lookup fails.
+/// where only `mtool`'s latest-version lookup fails. `atool`'s lookup is the
+/// slowest, so lookups finish in the opposite order from the installed order
+/// and the update list can only be ordered by `atool`/`ztool` if the scan
+/// keeps results in their binary's slot.
 #[cfg(unix)]
 fn unresolvable_module_fixture() -> (&'static str, [&'static str; 3]) {
     const SCRIPT: &str = r#"#!/bin/sh
@@ -343,7 +383,7 @@ if [ "$1" = "version" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
 fi
 if [ "$1" = "list" ] && [ "$2" = "-m" ] && [ "$3" = "-json" ]; then
   case "$4" in
-    example.com/mod@latest) printf '{"Path":"example.com/mod","Version":"v1.3.0"}\n'; exit 0 ;;
+    example.com/mod@latest) sleep 0.3; printf '{"Path":"example.com/mod","Version":"v1.3.0"}\n'; exit 0 ;;
     example.net/ztool@latest) printf '{"Path":"example.net/ztool","Version":"v0.6.0"}\n'; exit 0 ;;
     example.net/mtool@latest) printf '410 Gone: module example.net/mtool is no longer available\n' >&2; exit 1 ;;
     *) exit 1 ;;
@@ -376,7 +416,8 @@ async fn one_unresolvable_module_keeps_the_other_go_updates() {
             .map(|update| update.target.name.as_str())
             .collect::<Vec<_>>(),
         vec!["atool", "ztool"],
-        "healthy binaries keep their updates in installed order"
+        "healthy binaries keep their updates in installed order even though the \
+         first lookup finished last"
     );
     assert_eq!(updates[0].available_version, "v1.3.0");
     assert_eq!(updates[1].available_version, "v0.6.0");
@@ -415,6 +456,12 @@ async fn degraded_go_report_records_the_binary_it_skipped() {
             .detail()
             .is_some_and(|detail| detail.contains("mtool")),
         "the recorded warning must name the skipped binary: {warning:?}"
+    );
+    assert!(
+        warning
+            .detail()
+            .is_some_and(|detail| detail.contains("410 Gone")),
+        "the recorded warning must keep the failing lookup's cause: {warning:?}"
     );
 }
 
