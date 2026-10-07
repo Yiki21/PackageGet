@@ -375,6 +375,12 @@ impl App {
                     &mut self.manager_health,
                     &self.manager_catalog,
                 );
+                if self.updates_info.background_loading_count {
+                    // A source the user reloads during a scheduled check must
+                    // keep that fresher result over the check's older read.
+                    self.updates_refresh_overrides
+                        .extend(self.updates_info.loading_updates.keys().cloned());
+                }
 
                 task = match action {
                     content::Action::Run(content_task) => content_task.map(Message::Content),
@@ -819,11 +825,17 @@ impl App {
             content::ActiveContentPage::Updates
                 if !self.updates_info.has_loading_count && !self.updates_info.is_loading_count =>
             {
+                // A scheduled check may already be running. Adopt it, so the
+                // page shows its loading state without a second concurrent
+                // scan of the same managers.
+                let scheduled = self.updates_info.background_loading_count;
                 self.updates_info.is_loading_count = true;
-                tasks.push(self.start_init_updates_counts_task(
-                    self.pm_config.clone(),
-                    self.package_data_generation,
-                ));
+                if !scheduled {
+                    tasks.push(self.start_init_updates_counts_task(
+                        self.pm_config.clone(),
+                        self.package_data_generation,
+                    ));
+                }
             }
             content::ActiveContentPage::Installed
                 if !self.installed_info.has_loading_count
@@ -897,7 +909,9 @@ impl App {
             return Task::none();
         }
 
-        self.updates_info.is_loading_count = true;
+        // A scheduled check is background work: it must not pull the status
+        // panel open with a progress bar the user never asked for.
+        self.updates_info.background_loading_count = true;
         self.start_init_updates_counts_task(self.pm_config.clone(), self.package_data_generation)
     }
 
@@ -908,6 +922,7 @@ impl App {
     /// background scan cannot race an operation's own manager refresh.
     fn has_idle_update_scan(&self) -> bool {
         !self.updates_info.is_loading_count
+            && !self.updates_info.background_loading_count
             && self.updates_info.loading_updates.is_empty()
             && !self.installed_info.is_loading_count
             && self.installed_info.loading_installed.is_empty()
@@ -990,7 +1005,12 @@ impl App {
         let update_count = self.updates_info.current_update_count();
         sidebar::Summary {
             update_count,
+            // The loading glyph belongs to the first-ever scan. A later
+            // background check must not hide a count the user can already see,
+            // while a load the user asked for looks the same as it always did.
             updates_loading: self.updates_info.is_loading_count
+                || (self.updates_info.background_loading_count
+                    && !self.updates_info.has_loading_count)
                 || !self.updates_info.loading_updates.is_empty(),
             updates_failed: !self.updates_info.init_errors.is_empty()
                 || !self.updates_info.load_errors.is_empty(),
@@ -1452,6 +1472,7 @@ impl App {
 
     fn finish_init_updates_counts(&mut self) -> Task<Message> {
         self.updates_info.is_loading_count = false;
+        self.updates_info.background_loading_count = false;
         self.updates_info.has_loading_count = true;
         self.updates_info.init_progress = None;
         self.updates_refresh_overrides.clear();
@@ -1613,6 +1634,7 @@ impl App {
                 self.updates_info.init_logs.clear();
                 self.updates_info.has_loading_count = false;
                 self.updates_info.is_loading_count = false;
+                self.updates_info.background_loading_count = false;
                 self.content.updates.reset_pending_updates();
                 self.updates_refresh_overrides.clear();
 
@@ -1637,8 +1659,9 @@ impl App {
         let affected = changes.affected_managers();
         let installed_initialized =
             self.installed_info.has_loading_count || self.installed_info.is_loading_count;
-        let updates_initialized =
-            self.updates_info.has_loading_count || self.updates_info.is_loading_count;
+        let updates_initialized = self.updates_info.has_loading_count
+            || self.updates_info.is_loading_count
+            || self.updates_info.background_loading_count;
 
         self.installed_info
             .installed_packages
@@ -1698,7 +1721,7 @@ impl App {
             self.installed_refresh_overrides
                 .extend(affected.iter().cloned());
         }
-        if self.updates_info.is_loading_count {
+        if self.updates_info.is_loading_count || self.updates_info.background_loading_count {
             self.updates_refresh_overrides
                 .extend(affected.iter().cloned());
         }
@@ -1802,13 +1825,16 @@ impl App {
                 );
             }
 
-            if (self.updates_info.has_loading_count || self.updates_info.is_loading_count)
+            if (self.updates_info.has_loading_count
+                || self.updates_info.is_loading_count
+                || self.updates_info.background_loading_count)
                 && capabilities
                     .is_some_and(|capabilities| capabilities.contains(ManagerCapability::Updates))
             {
                 self.updates_info.init_errors.remove(&manager);
                 self.updates_info.load_errors.remove(&manager);
-                if self.updates_info.is_loading_count {
+                if self.updates_info.is_loading_count || self.updates_info.background_loading_count
+                {
                     self.updates_refresh_overrides.insert(manager.clone());
                 }
                 tasks.push(
@@ -2311,22 +2337,31 @@ mod tests {
         let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
 
         // A count scan already running must not be restarted or have its
-        // progress reset by a background tick.
-        app.updates_info.is_loading_count = true;
-        app.updates_info.init_progress = Some((1, 3));
+        // progress reset by a background tick, whether the page or an earlier
+        // scheduled check started it.
+        for in_flight in ["page", "schedule"] {
+            app.updates_info.background_loading_count = in_flight == "schedule";
+            app.updates_info.is_loading_count = in_flight == "page";
+            app.updates_info.init_progress = Some((1, 3));
 
-        let _ = app.update_message(Message::ScheduledUpdateCheck);
+            let _ = app.update_message(Message::ScheduledUpdateCheck);
 
-        assert!(app.updates_info.is_loading_count);
-        assert_eq!(app.updates_info.init_progress, Some((1, 3)));
+            assert!(
+                app.updates_info.is_loading_count || app.updates_info.background_loading_count,
+                "{in_flight} scan was cleared"
+            );
+            assert_eq!(app.updates_info.init_progress, Some((1, 3)));
+        }
 
         // Once the scan drained, the same message starts a fresh count.
         app.updates_info.is_loading_count = false;
+        app.updates_info.background_loading_count = false;
         app.updates_info.init_progress = None;
 
         let _ = app.update_message(Message::ScheduledUpdateCheck);
 
-        assert!(app.updates_info.is_loading_count);
+        assert!(app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
         assert_eq!(app.updates_info.init_progress, Some((0, 1)));
     }
 
@@ -2344,7 +2379,191 @@ mod tests {
         let _ = app.update_message(Message::ScheduledUpdateCheck);
 
         assert!(!app.updates_info.is_loading_count);
+        assert!(!app.updates_info.background_loading_count);
         assert!(app.updates_info.init_progress.is_none());
+    }
+
+    #[test]
+    fn scheduled_update_check_leaves_the_status_panel_closed() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        // The scan runs, but as background work: no panel, no progress bar.
+        assert!(app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert!(!app.status_panel.is_visible());
+        // The first-ever scan still shows the badge's loading glyph.
+        assert!(app.sidebar_summary().updates_loading);
+
+        // Opening the Updates page adopts that scan rather than starting a
+        // second one, and only then does it become user-visible work.
+        let _ = app.activate_page(content::ActiveContentPage::Updates);
+
+        assert!(app.updates_info.is_loading_count);
+        assert!(app.updates_info.background_loading_count);
+        assert_eq!(app.updates_info.init_progress, Some((0, 1)));
+    }
+
+    #[test]
+    fn a_known_update_count_survives_a_background_rescan() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert!(app.updates_info.has_loading_count);
+        let settled = app.sidebar_summary();
+        assert_eq!(settled.update_count, 1);
+        assert!(!settled.updates_loading);
+
+        // A later scheduled check must not trade the visible count for the
+        // loading glyph.
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+
+        assert!(app.updates_info.background_loading_count);
+        let rescanning = app.sidebar_summary();
+        assert_eq!(rescanning.update_count, 1);
+        assert!(
+            !rescanning.updates_loading,
+            "a background rescan hid the known count"
+        );
+    }
+
+    #[test]
+    fn a_source_reloaded_during_a_background_check_keeps_its_fresh_result() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        // The user reloads the source while the scheduled check is running.
+        app.updates_info.loading_updates.insert(manager.clone(), 1);
+        let _ = app.update_message(Message::Content(content::Message::Settings(
+            content::SettingsMessage::NotificationsChanged(true),
+        )));
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "stale"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+
+        assert!(
+            !app.updates_info.updates_by_manager.contains_key(&manager),
+            "the background check's older read replaced the user's reload"
+        );
+    }
+
+    #[test]
+    fn configuration_reload_clears_an_in_flight_background_check() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager)],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config.clone())));
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        // The reload bumps the generation, so the old scan's finish message is
+        // ignored. A stuck flag would block every later scheduled check.
+        let _ = app.reload_package_data(content::PackageDataReload::Startup);
+
+        assert!(!app.updates_info.background_loading_count);
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+    }
+
+    #[test]
+    fn background_check_flag_clears_when_its_scan_finishes() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager,
+            result: Ok(Vec::new()),
+        });
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+
+        assert!(!app.updates_info.background_loading_count);
+        assert!(!app.updates_info.is_loading_count);
+        assert!(app.updates_info.has_loading_count);
+        assert!(!app.sidebar_summary().updates_loading);
+        // The guard released, so the next tick may scan again.
+        let _ = app.update_message(Message::ScheduledUpdateCheck);
+        assert!(app.updates_info.background_loading_count);
+    }
+
+    #[test]
+    fn a_user_started_update_load_keeps_the_badge_loading_until_it_finishes() {
+        let mut app = app();
+        let cargo = manager_id("builtin:cargo");
+        let npm = manager_id("builtin:npm");
+        let config = updater_core::Config {
+            managers: vec![
+                updater_core::ManagerConfig::new(cargo.clone()),
+                updater_core::ManagerConfig::new(npm),
+            ],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+        let _ = app.activate_page(content::ActiveContentPage::Updates);
+        assert!(app.sidebar_summary().updates_loading);
+
+        // One source reporting does not end a load the user asked for.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: cargo,
+            result: Ok(Vec::new()),
+        });
+        assert!(app.updates_info.has_loading_count);
+        assert!(app.sidebar_summary().updates_loading);
+
+        let _ = app.update_message(Message::InitUpdatesFinished { generation });
+        assert!(!app.sidebar_summary().updates_loading);
     }
 
     #[test]
@@ -2370,6 +2589,40 @@ mod tests {
         });
 
         assert_eq!(app.sidebar_summary().update_count, 1);
+    }
+
+    #[test]
+    fn a_failed_count_scan_drops_out_of_the_sidebar_badge() {
+        let mut app = app();
+        let manager = manager_id("builtin:cargo");
+        let config = updater_core::Config {
+            managers: vec![updater_core::ManagerConfig::new(manager.clone())],
+            ..updater_core::Config::default()
+        };
+        let _ = app.update_message(Message::ConfigLoaded(Ok(config)));
+        let generation = app.package_data_generation;
+
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager: manager.clone(),
+            result: Ok(vec![PackageUpdate::new(
+                updater_manager_api::PackageTarget::new(manager.clone(), "firefox"),
+                "1.0",
+                "2.0",
+            )]),
+        });
+        assert_eq!(app.sidebar_summary().update_count, 1);
+
+        // The cache keeps the previous count so the source can show it as last
+        // known, but the badge must not present it as a current total.
+        let _ = app.update_message(Message::InitUpdatesCount {
+            generation,
+            manager,
+            result: Err("package manager command failed".to_owned()),
+        });
+
+        assert_eq!(app.updates_info.current_update_count(), 0);
+        assert_eq!(app.sidebar_summary().update_count, 0);
     }
 
     #[test]

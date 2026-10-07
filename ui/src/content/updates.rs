@@ -192,6 +192,11 @@ pub struct UpdatesInfo {
     pub request_generation: u64,
     /// Whether initial per-manager counts are loading.
     pub is_loading_count: bool,
+    /// Whether a scheduled background count check is loading.
+    ///
+    /// Kept apart from `is_loading_count` so a check the user did not ask for
+    /// stays invisible to the status panel.
+    pub background_loading_count: bool,
     /// Whether counts have ever been loaded.
     pub has_loading_count: bool,
     /// Initialization progress `(completed, total)`.

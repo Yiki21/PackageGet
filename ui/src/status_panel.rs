@@ -382,6 +382,11 @@ fn compose_display_label(base: &str, elapsed_secs: u64, is_active: bool) -> Stri
     format!("{base} · {}", format_elapsed(elapsed_secs))
 }
 
+/// Whether there is user-visible work for the panel to show.
+///
+/// `UpdatesInfo::background_loading_count` is deliberately absent: a scheduled
+/// read-only update check must not slide the panel open or subscribe to window
+/// frames when the user did nothing.
 fn has_active_work(
     installed_info: &InstalledInfo,
     updates_info: &UpdatesInfo,
@@ -1011,6 +1016,46 @@ mod tests {
         panel.update(Message::Sync(now), &installed, &updates, &finding, &catalog);
 
         assert_eq!(panel.action_label(Action::Stop), "Stop");
+    }
+
+    #[test]
+    fn background_update_check_keeps_the_panel_closed() {
+        let now = Instant::now();
+        let mut panel = StatusPanel::new(now);
+        let installed = InstalledInfo::default();
+        let finding = FindingInfo::default();
+        let updates = UpdatesInfo {
+            background_loading_count: true,
+            init_progress: Some((0, 3)),
+            ..UpdatesInfo::default()
+        };
+
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &updates,
+            &finding,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(!has_active_work(&installed, &updates, &finding));
+        assert!(!panel.is_visible());
+        assert_eq!(panel.status_label, "Idle");
+
+        // The same scan is user-visible once the Updates page adopts it.
+        let adopted = UpdatesInfo {
+            is_loading_count: true,
+            ..updates
+        };
+        panel.update(
+            Message::Sync(now),
+            &installed,
+            &adopted,
+            &finding,
+            &ManagerCatalog::builtin(),
+        );
+
+        assert!(panel.is_visible());
     }
 
     #[test]
