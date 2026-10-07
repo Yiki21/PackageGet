@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ffi::OsString};
+use std::{collections::HashMap, ffi::OsString, path::Path};
 
 use async_trait::async_trait;
 use updater_manager_api::{
@@ -21,6 +21,9 @@ const APT_COMMAND: &str = "apt";
 const APT_CACHE_COMMAND: &str = "apt-cache";
 const DPKG_QUERY_COMMAND: &str = "dpkg-query";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
+/// Placeholder written by [`parse_upgradable_line`] when `apt list
+/// --upgradable` omits the old version.
+const UNKNOWN_VERSION: &str = "unknown";
 
 /// Direct `updater-manager-api` implementation for APT.
 #[derive(Debug, Clone)]
@@ -124,6 +127,13 @@ impl AptManager {
         run_command_with_progress(&command, on_progress).await
     }
 
+    /// Lists upgrades from `apt list --upgradable`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed command error when the listing fails, a protocol error
+    /// when its output is not valid UTF-8, and the installed-version lookup
+    /// error when a row needs a fallback version that cannot be read.
     async fn list_updates(
         &self,
         config: &ManagerConfig,
@@ -137,44 +147,58 @@ impl AptManager {
             run_command_with_progress(&refresh, |_| {}).await?;
         }
 
-        let spec = CommandSpec::new(&apt_path).args(["list", "--upgradable"]);
+        let spec = list_upgradable_command(&apt_path);
         let output = require_success(&spec, run_output(&spec).await?, "APT update listing failed")?;
         let stdout = decode_stdout(output, "APT update listing is not valid UTF-8")?;
-        let mut updates = Vec::new();
+        let mut entries = stdout
+            .lines()
+            .filter_map(parse_upgradable_line)
+            .collect::<Vec<_>>();
 
-        for line in stdout.lines() {
-            let Some((name, mut current_version, available_version)) = parse_upgradable_line(line)
-            else {
-                continue;
-            };
-
-            if current_version == "unknown" {
-                current_version = self
-                    .current_version(config, &name)
-                    .await
-                    .unwrap_or_else(|_| "unknown".to_owned());
+        // `apt list --upgradable` omits the old version for an upgrade that
+        // replaces a package APT does not consider installed in the current
+        // scope. One batched `dpkg-query` answers every such row; the fixed
+        // locale of the listing keeps the English marker, so a normal system
+        // never reaches this fallback and it never runs once per row.
+        if entries
+            .iter()
+            .any(|(_, current_version, _)| current_version == UNKNOWN_VERSION)
+        {
+            let installed_versions = self.installed_version_map().await?;
+            for (name, current_version, _) in &mut entries {
+                if current_version == UNKNOWN_VERSION
+                    && let Some(version) = installed_versions.get(name.as_str())
+                {
+                    current_version.clone_from(version);
+                }
             }
-
-            let mut target = PackageTarget::new(self.descriptor.id().clone(), name);
-            target.scope = PackageScope::System;
-            updates.push(PackageUpdate::new(
-                target,
-                current_version,
-                available_version,
-            ));
         }
 
-        Ok(updates)
+        Ok(entries
+            .into_iter()
+            .map(|(name, current_version, available_version)| {
+                let mut target = PackageTarget::new(self.descriptor.id().clone(), name);
+                target.scope = PackageScope::System;
+                PackageUpdate::new(target, current_version, available_version)
+            })
+            .collect())
     }
 
+    /// Returns the installed version of every package from one `dpkg-query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed command error when `dpkg-query` fails and a protocol
+    /// error when its output is not valid UTF-8. A failure must not become an
+    /// empty map: this map is the only source of installed versions for the
+    /// search rows, so an empty map would label installed packages as absent.
     async fn installed_version_map(&self) -> ManagerResult<HashMap<String, String>> {
-        let spec =
-            CommandSpec::new(DPKG_QUERY_COMMAND).args(["-W", "-f=${binary:Package}\t${Version}\n"]);
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
+        let spec = installed_version_command();
+        let output = require_success(
+            &spec,
+            run_output(&spec).await?,
+            "APT installed version listing failed",
+        )?;
         let stdout = decode_stdout(output, "APT installed versions are not valid UTF-8")?;
         Ok(parse_installed_versions(&stdout))
     }
@@ -255,12 +279,8 @@ impl PackageManager for AptManager {
 
     async fn search(&self, config: &ManagerConfig, query: &str) -> ManagerResult<Vec<PackageInfo>> {
         self.validate_config(config)?;
-        let spec = CommandSpec::new(APT_CACHE_COMMAND).args(["search", query]);
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
+        let spec = search_command(query);
+        let output = require_success(&spec, run_output(&spec).await?, "APT search failed")?;
         let stdout = decode_stdout(output, "APT search output is not valid UTF-8")?;
         let installed_versions = self.installed_version_map().await?;
         Ok(parse_search_results(
@@ -331,6 +351,30 @@ impl PackageManager for AptManager {
         });
         Ok(())
     }
+}
+
+fn list_upgradable_command(apt_path: &Path) -> CommandSpec {
+    with_fixed_locale(CommandSpec::new(apt_path).args(["list", "--upgradable"]))
+}
+
+fn search_command(query: &str) -> CommandSpec {
+    with_fixed_locale(CommandSpec::new(APT_CACHE_COMMAND).args(["search", query]))
+}
+
+fn installed_version_command() -> CommandSpec {
+    CommandSpec::new(DPKG_QUERY_COMMAND).args(["-W", "-f=${binary:Package}\t${Version}\n"])
+}
+
+/// Pins the translator to a fixed locale.
+///
+/// `apt list --upgradable` prints its `[upgradable from: <version>]` marker
+/// through gettext, and [`parse_upgradable_from`] only recognises the English
+/// form, so a translated locale would drop the current version on every row.
+/// Setting the locale keeps the parser from depending on the user's
+/// environment. `apt-cache search` gets the same pin so every apt parser reads
+/// one language.
+fn with_fixed_locale(spec: CommandSpec) -> CommandSpec {
+    spec.env("LC_ALL", "C").env("LANG", "C")
 }
 
 fn parse_installed_packages(stdout: &str, manager_id: &ManagerId) -> Vec<PackageInfo> {
@@ -420,7 +464,7 @@ fn parse_upgradable_line(line: &str) -> Option<(String, String, String)> {
     let mut fields = rest.split_whitespace();
     let _distribution = fields.next()?;
     let available_version = fields.next()?.to_owned();
-    let current_version = parse_upgradable_from(line).unwrap_or_else(|| "unknown".to_owned());
+    let current_version = parse_upgradable_from(line).unwrap_or_else(|| UNKNOWN_VERSION.to_owned());
 
     Some((name.to_owned(), current_version, available_version))
 }
@@ -494,6 +538,34 @@ mod tests {
             .map(OsString::from)
             .as_slice()
         );
+    }
+
+    #[test]
+    fn read_commands_pin_a_fixed_locale() {
+        let listing = list_upgradable_command(Path::new("/custom/apt"));
+        assert_eq!(listing.program(), Path::new("/custom/apt"));
+        assert_eq!(
+            listing.arguments(),
+            ["list", "--upgradable"].map(OsString::from).as_slice()
+        );
+        assert_eq!(
+            listing.environment(),
+            [
+                (OsString::from("LC_ALL"), OsString::from("C")),
+                (OsString::from("LANG"), OsString::from("C")),
+            ]
+        );
+
+        let search = search_command("shell");
+        assert_eq!(
+            search.arguments(),
+            ["search", "shell"].map(OsString::from).as_slice()
+        );
+        assert_eq!(search.environment(), listing.environment());
+
+        // The installed-version map only compares `NAME\tVERSION` fields, so
+        // it does not need the locale pinned.
+        assert_eq!(installed_version_command().environment(), []);
     }
 
     #[test]

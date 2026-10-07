@@ -170,17 +170,26 @@ impl PacmanManager {
             .collect())
     }
 
+    /// Returns the installed version of every package from one `pacman -Q`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed command error when `pacman -Q` fails, for example on a
+    /// locked or unreadable local database, and a protocol error when its
+    /// output is not valid UTF-8. A failure must not become an empty map: the
+    /// search rows use it to decide between installed versions and
+    /// [`NOT_INSTALLED_VERSION`].
     async fn installed_version_map(
         &self,
         config: &ManagerConfig,
     ) -> ManagerResult<HashMap<String, String>> {
         let pacman_path = resolve_executable(config, PACMAN_COMMAND);
         let spec = CommandSpec::new(pacman_path).arg("-Q");
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(HashMap::new());
-        }
-
+        let output = require_success(
+            &spec,
+            run_output(&spec).await?,
+            "pacman installed version listing failed",
+        )?;
         let stdout = decode_stdout(output, "pacman installed versions are not valid UTF-8")?;
         Ok(parse_installed_versions(&stdout))
     }
@@ -279,7 +288,18 @@ impl PackageManager for PacmanManager {
         let spec = CommandSpec::new(pacman_path).args(["-Ss", query]);
         let output = run_output(&spec).await?;
         if !output.status.success() {
-            return Ok(Vec::new());
+            // `pacman -Ss` exits 1 after printing nothing when the query
+            // matches no package: sync_search() returns `found == 0` and the
+            // only print path stays silent. That is the one exit code the tool
+            // defines as 'no results', so it stays an empty listing; every
+            // other failure (a locked or unreadable database) writes to stderr
+            // and is reported as an error.
+            if is_no_match_result(&output) {
+                return Ok(Vec::new());
+            }
+
+            let tail = command_output_tail(&output.stdout, &output.stderr);
+            return Err(command_status_error(&spec, output.status, &tail));
         }
 
         let stdout = decode_stdout(output, "pacman search output is not valid UTF-8")?;
@@ -499,6 +519,19 @@ fn command_output_tail(stdout: &[u8], stderr: &[u8]) -> String {
     }
 
     String::from_utf8_lossy(stdout).trim().to_owned()
+}
+
+/// Reports whether `pacman -Ss` failed only because nothing matched.
+///
+/// pacman's `sync_search` returns `(found == 0)` after a silent scan, so a
+/// no-match search exits 1 with both streams empty. Every real failure path in
+/// `sync_search` and in database loading prints a diagnostic through
+/// `pm_printf` first, so empty stderr is what separates 'no results' from
+/// 'could not search'.
+fn is_no_match_result(output: &Output) -> bool {
+    output.status.code() == Some(1)
+        && output.stdout.iter().all(u8::is_ascii_whitespace)
+        && output.stderr.iter().all(u8::is_ascii_whitespace)
 }
 
 fn ensure_supported_action(action: PackageAction) -> ManagerResult<()> {

@@ -82,12 +82,7 @@ impl DnfManager {
         package_name: &str,
     ) -> ManagerResult<String> {
         self.validate_config(config)?;
-        let spec = CommandSpec::new(RPM_COMMAND).args([
-            OsString::from("-q"),
-            OsString::from("--queryformat"),
-            OsString::from(RPM_VERSION_FORMAT),
-            OsString::from(package_name),
-        ]);
+        let spec = rpm_query_command(RPM_VERSION_FORMAT, package_name);
         let output = run_output(&spec).await?;
         if !output.status.success() {
             return Err(ManagerError::new(
@@ -112,21 +107,24 @@ impl DnfManager {
     /// Returns one installed version per RPM package name from a single
     /// `rpm -qa` query.
     ///
-    /// Any RPM failure yields an empty map so callers keep their per-row
-    /// fallback text instead of failing the whole listing.
-    async fn installed_version_map(&self) -> HashMap<String, String> {
+    /// # Errors
+    ///
+    /// Returns a typed command error when `rpm -qa` fails, for example on an
+    /// unreadable rpmdb, and a protocol error when its output is not valid
+    /// UTF-8. A failure must not become an empty map: the search rows use this
+    /// map to decide between installed versions and
+    /// [`NOT_INSTALLED_VERSION`], so swallowing the error would label installed
+    /// packages as absent.
+    async fn installed_version_map(&self) -> ManagerResult<HashMap<String, String>> {
         let spec =
             CommandSpec::new(RPM_COMMAND).args(["-qa", "--queryformat", RPM_VERSION_MAP_FORMAT]);
-        let Ok(output) = run_output(&spec).await else {
-            return HashMap::new();
-        };
-        if !output.status.success() {
-            return HashMap::new();
-        }
-
-        decode_stdout(output, "dnf installed versions are not valid UTF-8")
-            .map(|stdout| parse_installed_versions(&stdout))
-            .unwrap_or_default()
+        let output = require_success(
+            &spec,
+            run_output(&spec).await?,
+            "dnf installed version listing failed",
+        )?;
+        let stdout = decode_stdout(output, "dnf installed versions are not valid UTF-8")?;
+        Ok(parse_installed_versions(&stdout))
     }
 
     /// Executes a DNF package group while exposing normalized two-phase
@@ -184,7 +182,7 @@ impl DnfManager {
             return Ok(Vec::new());
         }
 
-        let installed_versions = self.installed_version_map().await;
+        let installed_versions = self.installed_version_map().await?;
         Ok(entries
             .into_iter()
             .map(|(name, available_version)| {
@@ -260,16 +258,31 @@ impl PackageManager for DnfManager {
             .with_detail(&target.name));
         }
 
-        let spec = CommandSpec::new(RPM_COMMAND).args([
-            OsString::from("-q"),
-            OsString::from("--queryformat"),
-            OsString::from(RPM_QUERY_FORMAT),
-            OsString::from(&target.name),
-        ]);
+        let spec = rpm_query_command(RPM_QUERY_FORMAT, &target.name);
         let output = run_output(&spec).await?;
         if !output.status.success() {
-            return Ok(None);
+            // RPM reports a missing package as `package <name> is not
+            // installed` with exit 1. Real rpm writes that diagnostic through
+            // its logging facility, so it arrives on stdout, not stderr; both
+            // streams are checked because rpmlib versions and wrappers differ.
+            // It is the only failure that means 'not installed': a broken
+            // rpmdb, a permission problem or a locked database also exit 1 and
+            // are reported instead of being flattened into an absent package.
+            // The fixed locale keeps that diagnostic in English for every
+            // user.
+            if rpm_reports_not_installed(&output.stdout)
+                || rpm_reports_not_installed(&output.stderr)
+            {
+                return Ok(None);
+            }
+
+            return Err(command_status_error(
+                &spec,
+                output.status,
+                &command_output_tail(&output.stdout, &output.stderr),
+            ));
         }
+
         let stdout = decode_stdout(output, "dnf package information is not valid UTF-8")?;
         Ok(parse_installed_packages(&stdout, self.descriptor.id())
             .into_iter()
@@ -302,11 +315,13 @@ impl PackageManager for DnfManager {
     async fn search(&self, config: &ManagerConfig, query: &str) -> ManagerResult<Vec<PackageInfo>> {
         self.validate_config(config)?;
         let dnf_path = resolve_executable(config, DNF_COMMAND);
-        let spec = CommandSpec::new(dnf_path).args(["search", "--quiet", query]);
-        let output = run_output(&spec).await?;
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
+        let spec = CommandSpec::new(dnf_path)
+            .env("LC_ALL", "C")
+            .args(["search", "--quiet", query]);
+        // dnf exits 0 with "No matches found." (dnf4 `search.py`, dnf5 alike),
+        // so a non-zero exit is always a real failure such as an unreachable
+        // repository or a locked rpmdb, never 'no results'.
+        let output = require_success(&spec, run_output(&spec).await?, "dnf search failed")?;
 
         let stdout = decode_stdout(output, "dnf search output is not valid UTF-8")?;
         let names = parse_search_names(&stdout);
@@ -314,7 +329,7 @@ impl PackageManager for DnfManager {
             return Ok(Vec::new());
         }
 
-        let installed_versions = self.installed_version_map().await;
+        let installed_versions = self.installed_version_map().await?;
         Ok(names
             .into_iter()
             .map(|name| {
@@ -580,6 +595,35 @@ fn parse_search_names(stdout: &str) -> Vec<String> {
     names
 }
 
+/// Builds a single-package RPM query in a fixed locale.
+///
+/// The locale is pinned because RPM translates its diagnostics, and callers
+/// match the English 'is not installed' text to tell a missing package from a
+/// broken rpmdb.
+fn rpm_query_command(query_format: &str, package_name: &str) -> CommandSpec {
+    CommandSpec::new(RPM_COMMAND).env("LC_ALL", "C").args([
+        OsString::from("-q"),
+        OsString::from("--queryformat"),
+        OsString::from(query_format),
+        OsString::from(package_name),
+    ])
+}
+
+/// Reports whether an rpm output stream says the package is simply not
+/// installed.
+///
+/// `rpm -q missing` exits 1 with `package missing is not installed`, which real
+/// rpm emits through `rpmlog`, i.e. on stdout; older or wrapped rpmlib builds
+/// have been seen on stderr, so callers pass both streams. A broken rpmdb, a
+/// permission error or a lock also exit non-zero but with an unrelated
+/// diagnostic. Callers must match this text before treating a failure as an
+/// absent package.
+fn rpm_reports_not_installed(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output)
+        .trim()
+        .ends_with("is not installed")
+}
+
 fn check_upgrade_command(dnf_path: &std::path::Path, refresh: bool) -> CommandSpec {
     if refresh {
         return system_helper_command("refresh", "dnf");
@@ -720,6 +764,32 @@ mod tests {
                 .map(OsString::from)
                 .as_slice()
         );
+    }
+
+    #[test]
+    fn rpm_queries_pin_a_fixed_locale_and_classify_missing_packages() {
+        let query = rpm_query_command(RPM_QUERY_FORMAT, "bash");
+        assert_eq!(
+            query.environment(),
+            [(OsString::from("LC_ALL"), OsString::from("C"))]
+        );
+        assert_eq!(query.arguments()[3], OsString::from("bash"));
+
+        // This helper is stream-agnostic: rpm's message is classified by text,
+        // so the stdout path is proved end to end by the contract test, whose
+        // fake rpm prints the diagnostic where real rpm does. Here the
+        // surrounding whitespace tolerance is pinned; a diagnostic that is not
+        // this sentence at all stays a failure.
+        assert!(rpm_reports_not_installed(
+            b"package bash is not installed\n"
+        ));
+        assert!(rpm_reports_not_installed(
+            b"\npackage bash is not installed\n"
+        ));
+        assert!(!rpm_reports_not_installed(
+            b"error: cannot open Packages database in /var/lib/rpm\n"
+        ));
+        assert!(!rpm_reports_not_installed(b""));
     }
 
     #[test]

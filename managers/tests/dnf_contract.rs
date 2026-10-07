@@ -124,6 +124,10 @@ async fn mismatched_config_and_targets_are_rejected_before_progress() {
 }
 
 /// Fake `dnf` that reports three updates and two search results.
+///
+/// The `search-fails` marker makes `dnf search` fail the way an unreachable
+/// repository or a locked cache would; dnf exits 0 with "No matches found."
+/// when a search simply matches nothing.
 #[cfg(unix)]
 const FAKE_DNF_SCRIPT: &str = r#"#!/bin/sh
 case "$1" in
@@ -137,6 +141,14 @@ case "$1" in
     exit 100
     ;;
   search)
+    if [ -e "${0%/*}/search-fails" ]; then
+      printf 'Error: Failed to download metadata for repo\n' >&2
+      exit 1
+    fi
+    if [ -e "${0%/*}/search-empty" ]; then
+      printf 'No matches found.\n'
+      exit 0
+    fi
     printf 'Matched fields: name, summary\n'
     printf 'kernel-core.x86_64\tThe Linux kernel\n'
     printf 'fzf.x86_64\tA command-line fuzzy finder\n'
@@ -151,10 +163,22 @@ exit 2
 /// kernel-core has three installed instances. Like real RPM, `rpm -q` prints
 /// one version per instance and only separates them when the query format
 /// ends in a newline; otherwise the instances are glued together.
+///
+/// `rpm-fails` reports an unreadable rpmdb, which is a failure and not a
+/// missing package; with `rpmdb-broken` present even a single-package query
+/// fails the same way.
+///
+/// A query for an unknown package prints `package <name> is not installed` on
+/// stdout and exits 1, matching real rpm, which emits that diagnostic through
+/// rpmlog.
 #[cfg(unix)]
 const FAKE_RPM_SCRIPT: &str = r#"#!/bin/sh
 directory=${0%/*}
 printf 'rpm %s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >> "$directory/rpm-invocations.log"
+if [ -e "$directory/rpmdb-broken" ]; then
+  printf 'error: cannot open Packages database in /var/lib/rpm\n' >&2
+  exit 1
+fi
 if [ -e "$directory/rpm-fails" ]; then
   printf 'rpmdb open failed\n' >&2
   exit 1
@@ -179,7 +203,7 @@ case "$1" in
         ;;
       bash) printf '5.2.26-3.fc40\n' ;;
       *)
-        printf 'package %s is not installed\n' "$4" >&2
+        printf 'package %s is not installed\n' "$4"
         exit 1
         ;;
     esac
@@ -330,27 +354,69 @@ async fn fake_rpm_on_path_child_checks_dnf_rpm_lookups() {
     fs::remove_file(directory.join("no-updates")).expect("restore fake DNF updates");
 
     fs::write(directory.join("rpm-fails"), "").expect("make fake RPM fail");
-    let updates = manager
+    let error = manager
         .updates(&config, false)
         .await
-        .expect("list fake DNF updates while RPM fails");
-    assert_eq!(updates.len(), 3);
-    assert!(
-        updates
-            .iter()
-            .all(|update| update.current_version == "unknown")
-    );
-    let search = manager
+        .expect_err("an unreadable rpmdb must fail the update listing");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+    let error = manager
         .search(&config, "python")
         .await
-        .expect("search fake DNF repositories while RPM fails");
-    assert_eq!(search.len(), 2);
-    assert!(
-        search
-            .iter()
-            .all(|package| package.version == "Not Installed")
-    );
+        .expect_err("an unreadable rpmdb must fail the search, not label rows absent");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
     assert_eq!(take_rpm_invocations(&directory).len(), 2);
+    fs::remove_file(directory.join("rpm-fails")).expect("restore fake RPM");
+
+    // A package RPM cannot find is still an absent package, but a database
+    // that cannot be opened is not: the two must not collapse into one answer.
+    fs::write(directory.join("rpmdb-broken"), "").expect("break the fake rpmdb");
+    let error = manager
+        .package_info(
+            &config,
+            &PackageTarget::new(manager.descriptor().id().clone(), "bash"),
+        )
+        .await
+        .expect_err("a broken rpmdb must not read as an absent package");
+    assert_eq!(error.kind(), ManagerErrorKind::Other);
+    let _ = take_rpm_invocations(&directory);
+    fs::remove_file(directory.join("rpmdb-broken")).expect("restore the fake rpmdb");
+
+    // `rpm -q` for a package that is genuinely absent keeps returning `None`.
+    assert!(
+        manager
+            .package_info(
+                &config,
+                &PackageTarget::new(manager.descriptor().id().clone(), "nosuchpackage"),
+            )
+            .await
+            .expect("query a missing package")
+            .is_none()
+    );
+    let _ = take_rpm_invocations(&directory);
+
+    // dnf exits 0 with "No matches found.", so an empty search is still an
+    // empty listing rather than an error.
+    fs::write(directory.join("search-empty"), "").expect("make fake DNF match nothing");
+    assert!(
+        manager
+            .search(&config, "zzz")
+            .await
+            .expect("a no-match search is an empty listing")
+            .is_empty()
+    );
+    assert!(
+        take_rpm_invocations(&directory).is_empty(),
+        "an empty search must not query RPM"
+    );
+    let _ = fs::remove_file(directory.join("search-empty"));
+
+    fs::write(directory.join("search-fails"), "").expect("make fake DNF search fail");
+    let error = manager
+        .search(&config, "python")
+        .await
+        .expect_err("a failed dnf search must not read as an empty result");
+    assert_eq!(error.kind(), ManagerErrorKind::Network);
+    let _ = fs::remove_file(directory.join("search-fails"));
 }
 
 #[tokio::test]
