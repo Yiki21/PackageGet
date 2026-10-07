@@ -176,7 +176,9 @@ async fn run_command_with_parser(
         }
     };
     // `Process::id` is only available while the direct child runs; the
-    // process group outlives it when descendants inherit the pipes.
+    // process group outlives it when descendants inherit the pipes. Only
+    // Unix signals the group after the child is reaped, so only Unix saves it.
+    #[cfg(unix)]
     let process_group = child.id();
     let stdout = child.stdout.take().ok_or_else(|| {
         ManagerError::new(
@@ -279,11 +281,20 @@ async fn run_command_with_parser(
                 cancellation_requested |= cancelled;
                 output_truncated = true;
                 output_open = false;
-                if !privileged
-                    && let Some(pid) = process_group
-                    && let Err(error) = terminate_process_group(pid, true).await
+                // `try_wait` has already reaped the direct child here. On Unix
+                // the process-group ID stays reserved while any member of the
+                // group is alive, so signalling it cannot reach an unrelated
+                // process. On Windows the reaped child's PID may already be
+                // reused, and `taskkill /T /F` would kill whatever tree now
+                // owns it, so the readers are only aborted there.
+                #[cfg(unix)]
                 {
-                    termination_error.get_or_insert(error);
+                    if !privileged
+                        && let Some(pid) = process_group
+                        && let Err(error) = terminate_process_group(pid, true).await
+                    {
+                        termination_error.get_or_insert(error);
+                    }
                 }
                 if tail_logs.len() == TAIL_LINE_COUNT {
                     tail_logs.pop_front();
@@ -384,11 +395,6 @@ async fn terminate_process_group(pid: u32, _force: bool) -> io::Result<()> {
     } else {
         Err(io::Error::other(format!("taskkill exited with {status}")))
     }
-}
-
-#[cfg(not(any(unix, windows)))]
-async fn terminate_process_group(_pid: u32, _force: bool) -> io::Result<()> {
-    Ok(())
 }
 
 #[cfg(windows)]
