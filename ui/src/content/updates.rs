@@ -2679,4 +2679,10 @@ mod tests {
 
         assert_eq!(info.refresh_modes.get(&cargo), Some(&RefreshMode::Local));
     }
+
+    #[test]
+    fn only_a_privileged_refresh_forces_a_metadata_sync() {
+        assert!(!RefreshMode::Local.forces_metadata_sync());
+        assert!(RefreshMode::Privileged.forces_metadata_sync());
+    }
 }
