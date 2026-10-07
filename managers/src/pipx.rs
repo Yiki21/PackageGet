@@ -57,7 +57,8 @@ impl PipxManager {
         )
         .expect("pipx descriptor must remain valid")
         .with_description("Isolated Python application manager")
-        .with_authorization(AuthorizationHint::None);
+        .with_authorization(AuthorizationHint::None)
+        .with_exact_lookup(true);
         Self { descriptor }
     }
 

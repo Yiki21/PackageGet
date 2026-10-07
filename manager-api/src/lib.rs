@@ -354,6 +354,7 @@ pub struct ManagerDescriptor {
     platforms: SupportedPlatforms,
     capabilities: ManagerCapabilities,
     authorization: AuthorizationHint,
+    exact_lookup: bool,
 }
 
 impl ManagerDescriptor {
@@ -392,6 +393,7 @@ impl ManagerDescriptor {
             platforms,
             capabilities,
             authorization: AuthorizationHint::None,
+            exact_lookup: false,
         })
     }
 
@@ -406,6 +408,18 @@ impl ManagerDescriptor {
     #[must_use]
     pub fn with_authorization(mut self, authorization: AuthorizationHint) -> Self {
         self.authorization = authorization;
+        self
+    }
+
+    /// Declares that search consumes an exact package identifier instead of a
+    /// free-text catalog query.
+    ///
+    /// Managers that resolve one exact name, path, or distribution advertise
+    /// this so the UI can avoid presenting their source as an ordinary catalog
+    /// search. The default is `false`.
+    #[must_use]
+    pub fn with_exact_lookup(mut self, exact_lookup: bool) -> Self {
+        self.exact_lookup = exact_lookup;
         self
     }
 
@@ -449,6 +463,12 @@ impl ManagerDescriptor {
     #[must_use]
     pub fn authorization(&self) -> &AuthorizationHint {
         &self.authorization
+    }
+
+    /// Returns whether search consumes an exact package identifier.
+    #[must_use]
+    pub fn exact_lookup(&self) -> bool {
+        self.exact_lookup
     }
 }
 
@@ -685,6 +705,62 @@ impl PackageUpdate {
             current_version: current_version.into(),
             available_version: available_version.into(),
         }
+    }
+}
+
+/// An update scan result that can carry per-package lookup failures.
+///
+/// A manager that can resolve most of its packages while one lookup fails
+/// returns the resolvable updates together with one [`ManagerError`] per
+/// skipped package. Callers that only need the updates may keep using
+/// [`PackageManager::updates`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct UpdatesReport {
+    /// Updates for packages whose latest version could be resolved.
+    pub updates: Vec<PackageUpdate>,
+    /// Failures recorded for packages that were skipped.
+    pub warnings: Vec<ManagerError>,
+}
+
+impl UpdatesReport {
+    /// Creates a report with no recorded failures.
+    #[must_use]
+    pub fn new(updates: Vec<PackageUpdate>) -> Self {
+        Self {
+            updates,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Creates a report with recorded per-package failures.
+    #[must_use]
+    pub fn degraded(updates: Vec<PackageUpdate>, warnings: Vec<ManagerError>) -> Self {
+        Self { updates, warnings }
+    }
+
+    /// Returns the resolved updates.
+    #[must_use]
+    pub fn updates(&self) -> &[PackageUpdate] {
+        &self.updates
+    }
+
+    /// Returns the failures recorded for skipped packages.
+    #[must_use]
+    pub fn warnings(&self) -> &[ManagerError] {
+        &self.warnings
+    }
+
+    /// Returns whether at least one package was skipped.
+    #[must_use]
+    pub fn is_degraded(&self) -> bool {
+        !self.warnings.is_empty()
+    }
+
+    /// Consumes the report and returns its updates.
+    #[must_use]
+    pub fn into_updates(self) -> Vec<PackageUpdate> {
+        self.updates
     }
 }
 
@@ -1012,6 +1088,24 @@ pub trait PackageManager: Send + Sync {
         Err(ManagerError::unsupported(ManagerCapability::Updates))
     }
 
+    /// Lists available package updates together with per-package failures.
+    ///
+    /// Managers that resolve each installed package independently override
+    /// this method to keep the packages they could resolve instead of failing
+    /// the whole source. The default forwards to
+    /// [`PackageManager::updates`] and reports no failures.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the error returned by [`PackageManager::updates`].
+    async fn updates_report(
+        &self,
+        config: &ManagerConfig,
+        refresh: bool,
+    ) -> ManagerResult<UpdatesReport> {
+        Ok(UpdatesReport::new(self.updates(config, refresh).await?))
+    }
+
     /// Resolves one exact package name into an installable target.
     ///
     /// The UI calls this for managers that advertise
@@ -1219,6 +1313,40 @@ mod tests {
                 origin: package.origin,
             }
         );
+    }
+
+    #[test]
+    fn descriptor_exact_lookup_defaults_to_false_and_follows_its_builder() {
+        let descriptor = ManagerDescriptor::new(
+            ManagerId::parse("builtin:apt").expect("valid ID"),
+            "APT",
+            ManagerCategory::System,
+            SupportedPlatforms::from([Platform::Linux]),
+            ManagerCapabilities::from([ManagerCapability::Installed]),
+        )
+        .expect("valid descriptor");
+        assert!(!descriptor.exact_lookup());
+        assert!(descriptor.clone().with_exact_lookup(true).exact_lookup());
+        assert!(!descriptor.with_exact_lookup(false).exact_lookup());
+    }
+
+    #[test]
+    fn updates_report_helpers_expose_updates_warnings_and_degradation() {
+        let id = ManagerId::parse("builtin:apt").expect("valid ID");
+        let update = PackageUpdate::new(PackageTarget::new(id, "example-tool"), "1.0", "1.1");
+        let clean = UpdatesReport::new(vec![update.clone()]);
+        assert_eq!(clean.updates(), std::slice::from_ref(&update));
+        assert!(clean.warnings().is_empty());
+        assert!(!clean.is_degraded());
+        assert_eq!(clean.into_updates(), vec![update]);
+
+        let degraded = UpdatesReport::degraded(
+            Vec::new(),
+            vec![ManagerError::new(ManagerErrorKind::Other, "lookup failed")],
+        );
+        assert!(degraded.is_degraded());
+        assert_eq!(degraded.warnings().len(), 1);
+        assert!(degraded.updates().is_empty());
     }
 
     #[test]
