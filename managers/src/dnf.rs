@@ -262,12 +262,17 @@ impl PackageManager for DnfManager {
         let output = run_output(&spec).await?;
         if !output.status.success() {
             // RPM reports a missing package as `package <name> is not
-            // installed` on stderr with exit 1, which is the only failure that
-            // means 'not installed'. A broken rpmdb, a permission problem or a
-            // locked database also exit 1, so they are reported instead of
-            // being flattened into an absent package. The fixed locale keeps
-            // that diagnostic in English for every user.
-            if rpm_reports_not_installed(&output.stderr) {
+            // installed` with exit 1. Real rpm writes that diagnostic through
+            // its logging facility, so it arrives on stdout, not stderr; both
+            // streams are checked because rpmlib versions and wrappers differ.
+            // It is the only failure that means 'not installed': a broken
+            // rpmdb, a permission problem or a locked database also exit 1 and
+            // are reported instead of being flattened into an absent package.
+            // The fixed locale keeps that diagnostic in English for every
+            // user.
+            if rpm_reports_not_installed(&output.stdout)
+                || rpm_reports_not_installed(&output.stderr)
+            {
                 return Ok(None);
             }
 
@@ -604,14 +609,17 @@ fn rpm_query_command(query_format: &str, package_name: &str) -> CommandSpec {
     ])
 }
 
-/// Reports whether rpm's stderr says the package is simply not installed.
+/// Reports whether an rpm output stream says the package is simply not
+/// installed.
 ///
-/// `rpm -q missing` exits 1 with `package missing is not installed`; a broken
-/// rpmdb, a permission error or a lock also exit non-zero but with an unrelated
+/// `rpm -q missing` exits 1 with `package missing is not installed`, which real
+/// rpm emits through `rpmlog`, i.e. on stdout; older or wrapped rpmlib builds
+/// have been seen on stderr, so callers pass both streams. A broken rpmdb, a
+/// permission error or a lock also exit non-zero but with an unrelated
 /// diagnostic. Callers must match this text before treating a failure as an
 /// absent package.
-fn rpm_reports_not_installed(stderr: &[u8]) -> bool {
-    String::from_utf8_lossy(stderr)
+fn rpm_reports_not_installed(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output)
         .trim()
         .ends_with("is not installed")
 }
@@ -767,8 +775,16 @@ mod tests {
         );
         assert_eq!(query.arguments()[3], OsString::from("bash"));
 
+        // This helper is stream-agnostic: rpm's message is classified by text,
+        // so the stdout path is proved end to end by the contract test, whose
+        // fake rpm prints the diagnostic where real rpm does. Here the
+        // surrounding whitespace tolerance is pinned; a diagnostic that is not
+        // this sentence at all stays a failure.
         assert!(rpm_reports_not_installed(
             b"package bash is not installed\n"
+        ));
+        assert!(rpm_reports_not_installed(
+            b"\npackage bash is not installed\n"
         ));
         assert!(!rpm_reports_not_installed(
             b"error: cannot open Packages database in /var/lib/rpm\n"

@@ -167,6 +167,10 @@ exit 2
 /// `rpm-fails` reports an unreadable rpmdb, which is a failure and not a
 /// missing package; with `rpmdb-broken` present even a single-package query
 /// fails the same way.
+///
+/// A query for an unknown package prints `package <name> is not installed` on
+/// stdout and exits 1, matching real rpm, which emits that diagnostic through
+/// rpmlog.
 #[cfg(unix)]
 const FAKE_RPM_SCRIPT: &str = r#"#!/bin/sh
 directory=${0%/*}
@@ -199,7 +203,7 @@ case "$1" in
         ;;
       bash) printf '5.2.26-3.fc40\n' ;;
       *)
-        printf 'package %s is not installed\n' "$4" >&2
+        printf 'package %s is not installed\n' "$4"
         exit 1
         ;;
     esac
