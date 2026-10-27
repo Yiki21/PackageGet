@@ -77,4 +77,4 @@
 | 068 | 已完成 | 阶段 5/6/7：1.2.1 可靠性补丁发布 | [068-1.2.1-reliability-release.md](068-1.2.1-reliability-release.md) |
 | 069 | 已完成 | 阶段 6/7：1.2.2 Go 更新扫描补丁发布 | [069-1.2.2-go-update-scan-release.md](069-1.2.2-go-update-scan-release.md) |
 | 070 | 进行中 | 阶段 6/7：1.3.0 P2 可靠性与可用性功能发布 | [070-1.3.0-p2-reliability-and-usability-release.md](070-1.3.0-p2-reliability-and-usability-release.md) |
-| 071 | 进行中 | 阶段 6/7：1.3.1 pipx 更新扫描补丁发布 | [071-1.3.1-pipx-response-release.md](071-1.3.1-pipx-response-release.md) |
+| 071 | 已完成 | 阶段 6/7：1.3.1 pipx 更新扫描补丁发布 | [071-1.3.1-pipx-response-release.md](071-1.3.1-pipx-response-release.md) |
