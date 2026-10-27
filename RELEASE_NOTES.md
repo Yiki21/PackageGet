@@ -1,3 +1,30 @@
+# Updater 1.3.1
+
+`1.3.1` is an unsigned cross-platform patch release. It fixes pipx update discovery and exact package lookup for distributions with large PyPI release histories, including `uv` and `ruff`.
+
+## Fixes
+
+- Raises the bounded PyPI response limit from 2 MiB to 32 MiB. Valid metadata above the old limit no longer fails the entire pipx Updates source with `PyPI response exceeds the supported size`.
+- Keeps streaming response-size enforcement and the existing HTTP timeout.
+- Adds an offline regression for large release histories, checks that responses above 32 MiB are rejected, and extends the opt-in live PyPI smoke to `uv`.
+
+## Release assets
+
+- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, glibc/musl `.tar.gz`, and glibc `.AppImage` for x86_64/aarch64 as applicable.
+- Windows: x86_64 portable `.zip` and per-user setup `.exe`.
+- macOS: arm64 (Apple Silicon) `.app.zip` and `.dmg`.
+- Verify downloaded assets against the matching `SHA256SUMS` file.
+
+## Compatibility
+
+Existing configuration and Activity history remain readable. Platform support is unchanged from `1.3.0`; Intel Mac users can continue using `1.2.2`. Windows and macOS packages remain unsigned.
+
+## Previous release
+
+`1.3.0` remains available under its original tag and release assets.
+
+---
+
 # Updater 1.3.0
 
 `1.3.0` is an unsigned cross-platform release. It adds user-visible capability that the 1.2.x line did not have — installing a package by name from a source that cannot search, seeing results while a slow source is still loading, stopping a wait without restarting the app, a background update check, and per-source freshness — and it carries the correctness fixes from two review rounds (issues #14 through #41). It keeps the existing cross-platform asset bundle and one `SHA256SUMS` manifest, but macOS artifacts are now **arm64 (Apple Silicon) only**.
