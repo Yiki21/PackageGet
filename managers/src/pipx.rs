@@ -29,7 +29,8 @@ const PYPI_API: &str = "https://pypi.org/pypi/";
 const NOT_INSTALLED_VERSION: &str = "Not Installed";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_PYPI_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+// PyPI includes the complete release history; uv and ruff already exceed 2 MiB.
+const MAX_PYPI_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Direct `updater-manager-api` implementation for pipx applications.
 #[derive(Debug, Clone)]

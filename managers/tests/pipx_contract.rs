@@ -411,6 +411,28 @@ async fn updates_query_only_registry_sources_and_freeze_venv_identity() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn updates_accept_pypi_metadata_with_large_release_history() {
+    let manager = PipxManager::new();
+    let home = create_inventory_home();
+    let (_directory, executable) = inventory_pipx(home.path());
+    let body = serde_json::json!({
+        "info": { "name": "example-tool", "version": "2.0.0" },
+        "releases": { "1.0.0": [{ "description": "x".repeat(3 * 1024 * 1024) }] }
+    })
+    .to_string();
+    let (api, task) = serve_once("200 OK", &body).await;
+    let result = manager
+        .updates(&config_with_api(&manager, &executable, &api), false)
+        .await;
+    task.await.expect("large release history request");
+
+    let updates = result.expect("valid PyPI release history must not prevent update discovery");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].available_version, "2.0.0");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn exact_search_handles_404_status_and_malformed_json_distinctly() {
     let manager = PipxManager::new();
     let home = create_inventory_home();
@@ -459,17 +481,15 @@ async fn exact_search_handles_404_status_and_malformed_json_distinctly() {
     );
     task.await.expect("malformed request");
 
-    let oversized = "x".repeat((2 * 1024 * 1024) + 1);
+    let oversized = "x".repeat((32 * 1024 * 1024) + 1);
     let (api, task) = serve_once("200 OK", &oversized).await;
-    assert_eq!(
-        manager
-            .search(&config_with_api(&manager, &executable, &api), "tool")
-            .await
-            .expect_err("reject oversized body")
-            .kind(),
-        ManagerErrorKind::Protocol
-    );
+    let result = manager
+        .search(&config_with_api(&manager, &executable, &api), "tool")
+        .await;
     task.await.expect("oversized request");
+    let error = result.expect_err("reject oversized body");
+    assert_eq!(error.kind(), ManagerErrorKind::Protocol);
+    assert_eq!(error.message(), "PyPI response exceeds the supported size");
 }
 
 #[cfg(unix)]
@@ -686,10 +706,12 @@ async fn live_pypi_read_only_smoke_is_explicitly_opt_in()
     let manager = PipxManager::new();
     let home = create_inventory_home();
     let (_directory, executable) = inventory_pipx(home.path());
-    let packages = manager
-        .search(&config(&manager, &executable), "docx2txt")
-        .await?;
-    assert_eq!(packages.len(), 1);
-    assert_eq!(packages[0].name, "docx2txt");
+    for distribution in ["docx2txt", "uv"] {
+        let packages = manager
+            .search(&config(&manager, &executable), distribution)
+            .await?;
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, distribution);
+    }
     Ok(())
 }
