@@ -273,6 +273,37 @@ async fn windows_contract_preserves_venv_paths_identity_pypi_and_write_arguments
 
 #[cfg(unix)]
 #[tokio::test]
+async fn empty_inventory_with_nonzero_exit_is_treated_as_empty() {
+    let manager = PipxManager::new();
+    let home = tempdir().expect("create empty PIPX_HOME");
+    fs::create_dir_all(home.path().join("venvs")).expect("create empty venv root");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "environment" ]; then printf '{}\n'; else printf '{{"pipx_spec_version":"0.1","venvs":{{}}}}\n'; exit 1; fi
+"#,
+        home.path().display()
+    );
+    let (_directory, executable) = fake_pipx(&script);
+    let config = config(&manager, &executable);
+
+    assert!(
+        manager
+            .installed(&config)
+            .await
+            .expect("empty inventory")
+            .is_empty()
+    );
+    assert!(
+        manager
+            .updates(&config, false)
+            .await
+            .expect("empty updates")
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn installed_preserves_venv_distribution_source_and_size_identity() {
     let manager = PipxManager::new();
     let home = create_inventory_home();

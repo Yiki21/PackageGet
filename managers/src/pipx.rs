@@ -138,8 +138,34 @@ impl PipxManager {
         let canonical_root = canonical_directory(&root, "pipx venv root").await?;
         let pipx = resolve_executable(config, PIPX_COMMAND);
         let spec = pipx_command(&pipx).args(["list", "--json"]);
-        let output = run_success(&spec, "pipx installed listing timed out").await?;
-        let response: PipxList = decode_json(&output.stdout, "pipx installed listing is invalid")?;
+        let output = timeout(COMMAND_TIMEOUT, run_output(&spec))
+            .await
+            .map_err(|_| {
+                ManagerError::new(
+                    ManagerErrorKind::Timeout,
+                    "pipx installed listing timed out",
+                )
+                .with_detail(spec.program().to_string_lossy())
+            })??;
+        let response: PipxList = match output.status.success() {
+            true => decode_json(&output.stdout, "pipx installed listing is invalid")?,
+            false => {
+                match decode_json::<PipxList>(&output.stdout, "pipx installed listing is invalid") {
+                    Ok(response) if response.venvs.is_empty() => response,
+                    _ => {
+                        return Err(command_status_error(
+                            &spec,
+                            output.status,
+                            &format!(
+                                "{}\n{}",
+                                String::from_utf8_lossy(&output.stdout),
+                                String::from_utf8_lossy(&output.stderr)
+                            ),
+                        ));
+                    }
+                }
+            }
+        };
         response.validated(&canonical_root).await
     }
 

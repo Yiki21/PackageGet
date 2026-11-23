@@ -1,12 +1,27 @@
-# Updater 1.3.1
+# Updater 1.3.2
 
-`1.3.1` is an unsigned cross-platform patch release. It fixes pipx update discovery and exact package lookup for distributions with large PyPI release histories, including `uv` and `ruff`.
+`1.3.2` is an unsigned cross-platform patch release. It fixes pipx update discovery when pipx reports an empty environment with a non-zero exit status.
 
 ## Fixes
 
-- Raises the bounded PyPI response limit from 2 MiB to 32 MiB. Valid metadata above the old limit no longer fails the entire pipx Updates source with `PyPI response exceeds the supported size`.
-- Keeps streaming response-size enforcement and the existing HTTP timeout.
-- Adds an offline regression for large release histories, checks that responses above 32 MiB are rejected, and extends the opt-in live PyPI smoke to `uv`.
+- Treats a valid empty `pipx list --json` inventory as empty even when pipx exits with status 1.
+- Keeps command failures and malformed pipx output visible as errors.
+- Adds an offline regression covering empty pipx inventories and update discovery.
+
+## Release assets
+
+- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, glibc/musl `.tar.gz`, and glibc `.AppImage` for x86_64/aarch64 as applicable.
+- Windows: x86_64 portable `.zip` and per-user setup `.exe`.
+- macOS: arm64 (Apple Silicon) `.app.zip` and `.dmg`.
+- Verify downloaded assets against the matching `SHA256SUMS` file.
+
+## Compatibility
+
+Existing configuration and Activity history remain readable. Platform support is unchanged from `1.3.1`; Intel Mac users can continue using `1.2.2`. Windows and macOS packages remain unsigned.
+
+## Previous release
+
+`1.3.1` remains available under its original tag and release assets.
 
 ## Release assets
 
