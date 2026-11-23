@@ -10,7 +10,7 @@
 
 ## Release assets
 
-- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, glibc/musl `.tar.gz`, and glibc `.AppImage` for x86_64/aarch64 as applicable.
+- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, and musl `.tar.gz` for x86_64/aarch64 as applicable. glibc portable archives and AppImages are omitted from this release because the upstream AppImage tooling failed its pinned checksum verification.
 - Windows: x86_64 portable `.zip` and per-user setup `.exe`.
 - macOS: arm64 (Apple Silicon) `.app.zip` and `.dmg`.
 - Verify downloaded assets against the matching `SHA256SUMS` file.
