@@ -1,6 +1,12 @@
-Name                          Id                            Version         Available       Source
------------------------------------------------------------------------------------------------
-PowerToys (Preview)           Microsoft.PowerToys           0.92.0          0.92.1          winget
-VLC media player              VideoLAN.VLC                  3.0.20          3.0.21          winget
+Name                Id                  Version Available Source
+----------------------------------------------------------------
+PowerToys (Preview) Microsoft.PowerToys 0.92.0  0.92.1    winget
+VLC media player    VideoLAN.VLC        3.0.20  3.0.21    winget
+微信                Tencent.WeChat      < 4.0   4.0.3     winget
+3 upgrades available.
 
-2 upgrades available.
+The following packages have an upgrade available, but require explicit targeting for upgrade:
+Name    Id              Version Available Source
+------------------------------------------------
+Discord Discord.Discord 1.0.9   1.0.9187  winget
+1 package(s) have version numbers that cannot be determined. Use --include-unknown to see all results.

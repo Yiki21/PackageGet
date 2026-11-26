@@ -491,8 +491,14 @@ fn table_field(columns: &[String], index: usize, message: &str) -> ManagerResult
         .ok_or_else(|| ManagerError::new(ManagerErrorKind::Protocol, message))
 }
 
+/// Parses the first table in Winget's human-readable output.
+///
+/// Winget renders tables with column widths computed from the data and only a
+/// single space between columns, and prints summary prose (for example
+/// `3 upgrades available.`) directly after the last row without a blank line.
+/// Rows therefore end at the first line that does not fit the column layout.
 fn parse_table(contents: &str, accepted_columns: &[usize]) -> ManagerResult<Vec<Vec<String>>> {
-    let lines = contents.lines().collect::<Vec<_>>();
+    let lines = contents.lines().map(visible_line).collect::<Vec<_>>();
     let separator = lines
         .iter()
         .position(|line| {
@@ -512,52 +518,109 @@ fn parse_table(contents: &str, accepted_columns: &[usize]) -> ManagerResult<Vec<
         .ok_or_else(|| {
             ManagerError::new(ManagerErrorKind::Protocol, "winget table header is missing")
         })?;
-    let starts = column_starts(header);
-    if !accepted_columns.contains(&starts.len()) {
+    let body = &lines[separator + 1..];
+    let first_row = body.iter().copied().find(|line| !line.trim().is_empty());
+
+    // Header names are normally single words separated by at least one space.
+    // Fall back to two-space gaps for localized multi-word header names.
+    let layouts = [1, 2]
+        .map(|minimum_gap| column_starts(header, minimum_gap))
+        .into_iter()
+        .filter(|starts| accepted_columns.contains(&starts.len()))
+        .collect::<Vec<_>>();
+    let Some(starts) = layouts
+        .iter()
+        .find(|starts| first_row.is_none_or(|row| split_row(row, starts).is_some()))
+    else {
         return Err(ManagerError::new(
             ManagerErrorKind::Protocol,
-            "winget table has an unexpected column count",
+            "winget table has an unexpected column layout",
         )
-        .with_detail(starts.len().to_string()));
-    }
+        .with_detail(format!(
+            "header: {}; first row: {}",
+            header.trim_end(),
+            first_row.unwrap_or_default().trim_end()
+        )));
+    };
 
     let mut rows = Vec::new();
-    for line in &lines[separator + 1..] {
+    for line in body {
         if line.trim().is_empty() {
             if !rows.is_empty() {
                 break;
             }
             continue;
         }
-        let columns = starts
-            .iter()
-            .enumerate()
-            .map(|(index, start)| {
-                display_slice(line, *start, starts.get(index + 1).copied())
-                    .trim()
-                    .to_owned()
-            })
-            .collect::<Vec<_>>();
-        if columns.iter().all(String::is_empty) {
-            continue;
-        }
+        // The first line that does not fit the layout is trailing prose such
+        // as `N upgrades available.` or another section heading.
+        let Some(columns) = split_row(line, starts) else {
+            break;
+        };
         rows.push(columns);
     }
     Ok(rows)
 }
 
-fn column_starts(header: &str) -> Vec<usize> {
+/// Drops carriage-return progress output that shares a line with real text.
+fn visible_line(line: &str) -> &str {
+    line.rsplit('\r').next().unwrap_or_default()
+}
+
+/// Splits a table row, or returns `None` when the line is not a table row.
+///
+/// Every column boundary must be preceded by a space, the identifier column
+/// must be a single token, and the final (source) column must be present.
+fn split_row(line: &str, starts: &[usize]) -> Option<Vec<String>> {
+    if starts
+        .iter()
+        .skip(1)
+        .any(|start| display_char_at(line, start - 1) != Some(' '))
+    {
+        return None;
+    }
+    let columns = starts
+        .iter()
+        .enumerate()
+        .map(|(index, start)| {
+            display_slice(line, *start, starts.get(index + 1).copied())
+                .trim()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    let identifier = columns.get(1)?;
+    let source = columns.last()?;
+    if identifier.is_empty() || identifier.chars().any(char::is_whitespace) || source.is_empty() {
+        return None;
+    }
+    Some(columns)
+}
+
+fn display_char_at(line: &str, position: usize) -> Option<char> {
+    let mut display = 0;
+    for character in line.chars() {
+        let width = character.width().unwrap_or(0);
+        if position < display + width {
+            return Some(character);
+        }
+        display += width;
+    }
+    None
+}
+
+fn column_starts(header: &str, minimum_gap: usize) -> Vec<usize> {
     let mut starts = vec![0];
     let mut display = 0;
     let mut spaces = 0;
+    let mut seen_text = false;
     for character in header.chars() {
         let width = character.width().unwrap_or(0);
         if character == ' ' {
             spaces += width;
         } else {
-            if spaces >= 2 {
+            if seen_text && spaces >= minimum_gap {
                 starts.push(display);
             }
+            seen_text = true;
             spaces = 0;
         }
         display += width;
@@ -674,12 +737,73 @@ mod tests {
         )
         .expect("parse Winget upgrades");
 
-        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.len(), 3);
         assert_eq!(updates[0].target.name, "Microsoft.PowerToys");
         assert_eq!(updates[0].current_version, "0.92.0");
         assert_eq!(updates[0].available_version, "0.92.1");
         assert_eq!(updates[0].target.origin.as_ref().unwrap().name, "winget");
         assert_eq!(updates[1].target.name, "VideoLAN.VLC");
+        assert_eq!(updates[2].target.name, "Tencent.WeChat");
+        assert_eq!(updates[2].current_version, "< 4.0");
+        assert_eq!(updates[2].available_version, "4.0.3");
+        assert_eq!(updates[2].target.origin.as_ref().unwrap().name, "winget");
+    }
+
+    #[test]
+    fn update_table_stops_at_summary_printed_directly_after_rows() {
+        let output = "\
+Name      Id           Version Available Source
+-----------------------------------------------
+Git       Git.Git      2.40.0  2.41.0    winget
+1 upgrades available.
+";
+        let updates = parse_updates(output, &manager_id()).expect("parse Winget upgrades");
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].target.name, "Git.Git");
+        assert_eq!(updates[0].available_version, "2.41.0");
+    }
+
+    #[test]
+    fn update_table_ignores_carriage_return_progress_before_header() {
+        let output = "\
+   - \r   \\ \r     \rName Id      Version Available Source
+--------------------------------------------
+Git  Git.Git 2.40.0  2.41.0    winget
+1 upgrades available.
+";
+        let updates = parse_updates(output, &manager_id()).expect("parse Winget upgrades");
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].target.name, "Git.Git");
+    }
+
+    #[test]
+    fn update_table_accepts_localized_multi_word_headers() {
+        let output = "\
+Package name  Id       Version  Available  Source
+-------------------------------------------------
+Git           Git.Git  2.40.0   2.41.0     winget
+";
+        let updates = parse_updates(output, &manager_id()).expect("parse Winget upgrades");
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].target.name, "Git.Git");
+        assert_eq!(updates[0].current_version, "2.40.0");
+    }
+
+    #[test]
+    fn search_table_stops_at_truncation_notice() {
+        let output = "\
+Name Id      Version Source
+--------------------------
+Git  Git.Git 2.41.0  winget
+<additional entries truncated due to result limit>
+";
+        let packages = parse_search(output, &manager_id()).expect("parse Winget search");
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "Git.Git");
     }
 
     #[test]
