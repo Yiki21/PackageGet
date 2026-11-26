@@ -1,3 +1,32 @@
+# Updater 1.3.3
+
+`1.3.3` is an unsigned cross-platform patch release. It fixes Winget update discovery, which failed with `winget update identifier is missing` whenever `winget upgrade` reported at least one update.
+
+## Fixes
+
+- Stops reading the Winget table at the first line that is not a table row. Winget prints `N upgrades available.` directly after the last row with no blank line, and that summary was parsed as a package without an identifier, failing the whole Winget Updates source.
+- Splits Winget table columns on single-space gaps. Winget separates columns with one space when a header is the widest value in its column (for example `Available` above short version numbers), which previously merged two columns and failed with `winget table has an unexpected column count`.
+- Ignores trailing Winget sections such as the explicit-targeting table, unknown-version and pin notices, and the search truncation notice instead of treating them as packages.
+- Ignores carriage-return progress output printed on the same line as the table header.
+- Replaces the Winget upgrade fixture with output laid out by Winget's own table algorithm and adds regressions for each case.
+
+## Release assets
+
+- Linux: Debian `.deb`, RPM `.rpm`, Arch `.pkg.tar.zst`, glibc/musl `.tar.gz`, and glibc `.AppImage` for x86_64/aarch64 as applicable.
+- Windows: x86_64 portable `.zip` and per-user setup `.exe`.
+- macOS: arm64 (Apple Silicon) `.app.zip` and `.dmg`.
+- Verify downloaded assets against the matching `SHA256SUMS` file.
+
+## Compatibility
+
+Existing configuration and Activity history remain readable. Platform support is unchanged from `1.3.2`; Intel Mac users can continue using `1.2.2`. Windows and macOS packages remain unsigned.
+
+## Previous release
+
+`1.3.2` remains available under its original tag and release assets.
+
+---
+
 # Updater 1.3.2
 
 `1.3.2` is an unsigned cross-platform patch release. It fixes pipx update discovery when pipx reports an empty environment with a non-zero exit status.
